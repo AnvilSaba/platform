@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use anyhow::Context as _;
-use itertools::Itertools;
 use serenity::{
     all::{ChannelType, Context, EditMessage, GuildId, Member, Mentionable, RoleId, prelude::CacheHttp},
     collector::CollectMessages,
     model::{channel::GuildThread, event::FullEvent, id::GenericChannelId},
 };
-use tracing::info;
+use tracing::{info, warn};
 use valine_bot_macros::event_handler;
 
 use crate::{
@@ -79,15 +78,36 @@ pub(in crate::features::thread_auto_invite) async fn invite_thread_by_roles(
         .await
         .context("Failed to send thread invite message")?;
 
-    message
-        .edit(
-            &ctx,
-            EditMessage::new()
-                .allowed_mentions(create_safe_allowed_mentions().roles(role_ids))
-                .content(role_ids.iter().map(|r| r.mention().to_string()).join(" ")),
-        )
-        .await
-        .context("Failed to mention invite roles")?;
+    const MAX_ATTEMPTS: usize = 5;
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    for &role_id in role_ids {
+        for attempt in 1..=MAX_ATTEMPTS {
+            interval.tick().await;
+
+            let result = message
+                .edit(
+                    ctx,
+                    EditMessage::new()
+                        .allowed_mentions(create_safe_allowed_mentions().push_role(role_id))
+                        .content(role_id.mention().to_string()),
+                )
+                .await;
+
+            match result {
+                Ok(()) => break,
+
+                Err(error) if attempt < MAX_ATTEMPTS => {
+                    warn!(%role_id, attempt, %error, "Failed to invite role; retrying");
+                }
+
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Failed to invite role {role_id} after {MAX_ATTEMPTS} attempts"));
+                }
+            }
+        }
+    }
 
     message
         .delete(ctx.http(), None)
