@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bot_macros::event_handler;
 use anyhow::Context as _;
 use chrono::Duration;
 use serenity::{
@@ -14,7 +15,6 @@ use serenity::{
     utils::MessageBuilder,
 };
 use tracing::error;
-use valine_bot_macros::event_handler;
 
 use crate::{
     app::{AppError, BotDataExt, BotError},

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcguildlink
+  labels: { app.kubernetes.io/name: mcguildlink }
+spec:
+  replicas: {{ .Values.mcguildlink.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app.kubernetes.io/name: mcguildlink }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mcguildlink }
+    spec:
+      containers:
+        - name: mcguildlink
+          image: "{{ .Values.mcguildlink.image.repository }}:{{ required "mcguildlink.image.tag is required" .Values.mcguildlink.image.tag }}"
+          imagePullPolicy: {{ .Values.mcguildlink.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ .Values.mcguildlink.http.port }} }
+            - { name: minecraft, containerPort: {{ .Values.mcguildlink.minecraft.port }} }
+          volumeMounts:
+            - { name: config, mountPath: /app/config/app.toml, subPath: app.toml, readOnly: true }
+            - { name: data, mountPath: /app/data }
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.mcguildlink.configSecretName }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: mcguildlink-data

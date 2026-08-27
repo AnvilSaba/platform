@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+  labels: { app.kubernetes.io/name: bot }
+spec:
+  replicas: {{ .Values.bot.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: bot }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bot }
+    spec:
+      containers:
+        - name: bot
+          image: "{{ .Values.bot.image.repository }}:{{ required "bot.image.tag is required" .Values.bot.image.tag }}"
+          imagePullPolicy: {{ .Values.bot.image.pullPolicy }}
+          workingDir: /app
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.toml
+              subPath: config.toml
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.bot.configSecretName }}

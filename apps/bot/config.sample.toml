@@ -1,5 +1,5 @@
 [bot]
-token = "TOKEN"
+token = "TOKEN.PLACEHOLDER.NOT_A_REAL_SECRET"
 owners = [ "000000000000000000" ]
 
 

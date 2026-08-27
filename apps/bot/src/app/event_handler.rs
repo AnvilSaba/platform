@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bot_macros::event_error_handler;
 use futures::lock::Mutex;
 use serenity::{
     all::prelude::Context,
@@ -11,7 +12,6 @@ use serenity::{
 use sysinfo::{Pid, System};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
-use valine_bot_macros::event_error_handler;
 
 use crate::{
     app::{AppError, BotError},

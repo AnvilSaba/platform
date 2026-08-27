@@ -1,0 +1,13 @@
+name: Rust CI
+on:
+  push:
+    paths: ["apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+  pull_request:
+    paths: ["apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo check --workspace --locked --all-targets
+      - run: cargo test --workspace --locked

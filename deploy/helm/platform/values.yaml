@@ -1,0 +1,42 @@
+bot:
+  replicas: 1
+  image:
+    repository: ghcr.io/anvilsaba/bot
+    tag: ""
+    pullPolicy: IfNotPresent
+  configSecretName: bot-config
+
+mcguildlink:
+  replicas: 1
+  image:
+    repository: ghcr.io/anvilsaba/mcguildlink
+    tag: ""
+    pullPolicy: IfNotPresent
+  configSecretName: mcguildlink-config
+  sqlite:
+    storageSize: 1Gi
+    storageClassName: ""
+  http:
+    port: 8080
+  minecraft:
+    port: 25565
+
+postgres:
+  replicas: 1
+  image:
+    repository: postgres
+    tag: "17.6-bookworm"
+    pullPolicy: IfNotPresent
+  database: anvilsaba
+  username: anvilsaba
+  storageSize: 10Gi
+  storageClassName: ""
+  secretName: postgres
+
+cloudflared:
+  replicas: 1
+  image:
+    repository: cloudflare/cloudflared
+    tag: "2025.8.1"
+    pullPolicy: IfNotPresent
+  tokenSecretName: cloudflare-tunnel

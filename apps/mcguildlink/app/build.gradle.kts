@@ -32,7 +32,7 @@ kotlin {
 }
 
 application {
-    mainClass = "io.github.valine3gdev.mcguildlink.app.AppKt"
+    mainClass = "io.github.anvilsaba.mcguildlink.app.AppKt"
     applicationDefaultJvmArgs = listOf(
         "-Dfile.encoding=UTF-8",
         "-Dstdout.encoding=UTF-8",

@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/bot",
+    "crates/bot-macros",
+]
+
+[profile.release]
+panic = "abort"
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+# Poise が next ブランチを参照しているので、直接の依存関係に合わせる
+[replace."https://github.com/serenity-rs/serenity#serenity:0.12.5"]
+git = "https://github.com/serenity-rs/serenity"
+rev = "37b9f433ada8b9ccc5f93f04826403b175855f86"

@@ -6,6 +6,7 @@ use std::{str::FromStr, time::Duration};
 
 pub use command::question;
 
+use bot_macros::event_handler;
 use anyhow::Context as _;
 use serenity::{
     all::{
@@ -16,7 +17,6 @@ use serenity::{
     model::{channel::GuildThread, event::FullEvent, id::ForumTagId},
 };
 use tracing::warn;
-use valine_bot_macros::event_handler;
 
 use crate::app::{AppError, BotDataExt};
 

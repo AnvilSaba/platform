@@ -1,0 +1,6 @@
+bot:
+  image:
+    tag: dev
+mcguildlink:
+  image:
+    tag: dev

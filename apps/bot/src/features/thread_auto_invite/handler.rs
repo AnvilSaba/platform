@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bot_macros::event_handler;
 use anyhow::Context as _;
 use serenity::{
     all::{ChannelType, Context, EditMessage, GuildId, Member, Mentionable, RoleId, prelude::CacheHttp},
@@ -7,7 +8,6 @@ use serenity::{
     model::{channel::GuildThread, event::FullEvent, id::GenericChannelId},
 };
 use tracing::{info, warn};
-use valine_bot_macros::event_handler;
 
 use crate::{
     app::{AppError, BotDataExt, BotError, config::ThreadAutoInviteConfig},
