@@ -1,0 +1,18 @@
+# Secrets and local configuration
+config.toml
+app.toml
+*.secret
+.env
+
+# Rust
+target/
+
+# Gradle / Kotlin
+.gradle/
+**/build/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
