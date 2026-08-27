@@ -1,0 +1,14 @@
+[bot]
+token = "YOUR_BOT_TOKEN_HERE"
+guild = 0 # Replace with your guild ID
+moderator_role = 0 # Replace with your moderator role ID
+log_channel = 0 # Replace with your audit log channel ID
+
+[minecraft_server]
+address = "::1"
+port = 25565
+timeout = "PT5M"
+
+[web]
+address = "127.0.0.1"
+port = 8080
