@@ -113,7 +113,7 @@ impl QuestionCreationHandler {
                 ref x if x == &self.custom_ids.detailed => {
                     self.send_modal::<DetailedQuestionData>(
                         &interaction,
-                        Some(self.detailed_data.read().await.clone().unwrap_or_default()),
+                        self.detailed_data.read().await.clone(),
                         &self.custom_ids.detailed,
                     )
                     .await;

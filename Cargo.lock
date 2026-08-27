@@ -829,9 +829,9 @@ dependencies = [
 
 [[package]]
 name = "http-body-util"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
+checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
 dependencies = [
  "bytes",
  "futures-core",
@@ -1450,7 +1450,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 [[package]]
 name = "poise"
 version = "0.6.1"
-source = "git+https://github.com/serenity-rs/poise?rev=de8bd6fdd54de8ee5daf0242ffb6dc6eba58df69#de8bd6fdd54de8ee5daf0242ffb6dc6eba58df69"
+source = "git+https://github.com/serenity-rs/poise?rev=b189f7c1cfd47eb4e7863683a49c389a9702ce23#b189f7c1cfd47eb4e7863683a49c389a9702ce23"
 dependencies = [
  "async-trait",
  "derivative",
@@ -1468,7 +1468,7 @@ dependencies = [
 [[package]]
 name = "poise_macros"
 version = "0.6.1"
-source = "git+https://github.com/serenity-rs/poise?rev=de8bd6fdd54de8ee5daf0242ffb6dc6eba58df69#de8bd6fdd54de8ee5daf0242ffb6dc6eba58df69"
+source = "git+https://github.com/serenity-rs/poise?rev=b189f7c1cfd47eb4e7863683a49c389a9702ce23#b189f7c1cfd47eb4e7863683a49c389a9702ce23"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -2066,12 +2066,12 @@ dependencies = [
 name = "serenity"
 version = "0.12.5"
 source = "git+https://github.com/serenity-rs/serenity?branch=next#37b9f433ada8b9ccc5f93f04826403b175855f86"
-replace = "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=30a293f0a02c63908b68a9f4fa687e964b7ff5c8)"
+replace = "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86)"
 
 [[package]]
 name = "serenity"
 version = "0.12.5"
-source = "git+https://github.com/serenity-rs/serenity?rev=30a293f0a02c63908b68a9f4fa687e964b7ff5c8#30a293f0a02c63908b68a9f4fa687e964b7ff5c8"
+source = "git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86#37b9f433ada8b9ccc5f93f04826403b175855f86"
 dependencies = [
  "aformat",
  "arrayvec",
@@ -2758,7 +2758,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_with",
- "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=30a293f0a02c63908b68a9f4fa687e964b7ff5c8)",
+ "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86)",
  "similar",
  "sysinfo",
  "thiserror",

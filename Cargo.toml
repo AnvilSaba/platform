@@ -29,16 +29,16 @@ valine_bot_macros = { path = "macros" }
 
 [dependencies.serenity]
 git = "https://github.com/serenity-rs/serenity"
-rev = "30a293f0a02c63908b68a9f4fa687e964b7ff5c8"
+rev = "37b9f433ada8b9ccc5f93f04826403b175855f86"
 
 [dependencies.poise]
 git = "https://github.com/serenity-rs/poise"
-rev = "de8bd6fdd54de8ee5daf0242ffb6dc6eba58df69"
+rev = "b189f7c1cfd47eb4e7863683a49c389a9702ce23"
 
 # Poise が next ブランチを参照しているので、直接の依存関係に合わせる
 [replace."https://github.com/serenity-rs/serenity#serenity:0.12.5"]
 git = "https://github.com/serenity-rs/serenity"
-rev = "30a293f0a02c63908b68a9f4fa687e964b7ff5c8"
+rev = "37b9f433ada8b9ccc5f93f04826403b175855f86"
 
 [profile.release]
 panic = "abort"

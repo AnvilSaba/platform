@@ -163,9 +163,7 @@ impl MessageSnapshotStore {
             attachments
                 .iter()
                 .filter(|attachment| !keep_attachment_ids.contains(&attachment.id))
-                .map(|attachment| {
-                    CreateAttachment::url(ctx.http(), attachment.url.to_string(), attachment.filename.to_string())
-                }),
+                .map(|attachment| CreateAttachment::url(attachment.url.to_string(), attachment.filename.to_string())),
         )
         .await?)
     }

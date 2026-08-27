@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use serenity::small_fixed_array::FixedString;
+
 #[derive(Debug, Clone, poise::Modal)]
 #[name = "質問の基本情報を入力"]
 pub struct BasicQuestionData {
@@ -7,17 +9,17 @@ pub struct BasicQuestionData {
     #[placeholder = "質問のタイトルを入力してください"]
     #[min_length = 10]
     #[max_length = 100]
-    pub title: String,
+    pub title: FixedString<u16>,
     #[name = "Minecraftのバージョン"]
     #[placeholder = "Minecraftのバージョンを入力してください"]
     #[min_length = 3]
     #[max_length = 20]
-    pub mc_version: String,
+    pub mc_version: FixedString<u16>,
     #[name = "Modローダー (Forge, Fabric, NeoForge, Quilt, その他)"]
     #[placeholder = "使用しているModローダーを選択してください"]
     #[min_length = 3]
     #[max_length = 20]
-    pub loader: String,
+    pub loader: FixedString<u16>,
 }
 
 impl Display for BasicQuestionData {
@@ -34,28 +36,28 @@ impl Display for BasicQuestionData {
 #[name = "質問の詳細情報を入力"]
 pub struct DetailedQuestionData {
     #[name = "質問の内容 (詳細な質問内容を入力してください)"]
-    #[placeholder = "質問の内容を入力してください"]
+    #[placeholder = "質問の内容を入力してください\n例:クラッシュした, 変な挙動をする, modの扱い方がわからない"]
     #[min_length = 20]
     #[max_length = 1000]
     #[paragraph]
-    pub content: String,
+    pub content: FixedString<u16>,
     #[name = "問題解決の達成基準"]
-    #[placeholder = "問題解決の達成基準を入力してください"]
+    #[placeholder = "問題解決の達成基準を入力してください\n例: クラッシュから抜け出したい, このような挙動にしたい, このmodでこのようなことがしたい"]
     #[min_length = 20]
     #[max_length = 1000]
     #[paragraph]
-    pub content2: String,
+    pub content2: FixedString<u16>,
     #[name = "試したこと・調べたこと"]
-    #[placeholder = "質問を行う前に試したことや調べたことを入力してください"]
+    #[placeholder = "質問を行う前に試したことや調べたことを入力してください\n例:○○というサイトに掲載されてた対処法を試した\nAIに聞いてみてこのような回答を得られた\nなど"]
     #[min_length = 20]
     #[max_length = 1000]
     #[paragraph]
-    pub content3: String,
+    pub content3: FixedString<u16>,
     #[name = "mclo.gs にアップロードしたログやクラッシュレポートなどのリンク (任意)"]
     #[placeholder = "mclo.gs にアップロードしたログやクラッシュレポートなどのリンクを入力してください"]
     #[max_length = 1000]
     #[paragraph]
-    pub logs: Option<String>,
+    pub logs: Option<FixedString<u16>>,
 }
 
 impl Display for DetailedQuestionData {
@@ -68,18 +70,5 @@ impl Display for DetailedQuestionData {
             self.content3,
             self.logs.as_deref().unwrap_or("なし")
         )
-    }
-}
-
-impl Default for DetailedQuestionData {
-    fn default() -> Self {
-        Self {
-            content: "例:クラッシュした, 変な挙動をする, modの扱い方がわからない".to_string(),
-            content2: "例: クラッシュから抜け出したい, このような挙動にしたい, このmodでこのようなことがしたい"
-                .to_string(),
-            content3: "例:○○というサイトに掲載されてた対処法を試した\nAIに聞いてみてこのような回答を得られた\nなど"
-                .to_string(),
-            logs: None,
-        }
     }
 }
