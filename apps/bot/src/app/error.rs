@@ -1,0 +1,79 @@
+use poise::{FrameworkError, say_reply};
+use thiserror::Error;
+use tracing::error;
+
+use crate::{
+    app::{AppError, BotData},
+    utils::format_duration,
+};
+
+#[derive(Error, Debug)]
+pub enum BotError {
+    #[error("このコマンドの実行に必要なロールがありません。")]
+    HasNoRole,
+    #[error("スレッドでのみ実行できるコマンドです。")]
+    IsNotInThread,
+    #[error("プライベートスレッドでは実行できません。")]
+    IsPrivateThread,
+    #[error("イベントに必要なデータがありません: {0}")]
+    MissingEventData(&'static str),
+    #[error("イベントデータが不正です: {0}")]
+    InvalidEventData(&'static str),
+    #[error("キャッシュにデータがありません: {resource} ({id})")]
+    CacheMiss { resource: &'static str, id: String },
+    #[error("付与可能な招待用ロールがありません (メンバー数上限: {member_limit})")]
+    NoAvailableInviteRole { member_limit: u32 },
+}
+
+pub async fn on_error(error: FrameworkError<'_, BotData, AppError>) {
+    match error {
+        FrameworkError::Command { error, ctx, .. } => {
+            let _ = say_reply(ctx, "コマンド実行中にエラーが発生しました。").await;
+            error!("Command error: Command: {}, Error: {error:#}", ctx.command().name);
+        }
+        FrameworkError::ArgumentParse { ctx, input, error, .. } => {
+            let Some(input) = input else {
+                return error!("Error parsing input: {error:#?}");
+            };
+
+            let _ = say_reply(ctx, format!("入力 `{input}` の解析に失敗しました。\n{error:#?}")).await;
+        }
+        FrameworkError::MissingBotPermissions {
+            missing_permissions,
+            ctx,
+            ..
+        } => {
+            let msg = format!("ボットに権限が無いためコマンドを実行できません: {missing_permissions}",);
+            let _ = say_reply(ctx, msg).await;
+        }
+        FrameworkError::NotAnOwner { ctx, .. } => {
+            let _ = say_reply(ctx, "このコマンドはボットのオーナーのみ実行できます。").await;
+        }
+        FrameworkError::CooldownHit {
+            remaining_cooldown,
+            ctx,
+            ..
+        } => {
+            let _ = say_reply(
+                ctx,
+                format!(
+                    "このコマンドはクールダウン中です。残り時間: {}",
+                    format_duration(remaining_cooldown, 2),
+                ),
+            )
+            .await;
+        }
+        FrameworkError::CommandCheckFailed { ctx, error, .. } => {
+            let error = match error {
+                Some(error) => error.to_string(),
+                None => "コマンドの実行条件を満たしていません。".to_string(),
+            };
+            let _ = say_reply(ctx, error).await;
+        }
+        error => {
+            if let Err(e) = poise::builtins::on_error(error).await {
+                error!("Error while handling error: {e:#?}")
+            }
+        }
+    }
+}
