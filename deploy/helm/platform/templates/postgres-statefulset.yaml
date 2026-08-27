@@ -23,9 +23,9 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.postgres.secretName }}, key: password }
-            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - { name: PGDATA, value: /var/lib/postgresql/18/docker }
           volumeMounts:
-            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: data, mountPath: /var/lib/postgresql }
           readinessProbe:
             exec: { command: [sh, -c, 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'] }
             initialDelaySeconds: 5

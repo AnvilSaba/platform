@@ -11,6 +11,8 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: bot }
     spec:
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: bot
           image: "{{ .Values.bot.image.repository }}:{{ required "bot.image.tag is required" .Values.bot.image.tag }}"

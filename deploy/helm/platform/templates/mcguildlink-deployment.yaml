@@ -13,6 +13,12 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: mcguildlink }
     spec:
+      securityContext:
+        runAsNonRoot: true
+
+        # DB を postgres に移行したら消す
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: mcguildlink
           image: "{{ .Values.mcguildlink.image.repository }}:{{ required "mcguildlink.image.tag is required" .Values.mcguildlink.image.tag }}"

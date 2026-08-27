@@ -11,6 +11,8 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: cloudflared }
     spec:
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: cloudflared
           image: "{{ .Values.cloudflared.image.repository }}:{{ .Values.cloudflared.image.tag }}"

@@ -1,4 +1,7 @@
 name: MCGuildLink image
+env:
+  # amd64 も配布する場合は linux/arm64,linux/amd64 に変更する
+  TARGET_PLATFORMS: linux/arm64
 on:
   push:
     branches: [main]
@@ -32,6 +35,7 @@ jobs:
         with:
           context: .
           file: apps/mcguildlink/Dockerfile
+          platforms: ${{ env.TARGET_PLATFORMS }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
