@@ -3,6 +3,7 @@ import org.gradle.api.tasks.testing.logging.TestLogEvent
 plugins {
     id("idea")
     application
+    id("com.github.jk1.dependency-license-report") version "3.1.4"
 
     alias(libs.plugins.kotlin)
     alias(libs.plugins.kotlin.serialization)
