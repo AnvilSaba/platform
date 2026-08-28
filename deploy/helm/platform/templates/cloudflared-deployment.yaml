@@ -21,10 +21,7 @@ spec:
           image: "{{ .Values.cloudflared.image.repository }}:{{ .Values.cloudflared.image.tag }}"
           imagePullPolicy: {{ .Values.cloudflared.image.pullPolicy }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           args: [tunnel, --no-autoupdate, --loglevel, info, --metrics, 0.0.0.0:2000, run]
           env:
             - name: TUNNEL_TOKEN

@@ -27,10 +27,7 @@ spec:
           image: "{{ .Values.mcguildlink.image.repository }}:{{ required "mcguildlink.image.tag is required" .Values.mcguildlink.image.tag }}"
           imagePullPolicy: {{ .Values.mcguildlink.image.pullPolicy }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
             - { name: http, containerPort: {{ .Values.mcguildlink.http.port }} }
             - { name: minecraft, containerPort: {{ .Values.mcguildlink.minecraft.port }} }

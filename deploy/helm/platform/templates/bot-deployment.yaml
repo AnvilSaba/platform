@@ -22,10 +22,7 @@ spec:
           imagePullPolicy: {{ .Values.bot.image.pullPolicy }}
           workingDir: /app
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /app/config.toml
