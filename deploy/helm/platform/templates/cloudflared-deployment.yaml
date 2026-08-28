@@ -11,12 +11,17 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: cloudflared }
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cloudflared
           image: "{{ .Values.cloudflared.image.repository }}:{{ .Values.cloudflared.image.tag }}"
           imagePullPolicy: {{ .Values.cloudflared.image.pullPolicy }}
+          securityContext:
+            {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           args: [tunnel, --no-autoupdate, --loglevel, info, --metrics, 0.0.0.0:2000, run]
           env:
             - name: TUNNEL_TOKEN
