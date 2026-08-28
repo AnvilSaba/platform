@@ -71,9 +71,8 @@ podman run --rm `
 MCGuildLinkの起動ファイルを確認します。
 
 ```powershell
-podman run --rm --entrypoint /bin/sh `
-  localhost/anvilsaba/mcguildlink:test `
-  -c "test -x /app/bin/app && java -version"
+podman run --rm --entrypoint /runtime/bin/java `
+  localhost/anvilsaba/mcguildlink:test --version
 ```
 
 ## 3. 統合テスト環境のセットアップ
