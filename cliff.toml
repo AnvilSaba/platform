@@ -1,0 +1,103 @@
+[changelog]
+header = """
+# 変更履歴
+"""
+
+body = """
+{%- macro remote_url() -%}
+  https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}
+{%- endmacro -%}\n
+
+{% macro print_commit(commit) -%}
+    - {% if commit.scope %}*({{ commit.scope }})*: {% endif %}\
+        {% if commit.breaking %}[**breaking**] {% endif %}\
+        {{ commit.message | split(pat="\n") | first | upper_first }} - \
+        ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))\
+{% endmacro -%}
+
+{% if version %}\
+    {% if previous.version %}\
+        ## [{{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/") }}]({{ self::remote_url() }}/compare/{{ previous.version }}..{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+    {% else %}\
+        ## {{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+    {% endif %}\
+{% else %}\
+    ## 未リリース
+{% endif %}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits
+    | filter(attribute="scope")
+    | sort(attribute="scope") %}
+        {{ self::print_commit(commit=commit) }}
+    {%- endfor -%}
+    {% raw %}\n{% endraw %}\
+    {%- for commit in commits %}
+        {%- if not commit.scope -%}
+            {{ self::print_commit(commit=commit) }}
+        {% endif -%}
+    {% endfor -%}
+{% endfor %}
+
+{%- if github -%}
+{% if github.contributors | filter(attribute="is_first_time", value=true) | length != 0 %}
+  {% raw %}\n{% endraw %}
+  ## 新たな貢献者
+
+  ---
+{%- endif %}\
+{% for contributor in github.contributors | filter(attribute="is_first_time", value=true) %}
+  * @{{ contributor.username }} \
+    {%- if contributor.pr_number %} \
+      [#{{ contributor.pr_number }}]({{ self::remote_url() }}/pull/{{ contributor.pr_number }}) \
+    {%- endif %}
+{%- endfor -%}
+{%- endif -%}
+
+{% if version %}
+    {% if previous.version %}
+      **コミット差分**: {{ self::remote_url() }}/compare/{{ previous.version }}...{{ version }}
+    {%- endif %}
+{% else -%}
+  {% raw %}\n{% endraw %}
+{% endif %}
+
+"""
+
+footer = """
+---
+"""
+
+trim = true
+render_always = true
+
+[remote.github]
+owner = "anvilsaba"
+repo = "platform"
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+commit_preprocessors = [
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#$1](https://github.com/anvilsaba/platform/pull/$1))" },
+]
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->機能追加" },
+  { message = "^fix", group = "<!-- 1 -->バグ修正" },
+  { message = "^perf", group = "<!-- 2 -->性能改善" },
+  { message = "^refactor", group = "<!-- 3 -->リファクタリング" },
+  { message = "^docs", group = "<!-- 4 -->ドキュメント" },
+  { message = "^test", group = "<!-- 5 -->テスト" },
+  { message = "^ci", group = "<!-- 6 -->CI" },
+  { message = "^build", group = "<!-- 7 -->ビルド" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = ".*", group = "<!-- 8 -->その他" },
+]
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "^(bot|mcguildlink)/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+skip_tags = "-(alpha|beta|rc)"
+topo_order = false
+sort_commits = "oldest"

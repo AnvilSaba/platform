@@ -106,16 +106,6 @@ http://mcguildlink-http:8080
 
 GitHub ActionsでBotとMCGuildLinkのイメージをGHCRへ登録します。`latest`ではなく、実際に生成された固定tagを使用します。
 
-リリース用のGit tagはアプリケーションごとに分けます。`bot/v*`はBotイメージのみ、`mcguildlink/v*`はMCGuildLinkイメージのみをビルドします。GHCRではアプリケーション名を除いた`v*`がイメージtagになります。
-
-```bash
-git tag bot/v1.0.0
-git push origin bot/v1.0.0
-
-git tag mcguildlink/v1.0.0
-git push origin mcguildlink/v1.0.0
-```
-
 ```bash
 BOT_IMAGE_TAG='<BOT_COMMIT_SHA_OR_RELEASE_TAG>'
 MCGUILDLINK_IMAGE_TAG='<MCGUILDLINK_COMMIT_SHA_OR_RELEASE_TAG>'
@@ -147,7 +137,7 @@ helm upgrade --install platform ./deploy/helm/platform \
 
 ## 4. デプロイの更新
 
-新しいイメージtagを指定して同じHelmコマンドを実行します。BotとMCGuildLinkはpath filterにより別々のtagになることがあるため、それぞれ実在するtagを指定します。
+新しいイメージtagを指定して同じHelmコマンドを実行します。BotとMCGuildLinkは独立してリリースされるため、それぞれ実在するtagを指定します。
 
 ```bash
 helm upgrade platform ./deploy/helm/platform \
