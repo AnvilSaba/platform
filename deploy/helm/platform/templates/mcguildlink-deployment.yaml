@@ -13,8 +13,11 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: mcguildlink }
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
 
         # DB を postgres に移行したら消す
         fsGroup: 65532
@@ -23,12 +26,18 @@ spec:
         - name: mcguildlink
           image: "{{ .Values.mcguildlink.image.repository }}:{{ required "mcguildlink.image.tag is required" .Values.mcguildlink.image.tag }}"
           imagePullPolicy: {{ .Values.mcguildlink.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - { name: http, containerPort: {{ .Values.mcguildlink.http.port }} }
             - { name: minecraft, containerPort: {{ .Values.mcguildlink.minecraft.port }} }
           volumeMounts:
             - { name: config, mountPath: /app/config/app.toml, subPath: app.toml, readOnly: true }
             - { name: data, mountPath: /app/data }
+            - { name: static, mountPath: /app/static }
           readinessProbe:
             tcpSocket: { port: http }
             initialDelaySeconds: 10
@@ -44,3 +53,5 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: mcguildlink-data
+        - name: static
+          emptyDir: {}
