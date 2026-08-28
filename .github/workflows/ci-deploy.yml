@@ -1,0 +1,42 @@
+name: Deploy CI
+
+on:
+  push:
+    paths: ["deploy/**", ".github/workflows/ci-deploy.yml"]
+  pull_request:
+    paths: ["deploy/**", ".github/workflows/ci-deploy.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        values:
+          - values.dev.yaml
+          - values.prod.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint chart
+        run: >-
+          helm lint ./deploy/helm/platform
+          -f ./deploy/helm/platform/${{ matrix.values }}
+          --set-string bot.image.tag=ci
+          --set-string mcguildlink.image.tag=ci
+      - name: Render manifests
+        run: >-
+          helm template platform ./deploy/helm/platform
+          --namespace anvilsaba
+          -f ./deploy/helm/platform/${{ matrix.values }}
+          --set-string bot.image.tag=ci
+          --set-string mcguildlink.image.tag=ci
+          > /dev/null
+
+  k3s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Parse config
+        run: ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml')"

@@ -1,9 +1,9 @@
 name: Rust CI
 on:
   push:
-    paths: ["LICENSE", "apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+    paths: ["LICENSE", "apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+    paths: ["LICENSE", "apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest

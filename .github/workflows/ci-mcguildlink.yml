@@ -1,9 +1,9 @@
 name: MCGuildLink CI
 on:
   push:
-    paths: ["apps/mcguildlink/**"]
+    paths: ["apps/mcguildlink/**", ".github/workflows/ci-mcguildlink.yml"]
   pull_request:
-    paths: ["apps/mcguildlink/**"]
+    paths: ["apps/mcguildlink/**", ".github/workflows/ci-mcguildlink.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest
