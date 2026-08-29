@@ -55,6 +55,8 @@ mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown "$USER":"$USER" ~/.kube/config
 chmod 600 ~/.kube/config
+echo 'export KUBECONFIG="$HOME/.kube/config"' >> ~/.zshrc
+source ~/.zshrc
 kubectl get nodes
 ```
 
@@ -74,24 +76,50 @@ Gitリポジトリ全体を配置する必要はありません。scp、rsync、
 
 本番設定はリポジトリ外に置き、Gitへ追加しません。
 
+Secretへ登録する元ファイルは、本番サーバー上のroot管理領域に配置します。`/opt/`は特定ユーザー専用ではありませんが、設定ファイルの用途が明確になるため、ここでは`/etc/anvilsaba/`を使用します。
+
+```text
+/etc/anvilsaba/secrets/bot/config.toml
+/etc/anvilsaba/secrets/mcguildlink/app.toml
+```
+
+設定ファイルを別端末から転送する場合は、例えば次のように配置します。
+
 ```bash
-kubectl create namespace anvilsaba --dry-run=client -o yaml | kubectl apply -f -
+scp ./app.toml <本番ユーザー>@<本番サーバー>:/tmp/mcguildlink-app.toml
+scp ./config.toml <本番ユーザー>@<本番サーバー>:/tmp/bot-config.toml
+```
 
-kubectl -n anvilsaba create secret generic bot-config \
-  --from-file=config.toml=/secure/path/bot-config.toml \
-  --dry-run=client -o yaml | kubectl apply -f -
+本番サーバー上で、転送したファイルを所定の場所へ移動します。`install`の第1引数が配置元、第2引数が配置先です。
 
-kubectl -n anvilsaba create secret generic mcguildlink-config \
-  --from-file=app.toml=/secure/path/mcguildlink-config.toml \
-  --dry-run=client -o yaml | kubectl apply -f -
+```bash
+sudo install -d -o root -g root -m 700 /etc/anvilsaba/secrets/bot
+sudo install -d -o root -g root -m 700 /etc/anvilsaba/secrets/mcguildlink
+sudo install -o root -g root -m 600 /tmp/bot-config.toml \
+  /etc/anvilsaba/secrets/bot/config.toml
+sudo install -o root -g root -m 600 /tmp/mcguildlink-app.toml \
+  /etc/anvilsaba/secrets/mcguildlink/app.toml
+sudo rm /tmp/bot-config.toml /tmp/mcguildlink-app.toml
+```
 
-kubectl -n anvilsaba create secret generic postgres \
+```bash
+sudo kubectl create namespace anvilsaba --dry-run=client -o yaml | sudo kubectl apply -f -
+
+sudo kubectl -n anvilsaba create secret generic bot-config \
+  --from-file=config.toml=/etc/anvilsaba/secrets/bot/config.toml \
+  --dry-run=client -o yaml | sudo kubectl apply -f -
+
+sudo kubectl -n anvilsaba create secret generic mcguildlink-config \
+  --from-file=app.toml=/etc/anvilsaba/secrets/mcguildlink/app.toml \
+  --dry-run=client -o yaml | sudo kubectl apply -f -
+
+sudo kubectl -n anvilsaba create secret generic postgres \
   --from-literal=password='<POSTGRES_PASSWORD>' \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml | sudo kubectl apply -f -
 
-kubectl -n anvilsaba create secret generic cloudflare-tunnel \
+sudo kubectl -n anvilsaba create secret generic cloudflare-tunnel \
   --from-literal=token='<TUNNEL_TOKEN>' \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml | sudo kubectl apply -f -
 ```
 
 ### 2.5 Cloudflare Tunnel
