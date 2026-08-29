@@ -1,0 +1,16 @@
+**/Dockerfile*
+
+**/.gradle/
+**/.kotlin/
+**/build/
+**/target/
+
+.git/
+**/.idea/
+**/.vscode/
+
+**/*.secret
+**/.env
+
+**/app.toml
+**/config.toml

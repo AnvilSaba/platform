@@ -5,7 +5,7 @@ env:
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "crates/bot-macros/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+    paths: ["LICENSE", "apps/bot/**", "crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
   workflow_call:
     inputs:
       release_ref:
