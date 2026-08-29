@@ -19,6 +19,7 @@ import io.github.anvilsaba.mcguildlink.app.discord.registry.EphemeralPagination
 import io.github.anvilsaba.mcguildlink.app.discord.registry.InteractionRegistry
 import io.github.anvilsaba.mcguildlink.app.discord.registry.PaginationSnapshotPage
 import io.github.anvilsaba.mcguildlink.app.discord.registry.createLinkedCustomIdString
+import io.github.anvilsaba.mcguildlink.app.minecraft.MinecraftServer
 import io.github.anvilsaba.mcguildlink.app.service.AccountLinkService
 import io.github.anvilsaba.mcguildlink.app.service.dto.LinkRequestResult
 import io.github.anvilsaba.mcguildlink.app.service.dto.MinecraftAccountInfo
@@ -46,7 +47,7 @@ internal fun InteractionRegistry.installAccountLinkButtons() {
                 logger.debug { "Requesting link code for user ${interaction.user.tag} (${interaction.user.id})" }
                 interaction.respondEphemeral {
                     content = """
-                        Minecraft 1.21.11 で以下のサーバーに接続し、表示される入力欄にコードを入力してください。
+                        Minecraft ${MinecraftServer.SUPPORTED_MC_VERSION} で以下のサーバーに接続し、表示される入力欄にコードを入力してください。
                         
                         サーバーアドレス:
                         ```

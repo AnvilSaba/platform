@@ -42,6 +42,8 @@ class MinecraftServer(
         private val CODE_SUBMIT_KEY = Key.key("mcguildlink:submit_code")
         private val DIALOG_SUCCESS_KEY = Key.key("mcguildlink:dialog_success")
         private const val CODE_INPUT_NBT_KEY = "code"
+
+        const val SUPPORTED_MC_VERSION = MinecraftServer.VERSION_NAME
     }
 
     /**
