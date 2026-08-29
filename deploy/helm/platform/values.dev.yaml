@@ -1,6 +1,12 @@
 bot:
   image:
-    tag: dev
+    repository: localhost/anvilsaba/bot
+    tag: test
+
 mcguildlink:
   image:
-    tag: dev
+    repository: localhost/anvilsaba/mcguildlink
+    tag: test
+
+cloudflared:
+  replicas: 0

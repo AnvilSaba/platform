@@ -35,6 +35,7 @@ spec:
             - { name: config, mountPath: /app/config/app.toml, subPath: app.toml, readOnly: true }
             - { name: data, mountPath: /app/data }
             - { name: static, mountPath: /app/static }
+            - { name: tmp, mountPath: /tmp }
           readinessProbe:
             tcpSocket: { port: http }
             initialDelaySeconds: 10
@@ -51,4 +52,6 @@ spec:
           persistentVolumeClaim:
             claimName: mcguildlink-data
         - name: static
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}

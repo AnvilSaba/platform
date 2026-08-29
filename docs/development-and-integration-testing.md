@@ -131,10 +131,7 @@ kubectl -n anvilsaba create secret generic cloudflare-tunnel `
 helm upgrade --install platform deploy/helm/platform `
   --namespace anvilsaba `
   --create-namespace `
-  -f deploy/helm/platform/values.dev.yaml `
-  --set-string bot.image.tag=test `
-  --set-string mcguildlink.image.tag=test `
-  --wait --timeout 10m
+  -f deploy/helm/platform/values.dev.yaml
 ```
 
 ## 4. 統合テスト手順
