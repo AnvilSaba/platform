@@ -29,6 +29,7 @@ on:
         type: boolean
 
 permissions:
+  actions: write
   contents: write
   packages: write
 
@@ -56,6 +57,18 @@ jobs:
           $dryRun = [System.Convert]::ToBoolean('${{ inputs.dry_run }}')
           $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' -DryRun:$dryRun | Select-Object -Last 1
           "tag=$tag" >> $env:GITHUB_OUTPUT
+      - name: Update workflow title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          suffix=""
+          if [[ "$DRY_RUN" == "true" ]]; then suffix=" [DryRun]"; fi
+          name="Release ${RELEASE_TAG}${suffix}"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --field "name=${name}" > /dev/null
       - name: Commit and tag
         if: ${{ !inputs.dry_run }}
         env:
