@@ -8,24 +8,24 @@ body = """
   https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}
 {%- endmacro -%}\n
 
-{% macro print_commit(commit) -%}
-    - {% if commit.scope %}*({{ commit.scope }})*: {% endif %}\
+{%- macro print_commit(commit) -%}
+    - {% if commit.scope %}({{ commit.scope }}): {% endif %}\
         {% if commit.breaking %}[**breaking**] {% endif %}\
         {{ commit.message | split(pat="\n") | first | upper_first }} - \
         ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))\
-{% endmacro -%}
+{%- endmacro -%}
 
 {% if version %}\
     {% if previous.version %}\
-        ## [{{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/") }}]({{ self::remote_url() }}/compare/{{ previous.version }}..{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+        ## [{{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/v") }}]({{ self::remote_url() }}/compare/{{ previous.version }}..{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
     {% else %}\
-        ## {{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+        ## {{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
     {% endif %}\
 {% else %}\
     ## 未リリース
 {% endif %}
 
-{% for group, commits in commits | group_by(attribute="group") %}
+{%- for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits
     | filter(attribute="scope")
@@ -54,14 +54,6 @@ body = """
     {%- endif %}
 {%- endfor -%}
 {%- endif -%}
-
-{% if version %}
-    {% if previous.version %}
-      **コミット差分**: {{ self::remote_url() }}/compare/{{ previous.version }}...{{ version }}
-    {%- endif %}
-{% else -%}
-  {% raw %}\n{% endraw %}
-{% endif %}
 
 """
 

@@ -18,7 +18,7 @@
         BaselineTag   = "bot/v3.5.0"
         LegacySection = @"
 
-## v3.5.0以前
+## 3.5.0 以前
 
 以前の変更は[旧Botコミット履歴](https://github.com/AnvilSaba/platform/commits/59d55a6)を参照してください。
 "@
@@ -31,7 +31,7 @@
         BaselineTag   = "mcguildlink/v1.0.0"
         LegacySection = @"
 
-## v1.0.0以前
+## 1.0.0 以前
 
 以前の変更は[旧MCGuildLinkコミット履歴](https://github.com/AnvilSaba/platform/commits/86cc7f2)を参照してください。
 "@
