@@ -1,5 +1,7 @@
 name: Release
 
+run-name: Release ${{ inputs.app }}${{ inputs.dry_run && ' [DryRun]' || '' }}
+
 on:
   workflow_dispatch:
     inputs:
