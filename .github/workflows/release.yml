@@ -25,7 +25,7 @@ on:
       dry_run:
         description: タグ・変更ログを確認
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:

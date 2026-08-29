@@ -15,7 +15,7 @@ Bot と MCGuildLink は独立してバージョン管理します。タグはそ
 
 ## GitHub Actions からリリースする
 
-GitHub の Actions 画面で **Release** を選び、**Run workflow** からアプリと bump 種別を指定します。通常は `auto` を使用してください。タグだけ確認したい場合は `dry_run` を有効にします。
+GitHub の Actions 画面で **Release** を選び、**Run workflow** からアプリと bump 種別を指定します。通常は `auto` を使用してください。`dry_run` はデフォルトで有効です。実際にリリースする場合だけ無効にしてください。
 
 Workflow は次を自動実行します。
 
