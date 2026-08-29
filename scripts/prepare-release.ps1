@@ -58,8 +58,21 @@ if ($DryRun) {
     try {
         & (Join-Path $PSScriptRoot "generate-changelog.ps1") -App $App -Tag $nextTag -Output $previewPath | Out-Null
         Write-Host "--- CHANGELOG プレビュー ($($settings.Changelog)) ---"
-        Get-Content -Path $previewPath
+        Get-Content -Path $previewPath | ForEach-Object { Write-Host $_ }
         Write-Host "--- CHANGELOG プレビュー終了 ---"
+        if ($env:GITHUB_STEP_SUMMARY) {
+            $summary = @(
+                "## CHANGELOG プレビュー: ``$nextTag``",
+                "",
+                (Get-Content -Path $previewPath -Raw),
+                ""
+            ) -join [Environment]::NewLine
+            [System.IO.File]::AppendAllText(
+                $env:GITHUB_STEP_SUMMARY,
+                $summary,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        }
     } finally {
         if (Test-Path $previewPath) { Remove-Item -LiteralPath $previewPath -Force }
     }
