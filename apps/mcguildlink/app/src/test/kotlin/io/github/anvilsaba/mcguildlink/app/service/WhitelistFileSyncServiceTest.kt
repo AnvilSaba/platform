@@ -159,10 +159,10 @@ class WhitelistFileSyncServiceTest {
     }
 
     /**
-     * 連続した再生成要求では古い処理が打ち切られ、最終状態だけがファイルへ反映されることを検証します。
+     * 購読開始前の要求を保持し、連続要求では古い処理を打ち切って最終状態だけを反映することを検証します。
      */
     @Test
-    fun `attach cancels stale refresh and writes latest state`() = runBlocking {
+    fun `attach processes queued refresh cancels stale work and writes latest state`() = runBlocking {
         val environment = TestEnvironment()
         val setupLinkService = AccountLinkService(environment.db)
         val firstRefreshReachedMove = CompletableDeferred<Unit>()
@@ -182,21 +182,24 @@ class WhitelistFileSyncServiceTest {
             db = environment.db,
             whitelistRefreshRequester = service,
         )
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val collectorJob = service.attach(scope)
         val minecraftUuid = Uuid.parse("00000000-0000-0000-0000-000000000050")
 
-        try {
-            createLink(
-                linkService = setupLinkService,
-                discordUserId = 1u,
-                discordUsername = "discord-1",
-                minecraftUuid = minecraftUuid,
-                minecraftName = "LatestOnly",
-            )
+        createLink(
+            linkService = setupLinkService,
+            discordUserId = 1u,
+            discordUsername = "discord-1",
+            minecraftUuid = minecraftUuid,
+            minecraftName = "LatestOnly",
+        )
+        service.requestRefresh()
 
-            service.requestRefresh()
-            firstRefreshReachedMove.await()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val collectorJob = service.attach(scope)
+
+        try {
+            withTimeout(5_000.milliseconds) {
+                firstRefreshReachedMove.await()
+            }
             notifyingLinkService.unlink(1u, minecraftUuid)
 
             withTimeout(5_000.milliseconds) {

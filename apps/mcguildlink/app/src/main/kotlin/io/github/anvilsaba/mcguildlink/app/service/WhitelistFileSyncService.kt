@@ -8,9 +8,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -43,17 +44,13 @@ internal class WhitelistFileSyncService(
         prettyPrint = true
     }
 
-    private val refreshRequests = MutableSharedFlow<Unit>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
-    )
+    private val refreshRequests = Channel<Unit>(capacity = Channel.CONFLATED)
 
     /**
      * 最新状態でホワイトリストを再生成するよう通知します。
      */
     override fun requestRefresh() {
-        refreshRequests.tryEmit(Unit)
+        refreshRequests.trySend(Unit)
     }
 
     /**
@@ -89,7 +86,7 @@ internal class WhitelistFileSyncService(
      * 再生成要求を購読し、常に最新の要求だけを反映する同期ジョブを開始します。
      */
     fun attach(scope: CoroutineScope): Job = scope.launch {
-        refreshRequests.collectLatest {
+        refreshRequests.receiveAsFlow().collectLatest {
             try {
                 generateNow()
             } catch (e: CancellationException) {
