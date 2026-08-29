@@ -5,7 +5,9 @@ param(
     [string] $App,
 
     [ValidateSet("auto", "major", "minor", "patch")]
-    [string] $Bump = "auto"
+    [string] $Bump = "auto",
+
+    [switch] $DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +52,18 @@ if (git rev-parse --verify --quiet "refs/tags/$nextTag") {
     throw "タグ $nextTag は既に存在します。"
 }
 
-if ($App -eq "bot") {
+if ($DryRun) {
+    Write-Host "ドライラン: $nextTag を作成予定です。バージョンファイルと変更履歴は更新しません。"
+    $previewPath = Join-Path ([System.IO.Path]::GetTempPath()) "${App}-changelog-preview-$([guid]::NewGuid()).md"
+    try {
+        & (Join-Path $PSScriptRoot "generate-changelog.ps1") -App $App -Tag $nextTag -Output $previewPath | Out-Null
+        Write-Host "--- CHANGELOG プレビュー ($($settings.Changelog)) ---"
+        Get-Content -Path $previewPath
+        Write-Host "--- CHANGELOG プレビュー終了 ---"
+    } finally {
+        if (Test-Path $previewPath) { Remove-Item -LiteralPath $previewPath -Force }
+    }
+} elseif ($App -eq "bot") {
     $updated = [regex]::Replace($versionText, $versionPattern, "version = `"$nextVersion`"", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 
@@ -63,6 +76,8 @@ if ($App -eq "bot") {
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 }
 
-& (Join-Path $PSScriptRoot "generate-changelog.ps1") -App $App -Tag $nextTag | Out-Null
+if (-not $DryRun) {
+    & (Join-Path $PSScriptRoot "generate-changelog.ps1") -App $App -Tag $nextTag | Out-Null
+}
 
 Write-Output $nextTag

@@ -20,6 +20,11 @@ on:
           - major
           - minor
           - patch
+      dry_run:
+        description: タグ・変更ログを確認
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -46,9 +51,11 @@ jobs:
         id: release
         shell: pwsh
         run: |
-          $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' | Select-Object -Last 1
+          $dryRun = [System.Convert]::ToBoolean('${{ inputs.dry_run }}')
+          $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' -DryRun:$dryRun | Select-Object -Last 1
           "tag=$tag" >> $env:GITHUB_OUTPUT
       - name: Commit and tag
+        if: ${{ !inputs.dry_run }}
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
@@ -60,14 +67,14 @@ jobs:
           git push origin HEAD:main "${RELEASE_TAG}"
 
   build-bot-image:
-    if: inputs.app == 'bot'
+    if: inputs.app == 'bot' && !inputs.dry_run
     needs: release
     uses: ./.github/workflows/image-bot.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
   build-mcguildlink-image:
-    if: inputs.app == 'mcguildlink'
+    if: inputs.app == 'mcguildlink' && !inputs.dry_run
     needs: release
     uses: ./.github/workflows/image-mcguildlink.yml
     with:

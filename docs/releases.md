@@ -15,7 +15,7 @@ Bot と MCGuildLink は独立してバージョン管理します。タグはそ
 
 ## GitHub Actions からリリースする
 
-GitHub の Actions 画面で **Release** を選び、**Run workflow** からアプリと bump 種別を指定します。通常は `auto` を使用してください。
+GitHub の Actions 画面で **Release** を選び、**Run workflow** からアプリと bump 種別を指定します。通常は `auto` を使用してください。タグだけ確認したい場合は `dry_run` を有効にします。
 
 Workflow は次を自動実行します。
 
@@ -24,6 +24,8 @@ Workflow は次を自動実行します。
 3. `chore(release): <app>/vX.Y.Z` をコミットする
 4. 同名の Git tag を作成して `main` へ push する
 5. `workflow_call` で対象アプリのイメージWorkflowを呼び出し、コンテナイメージを公開する
+
+`dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。バージョンファイル・実際の CHANGELOG、commit、tag、push、イメージ公開は行いません。
 
 対象アプリにタグが1件もない初回実行は、既存のバージョン（Bot は `3.5.0`、MCGuildLink は `1.0.0`）をそのまま初回タグとして使用します。2回目以降は未リリースの Conventional Commits に基づいて bump します。
 

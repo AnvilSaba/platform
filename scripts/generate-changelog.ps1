@@ -4,7 +4,9 @@ param(
     [ValidateSet("bot", "mcguildlink")]
     [string] $App,
 
-    [string] $Tag
+    [string] $Tag,
+
+    [string] $Output
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +19,7 @@ if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
 
 $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-config.psd1")
 $settings = $releaseConfig[$App]
+$outputPath = if ($Output) { $Output } else { $settings.Changelog }
 
 $tagPattern = "^$([regex]::Escape($App))/v[0-9]+\.[0-9]+\.[0-9]+$"
 $baselinePattern = "^$([regex]::Escape($settings.BaselineTag))$"
@@ -24,7 +27,7 @@ $cliffArgs = @(
     "--config", "cliff.toml",
     "--tag-pattern", $tagPattern,
     "--skip-tags", $baselinePattern,
-    "--output", $settings.Changelog
+    "--output", $outputPath
 )
 if ($Tag) {
     if ($Tag -notmatch $tagPattern) {
@@ -38,7 +41,7 @@ $cliffArgs += "$($settings.BaseCommit)..HEAD"
 & git-cliff @cliffArgs
 if ($LASTEXITCODE -ne 0) { throw "変更履歴の生成に失敗しました。" }
 
-$changelogPath = (Resolve-Path $settings.Changelog).Path
+$changelogPath = (Resolve-Path $outputPath).Path
 [System.IO.File]::AppendAllText(
     $changelogPath,
     $settings.LegacySection.TrimEnd() + [Environment]::NewLine,
