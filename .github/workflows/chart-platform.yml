@@ -1,0 +1,54 @@
+name: Platform chart
+
+on:
+  workflow_call:
+    inputs:
+      release_ref:
+        description: 公開するChartのリリースタグ
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_ref }}
+      - name: Resolve chart version
+        id: chart
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          echo "version=${RELEASE_REF#chart/v}" >> "$GITHUB_OUTPUT"
+      - name: Lint chart
+        run: >-
+          helm lint ./deploy/helm/platform
+          -f ./deploy/helm/platform/values.prod.yaml
+          --set-string bot.image.tag=ci
+          --set-string mcguildlink.image.tag=ci
+      - name: Package chart
+        env:
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
+        run: |
+          helm package ./deploy/helm/platform --destination "$RUNNER_TEMP"
+          test -f "$RUNNER_TEMP/platform-$CHART_VERSION.tgz"
+      - name: Login to GHCR
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          echo "$REGISTRY_PASSWORD" |
+          helm registry login ghcr.io
+          --username "$REGISTRY_USERNAME"
+          --password-stdin
+      - name: Push chart
+        env:
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
+        run: >-
+          helm push "$RUNNER_TEMP/platform-$CHART_VERSION.tgz"
+          oci://ghcr.io/anvilsaba/charts

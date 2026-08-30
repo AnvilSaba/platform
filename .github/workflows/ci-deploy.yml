@@ -2,9 +2,9 @@ name: Deploy CI
 
 on:
   push:
-    paths: ["deploy/**", ".github/workflows/ci-deploy.yml"]
+    paths: ["deploy/**", ".github/workflows/ci-deploy.yml", ".github/workflows/chart-platform.yml"]
   pull_request:
-    paths: ["deploy/**", ".github/workflows/ci-deploy.yml"]
+    paths: ["deploy/**", ".github/workflows/ci-deploy.yml", ".github/workflows/chart-platform.yml"]
 
 permissions:
   contents: read

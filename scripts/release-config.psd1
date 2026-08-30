@@ -22,4 +22,11 @@
         BaselineTag   = "mcguildlink/v1.0.0"
         DisplayName   = "MCGuildLink"
     }
+    chart = @{
+        VersionFile   = "deploy/helm/platform/Chart.yaml"
+        Changelog     = "deploy/helm/platform/CHANGELOG.md"
+        Paths         = @("deploy/helm/platform/**/*")
+        FullHistory   = $true
+        DisplayName   = "Platform Helm Chart"
+    }
 }

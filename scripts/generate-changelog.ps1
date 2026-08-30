@@ -20,16 +20,17 @@ $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-con
 $settings = $releaseConfig[$App]
 $outputPath = if ($Output) { $Output } else { $settings.Changelog }
 $baselineTag = $settings.BaselineTag
-$baselineVersion = $baselineTag -replace "^$([regex]::Escape($App))/v", ""
 
 $tagPattern = "^$([regex]::Escape($App))/v[0-9]+\.[0-9]+\.[0-9]+$"
-$baselinePattern = "^$([regex]::Escape($baselineTag))$"
 $cliffArgs = @(
     "--config", "cliff.toml",
     "--tag-pattern", $tagPattern,
-    "--skip-tags", $baselinePattern,
     "--output", $outputPath
 )
+if (-not $settings.FullHistory) {
+    $baselinePattern = "^$([regex]::Escape($baselineTag))$"
+    $cliffArgs += @("--skip-tags", $baselinePattern)
+}
 if ($Tag) {
     if ($Tag -notmatch $tagPattern) {
         throw "タグ '$Tag' は $App のタグ形式ではありません。"
@@ -37,16 +38,19 @@ if ($Tag) {
     $cliffArgs += @("--tag", $Tag)
 }
 foreach ($path in $settings.Paths) { $cliffArgs += @("--include-path", $path) }
-$cliffArgs += "$($settings.BaselineTag)..HEAD"
+$cliffArgs += if ($settings.FullHistory) { "HEAD" } else { "$baselineTag..HEAD" }
 
 & git-cliff @cliffArgs
 if ($LASTEXITCODE -ne 0) { throw "変更履歴の生成に失敗しました。" }
 
-$changelogPath = (Resolve-Path $outputPath).Path
-[System.IO.File]::AppendAllText(
-    $changelogPath,
-    ("`n## $baselineVersion 以前`n`n以前の変更は[旧$($settings.DisplayName)コミット履歴](https://github.com/anvilsaba/platform/commits/$baselineTag)を参照してください。`n").TrimEnd() + [Environment]::NewLine,
-    [System.Text.UTF8Encoding]::new($false)
-)
+if (-not $settings.FullHistory) {
+    $baselineVersion = $baselineTag -replace "^$([regex]::Escape($App))/v", ""
+    $changelogPath = (Resolve-Path $outputPath).Path
+    [System.IO.File]::AppendAllText(
+        $changelogPath,
+        ("`n## $baselineVersion 以前`n`n以前の変更は[旧$($settings.DisplayName)コミット履歴](https://github.com/anvilsaba/platform/commits/$baselineTag)を参照してください。`n").TrimEnd() + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+}
 
 Write-Output $settings.Changelog

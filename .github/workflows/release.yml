@@ -6,12 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       app:
-        description: リリースするアプリケーション
+        description: リリースする対象
         required: true
         type: choice
         options:
           - bot
           - mcguildlink
+          - chart
       bump:
         description: バージョン更新（auto は Conventional Commits から判定）
         required: true
@@ -79,5 +80,12 @@ jobs:
     if: inputs.app == 'mcguildlink' && !inputs.dry_run
     needs: release
     uses: ./.github/workflows/image-mcguildlink.yml
+    with:
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  publish-platform-chart:
+    if: inputs.app == 'chart' && !inputs.dry_run
+    needs: release
+    uses: ./.github/workflows/chart-platform.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}

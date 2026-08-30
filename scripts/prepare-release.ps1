@@ -21,7 +21,12 @@ $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-con
 $settings = $releaseConfig[$App]
 
 $versionText = Get-Content -Raw $settings.VersionFile
-$versionPattern = if ($App -eq "bot") { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' } else { '(?m)^version=(?<version>\d+\.\d+\.\d+)$' }
+$versionPattern = switch ($App) {
+    "bot" { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
+    "mcguildlink" { '(?m)^version=(?<version>\d+\.\d+\.\d+)$' }
+    "chart" { '(?m)^version: (?<version>\d+\.\d+\.\d+)$' }
+    default { throw "未対応のリリース対象です: $App" }
+}
 $versionMatch = [regex]::Match($versionText, $versionPattern)
 if (-not $versionMatch.Success) {
     throw "$($settings.VersionFile) から現在のバージョンを取得できません。"
@@ -83,8 +88,11 @@ if ($DryRun) {
     $lockPattern = '(?ms)(\[\[package\]\]\r?\nname = "bot"\r?\nversion = ")\d+\.\d+\.\d+("\r?\n)'
     $lockUpdated = [regex]::Replace($lockText, $lockPattern, "`${1}$nextVersion`${2}", 1)
     Set-Content -Path "Cargo.lock" -Value $lockUpdated -NoNewline
-} else {
+} elseif ($App -eq "mcguildlink") {
     $updated = [regex]::Replace($versionText, $versionPattern, "version=$nextVersion", 1)
+    Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
+} else {
+    $updated = [regex]::Replace($versionText, $versionPattern, "version: $nextVersion", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 }
 
