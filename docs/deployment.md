@@ -120,6 +120,11 @@ sudo kubectl -n anvilsaba create secret generic postgres \
 sudo kubectl -n anvilsaba create secret generic cloudflare-tunnel \
   --from-literal=token='<TUNNEL_TOKEN>' \
   --dry-run=client -o yaml | sudo kubectl apply -f -
+
+kubectl -n anvilsaba create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username='<GITHUB USERNAME>' \
+  --docker-password='GITHUB PERSONAL ACCESS TOKEN>'
 ```
 
 ### 2.5 Cloudflare Tunnel
