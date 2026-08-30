@@ -95,9 +95,22 @@ jobs:
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
-  deploy-bot:
-    if: inputs.app == 'bot' && !inputs.dry_run && inputs.deploy
-    needs: [release, build-bot-image]
+  deploy:
+    if: >-
+      !cancelled() &&
+      !inputs.dry_run &&
+      inputs.deploy &&
+      needs.release.result == 'success' &&
+      (
+        (inputs.app == 'bot' && needs.build-bot-image.result == 'success') ||
+        (inputs.app == 'mcguildlink' && needs.build-mcguildlink-image.result == 'success') ||
+        (inputs.app == 'chart' && needs.publish-platform-chart.result == 'success')
+      )
+    needs:
+      - release
+      - build-bot-image
+      - build-mcguildlink-image
+      - publish-platform-chart
     runs-on: ubuntu-latest
     environment: production
     concurrency:
@@ -109,47 +122,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/deploy-production
         with:
-          target: bot
+          target: ${{ inputs.app }}
           release-ref: ${{ needs.release.outputs.tag }}
-        env: &deploy-environment
+        env:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
           DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
-
-  deploy-mcguildlink:
-    if: inputs.app == 'mcguildlink' && !inputs.dry_run && inputs.deploy
-    needs: [release, build-mcguildlink-image]
-    runs-on: ubuntu-latest
-    environment: production
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/deploy-production
-        with:
-          target: mcguildlink
-          release-ref: ${{ needs.release.outputs.tag }}
-        env: *deploy-environment
-
-  deploy-platform-chart:
-    if: inputs.app == 'chart' && !inputs.dry_run && inputs.deploy
-    needs: [release, publish-platform-chart]
-    runs-on: ubuntu-latest
-    environment: production
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/deploy-production
-        with:
-          target: chart
-          release-ref: ${{ needs.release.outputs.tag }}
-        env: *deploy-environment
