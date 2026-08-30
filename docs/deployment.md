@@ -237,6 +237,12 @@ helm rollback platform <REVISION> -n anvilsaba --wait --timeout 10m
 
 ## 5. デプロイ後の確認
 
+動いてる Pod のイメージ確認
+```bash
+kubectl get pods -n anvilsaba \
+  -o custom-columns='POD:.metadata.name,IMAGE:.status.containerStatuses[*].image,IMAGE_ID:.status.containerStatuses[*].imageID'
+```
+
 ```bash
 helm status platform -n anvilsaba
 kubectl get pods,deploy,statefulset,service,pvc -n anvilsaba
