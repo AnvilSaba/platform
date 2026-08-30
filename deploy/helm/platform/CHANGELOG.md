@@ -1,5 +1,5 @@
 # 変更履歴
-## [0.1.0](https://github.com/anvilsaba/platform/commits/chart/v0.1.0) - 2026-08-30
+## [0.2.0](https://github.com/anvilsaba/platform/compare/chart/v0.1.0..chart/v0.2.0) - 2026-08-30
 
 ### 機能追加
 
