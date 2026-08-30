@@ -1,0 +1,82 @@
+name: Production deployment
+
+run-name: Deploy ${{ inputs.release_ref }} to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: デプロイする対象
+        required: true
+        type: choice
+        options:
+          - bot
+          - mcguildlink
+          - chart
+      release_ref:
+        description: デプロイする既存リリースタグ
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      target:
+        description: デプロイする対象
+        required: true
+        type: string
+      release_ref:
+        description: デプロイするリリースタグ
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_ref }}
+      - name: Resolve chart version
+        id: chart
+        run: |
+          chart_version="$(ruby -e 'require "yaml"; puts YAML.safe_load_file("deploy/helm/platform/Chart.yaml").fetch("version")')"
+          echo "chart_version=$chart_version" >> "$GITHUB_OUTPUT"
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+      - name: Deploy over SSH
+        env:
+          TARGET: ${{ inputs.target }}
+          RELEASE_REF: ${{ inputs.release_ref }}
+          CHART_VERSION: ${{ steps.chart.outputs.chart_version }}
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+        run: |
+          if [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]]; then
+            echo "SSHポートが不正です: $SSH_PORT" >&2
+            exit 1
+          fi
+          ssh \
+            -p "$SSH_PORT" \
+            -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "$SSH_USER@$SSH_HOST" \
+            bash -s -- "$TARGET" "$RELEASE_REF" "$CHART_VERSION" \
+            < scripts/deploy-production.sh

@@ -25,7 +25,9 @@ Workflow は次を自動実行します。
 4. 同名の Git tag を作成して `main` へ push する
 5. `workflow_call` で対象の公開Workflowを呼び出し、アプリではコンテナイメージ、ChartではOCI Chartを公開する
 
-`dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。バージョンファイル・実際の CHANGELOG、commit、tag、push、イメージ・Chart公開は行いません。
+`dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。バージョンファイル・実際の CHANGELOG、commit、tag、push、イメージ・Chart公開、デプロイは行いません。
+
+実リリースでは`deploy`がデフォルトで有効になり、イメージまたはChartの公開成功後に`production` Environmentを使って本番へSSHデプロイします。成果物の公開だけを行う場合は`deploy`を無効にしてください。各対象の初回リリースは`deploy=false`で公開し、Chartと両方のイメージが揃ってから[本番デプロイ手順](deployment.md)に従って初期デプロイします。
 
 対象にタグが1件もない初回実行は、既存のバージョン（Bot は `3.5.0`、MCGuildLink は `1.0.0`、Chart は `0.1.0`）をそのまま初回タグとして使用します。2回目以降は未リリースの Conventional Commits に基づいて bump します。Chartの初回CHANGELOGは`deploy/helm/platform`の全履歴から生成します。
 

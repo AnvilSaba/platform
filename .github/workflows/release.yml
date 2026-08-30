@@ -28,6 +28,11 @@ on:
         required: true
         default: true
         type: boolean
+      deploy:
+        description: リリース後に本番へデプロイ
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -88,4 +93,28 @@ jobs:
     needs: release
     uses: ./.github/workflows/chart-platform.yml
     with:
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  deploy-bot:
+    if: inputs.app == 'bot' && !inputs.dry_run && inputs.deploy
+    needs: [release, build-bot-image]
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      target: bot
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  deploy-mcguildlink:
+    if: inputs.app == 'mcguildlink' && !inputs.dry_run && inputs.deploy
+    needs: [release, build-mcguildlink-image]
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      target: mcguildlink
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  deploy-platform-chart:
+    if: inputs.app == 'chart' && !inputs.dry_run && inputs.deploy
+    needs: [release, publish-platform-chart]
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      target: chart
       release_ref: ${{ needs.release.outputs.tag }}

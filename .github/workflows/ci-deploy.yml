@@ -2,9 +2,21 @@ name: Deploy CI
 
 on:
   push:
-    paths: ["deploy/**", ".github/workflows/ci-deploy.yml", ".github/workflows/chart-platform.yml"]
+    paths:
+      - "deploy/**"
+      - "scripts/deploy-production.sh"
+      - ".github/workflows/ci-deploy.yml"
+      - ".github/workflows/chart-platform.yml"
+      - ".github/workflows/deploy-production.yml"
+      - ".github/workflows/release.yml"
   pull_request:
-    paths: ["deploy/**", ".github/workflows/ci-deploy.yml", ".github/workflows/chart-platform.yml"]
+    paths:
+      - "deploy/**"
+      - "scripts/deploy-production.sh"
+      - ".github/workflows/ci-deploy.yml"
+      - ".github/workflows/chart-platform.yml"
+      - ".github/workflows/deploy-production.yml"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: read
@@ -40,3 +52,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Parse config
         run: ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml')"
+
+  deployment-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check syntax
+        run: bash -n ./scripts/deploy-production.sh

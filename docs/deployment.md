@@ -6,7 +6,7 @@
 
 - Botイメージ：`ghcr.io/anvilsaba/bot:<tag>`
 - MCGuildLinkイメージ：`ghcr.io/anvilsaba/mcguildlink:<tag>`
-- Helm Chart：`deploy/helm/platform`
+- Helm Chart：`oci://ghcr.io/anvilsaba/charts/platform`
 - namespace：`anvilsaba`
 - release：`platform`
 
@@ -21,6 +21,7 @@ UbuntuまたはDebianなどのLinuxサーバーを用意します。k3sはWindow
 - k3s
 - kubectl
 - Helm
+- flock（通常は`util-linux`に含まれます）
 - GHCRからイメージを取得する権限
 - Cloudflare remotely-managed Tunnelとtoken
 - Bot・MCGuildLinkの本番設定
@@ -64,13 +65,19 @@ kubectl get nodes
 
 ### 2.3 Helm Chart
 
-本番サーバーへ次のディレクトリを配置します。
+ChartはOCI形式でGHCRから取得するため、本番サーバーへリポジトリやChartを配置する必要はありません。Chartがprivateの場合は、デプロイ用ユーザーでGHCRへログインします。
 
-```text
-deploy/helm/platform/
+```bash
+echo '<GITHUB PAT>' | helm registry login ghcr.io \
+  --username '<GITHUB USERNAME>' \
+  --password-stdin
 ```
 
-Gitリポジトリ全体を配置する必要はありません。scp、rsync、リリース成果物などでChartだけを配布できます。
+PATには対象パッケージの`read:packages`権限が必要です。取得できることを確認します。
+
+```bash
+helm show chart oci://ghcr.io/anvilsaba/charts/platform --version '<CHART_VERSION>'
+```
 
 ### 2.4 Secretと設定
 
@@ -135,22 +142,47 @@ Cloudflare側のPublished applicationのserviceを次に設定します。
 http://mcguildlink-http:8080
 ```
 
+### 2.6 GitHub Actionsの本番環境
+
+GitHubのSettingsから`production` Environmentを作成し、次のEnvironment secretsを登録します。
+
+| 名前 | 内容 |
+| --- | --- |
+| `DEPLOY_SSH_HOST` | 本番サーバーのホスト名またはIPアドレス |
+| `DEPLOY_SSH_USER` | k3sを操作できるデプロイ用ユーザー |
+| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵 |
+| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵 |
+
+SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も設定します。`DEPLOY_SSH_KNOWN_HOSTS`には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵fingerprintと一致することを確認してください。
+
+デプロイ用ユーザーには次の準備が必要です。
+
+- SSH公開鍵を`authorized_keys`へ登録する
+- `kubectl`と`helm`がsudoなしでk3sを操作できるようにする
+- 2.3の`helm registry login`を同じユーザーで実行する
+
+必要に応じて`production` EnvironmentへRequired reviewersを設定すると、本番デプロイ前に承認を挟めます。
+
 ## 3. 初期デプロイ
 
-GitHub ActionsでBotとMCGuildLinkのイメージをGHCRへ登録します。`latest`ではなく、実際に生成された固定tagを使用します。
+GitHub ActionsでChart、Bot、MCGuildLinkをGHCRへ登録します。`latest`ではなく、実際に生成された固定バージョンを使用します。初期デプロイでは両方のイメージタグが必要なため、手動で実行します。
+
+各対象の初回リリースはReleaseで`deploy=false`を指定して成果物だけを公開します。Chartと両方のイメージが揃ってから、以下の初期デプロイを実行してください。
 
 ```bash
-BOT_IMAGE_TAG='<BOT_COMMIT_SHA_OR_RELEASE_TAG>'
-MCGUILDLINK_IMAGE_TAG='<MCGUILDLINK_COMMIT_SHA_OR_RELEASE_TAG>'
+CHART_VERSION='<CHART_VERSION>'
+BOT_IMAGE_TAG='<BOT_RELEASE_TAG>'
+MCGUILDLINK_IMAGE_TAG='<MCGUILDLINK_RELEASE_TAG>'
 ```
 
 まずdry-runします。
 
 ```bash
-helm upgrade --install platform ./deploy/helm/platform \
+helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
+  --version "$CHART_VERSION" \
   --namespace anvilsaba \
   --create-namespace \
-  -f ./deploy/helm/platform/values.prod.yaml \
+  --set-string 'imagePullSecrets[0].name=ghcr-pull' \
   --set-string bot.image.tag="$BOT_IMAGE_TAG" \
   --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
   --dry-run
@@ -159,27 +191,42 @@ helm upgrade --install platform ./deploy/helm/platform \
 内容を確認したら、`--dry-run`を外して実行します。
 
 ```bash
-helm upgrade --install platform ./deploy/helm/platform \
+helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
+  --version "$CHART_VERSION" \
   --namespace anvilsaba \
   --create-namespace \
-  -f ./deploy/helm/platform/values.prod.yaml \
+  --set-string 'imagePullSecrets[0].name=ghcr-pull' \
   --set-string bot.image.tag="$BOT_IMAGE_TAG" \
   --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
-  --wait --timeout 10m
+  --atomic --timeout 10m
 ```
 
 ## 4. デプロイの更新
 
-新しいイメージtagを指定して同じHelmコマンドを実行します。BotとMCGuildLinkは独立してリリースされるため、それぞれ実在するtagを指定します。
+GitHub ActionsのReleaseで`dry_run=false`かつ`deploy=true`を指定すると、成果物の公開成功後にSSH経由で自動更新します。
+
+- Botリリース：Botのイメージタグだけを更新
+- MCGuildLinkリリース：MCGuildLinkのイメージタグだけを更新
+- Chartリリース：Chartバージョンだけを更新
+
+WorkflowはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。Helmの更新では新しいChartのデフォルトへ既存のリリース値を重ねるため、リリースしていないイメージタグも維持されます。
+
+公開済みリリースをデプロイし直す場合は、GitHub Actionsの**Production deployment**を実行し、対象と既存リリースタグを指定します。新しいタグや成果物は作成せず、指定したリリースのデプロイだけを実行します。Chartには、そのリリースタグのコミットに記録されたバージョンを使用します。
+
+Botだけを手動更新する場合の同等コマンドは次のとおりです。
 
 ```bash
-helm upgrade platform ./deploy/helm/platform \
+helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
+  --version '<CHART_VERSION>' \
   --namespace anvilsaba \
-  -f ./deploy/helm/platform/values.prod.yaml \
+  --reset-then-reuse-values \
   --set-string bot.image.tag='<NEW_BOT_TAG>' \
-  --set-string mcguildlink.image.tag='<NEW_MCGUILDLINK_TAG>' \
-  --wait --timeout 10m
+  --atomic --timeout 10m
 ```
+
+MCGuildLinkの場合は`mcguildlink.image.tag`を指定します。Chartだけを更新する場合はイメージタグを指定せず、`--version`だけを新しいChartバージョンへ変更します。
+
+リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--atomic`により更新失敗時は直前のHelm revisionへ戻ります。公開だけ行う場合はReleaseで`deploy=false`を指定してください。
 
 履歴の確認とロールバックは次のとおりです。
 
