@@ -7,3 +7,5 @@ bot:
 mcguildlink:
   image:
     tag: ""
+  minecraft:
+    port: 25600
