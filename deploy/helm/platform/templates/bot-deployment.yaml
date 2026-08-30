@@ -12,6 +12,8 @@ spec:
       labels: { app.kubernetes.io/name: bot }
     spec:
       automountServiceAccountToken: false
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:

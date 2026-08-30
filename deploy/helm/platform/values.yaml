@@ -1,3 +1,5 @@
+imagePullSecrets: []
+
 bot:
   replicas: 1
   image:

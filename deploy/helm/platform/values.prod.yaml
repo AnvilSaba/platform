@@ -1,3 +1,6 @@
+imagePullSecrets:
+  - name: ghcr-pull
+
 bot:
   image:
     tag: ""
