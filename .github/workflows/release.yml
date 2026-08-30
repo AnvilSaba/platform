@@ -31,7 +31,7 @@ on:
       deploy:
         description: リリース後に本番へデプロイ
         required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:

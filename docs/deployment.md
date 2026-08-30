@@ -167,7 +167,7 @@ SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も�
 
 GitHub ActionsでChart、Bot、MCGuildLinkをGHCRへ登録します。`latest`ではなく、実際に生成された固定バージョンを使用します。初期デプロイでは両方のイメージタグが必要なため、手動で実行します。
 
-各対象の初回リリースはReleaseで`deploy=false`を指定して成果物だけを公開します。Chartと両方のイメージが揃ってから、以下の初期デプロイを実行してください。
+各対象の初回リリースでは、デフォルトのまま成果物だけを公開します。Chartと両方のイメージが揃ってから、以下の初期デプロイを実行してください。
 
 ```bash
 CHART_VERSION='<CHART_VERSION>'
@@ -226,7 +226,7 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
 
 MCGuildLinkの場合は`mcguildlink.image.tag`を指定します。Chartだけを更新する場合はイメージタグを指定せず、`--version`だけを新しいChartバージョンへ変更します。
 
-リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--atomic`により更新失敗時は直前のHelm revisionへ戻ります。公開だけ行う場合はReleaseで`deploy=false`を指定してください。
+リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--atomic`により更新失敗時は直前のHelm revisionへ戻ります。本番へ反映する場合だけReleaseで`deploy=true`を指定してください。
 
 履歴の確認とロールバックは次のとおりです。
 
