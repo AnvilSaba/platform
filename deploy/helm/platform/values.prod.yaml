@@ -1,11 +1,6 @@
 imagePullSecrets:
   - name: ghcr-pull
 
-bot:
-  image:
-    tag: ""
 mcguildlink:
-  image:
-    tag: ""
   minecraft:
     port: 25600

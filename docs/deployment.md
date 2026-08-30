@@ -182,7 +182,7 @@ helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
   --version "$CHART_VERSION" \
   --namespace anvilsaba \
   --create-namespace \
-  --set-string 'imagePullSecrets[0].name=ghcr-pull' \
+  --values deploy/helm/platform/values.prod.yaml \
   --set-string bot.image.tag="$BOT_IMAGE_TAG" \
   --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
   --dry-run
@@ -195,7 +195,7 @@ helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
   --version "$CHART_VERSION" \
   --namespace anvilsaba \
   --create-namespace \
-  --set-string 'imagePullSecrets[0].name=ghcr-pull' \
+  --values deploy/helm/platform/values.prod.yaml \
   --set-string bot.image.tag="$BOT_IMAGE_TAG" \
   --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
   --rollback-on-failure --wait=watcher --timeout 10m
@@ -209,7 +209,7 @@ GitHub ActionsのReleaseで`dry_run=false`かつ`deploy=true`を指定すると�
 - MCGuildLinkリリース：MCGuildLinkのイメージタグだけを更新
 - Chartリリース：Chartバージョンだけを更新
 
-各デプロイjobは`production` Environmentを直接使用し、共通のComposite ActionからSSHデプロイを実行します。Composite ActionはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。Helmの更新では新しいChartのデフォルトへ既存のリリース値を重ねるため、リリースしていないイメージタグも維持されます。
+各デプロイjobは`production` Environmentを直接使用し、共通のComposite ActionからSSHデプロイを実行します。Composite ActionはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。自動更新では指定バージョンのChartを一時展開し、Chartに同梱された`values.prod.yaml`を適用します。`values.prod.yaml`はイメージタグを上書きしないため、新しいChartのデフォルトへ既存のリリース値を重ねた際に、リリースしていないイメージタグも維持されます。
 
 公開済みリリースをデプロイし直す場合は、GitHub Actionsの**Production deployment**を実行し、対象と既存リリースタグを指定します。新しいタグや成果物は作成せず、指定したリリースのデプロイだけを実行します。Chartには、そのリリースタグのコミットに記録されたバージョンを使用します。
 
@@ -220,6 +220,7 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
   --version '<CHART_VERSION>' \
   --namespace anvilsaba \
   --reset-then-reuse-values \
+  --values deploy/helm/platform/values.prod.yaml \
   --set-string bot.image.tag='<NEW_BOT_TAG>' \
   --rollback-on-failure --wait=watcher --timeout 10m
 ```

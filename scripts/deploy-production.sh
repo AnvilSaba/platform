@@ -32,6 +32,12 @@ namespace="anvilsaba"
 helm_release="platform"
 chart="oci://ghcr.io/anvilsaba/charts/platform"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/anvilsaba"
+chart_dir="$(mktemp -d)"
+
+cleanup() {
+  rm -rf -- "$chart_dir"
+}
+trap cleanup EXIT
 
 install -d -m 700 "$state_dir"
 exec 9>"$state_dir/deploy.lock"
@@ -55,10 +61,22 @@ case "$target" in
     ;;
 esac
 
-helm upgrade "$helm_release" "$chart" \
+helm pull "$chart" \
   --version "$chart_version" \
+  --untar \
+  --untardir "$chart_dir"
+
+chart_path="$chart_dir/platform"
+values_file="$chart_path/values.prod.yaml"
+if [[ ! -f "$values_file" ]]; then
+  echo "Chartに values.prod.yaml が含まれていません。" >&2
+  exit 1
+fi
+
+helm upgrade "$helm_release" "$chart_path" \
   --namespace "$namespace" \
   --reset-then-reuse-values \
+  --values "$values_file" \
   "${image_args[@]}" \
   --rollback-on-failure \
   --wait=watcher \
