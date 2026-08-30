@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("bot", "mcguildlink")]
     [string] $App,
 
     [ValidateSet("auto", "major", "minor", "patch")]

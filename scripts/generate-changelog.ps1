@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("bot", "mcguildlink")]
     [string] $App,
 
     [string] $Tag,
@@ -20,9 +19,11 @@ if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
 $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-config.psd1")
 $settings = $releaseConfig[$App]
 $outputPath = if ($Output) { $Output } else { $settings.Changelog }
+$baselineTag = $settings.BaselineTag
+$baselineVersion = $baselineTag -replace "^$([regex]::Escape($App))/v", ""
 
 $tagPattern = "^$([regex]::Escape($App))/v[0-9]+\.[0-9]+\.[0-9]+$"
-$baselinePattern = "^$([regex]::Escape($settings.BaselineTag))$"
+$baselinePattern = "^$([regex]::Escape($baselineTag))$"
 $cliffArgs = @(
     "--config", "cliff.toml",
     "--tag-pattern", $tagPattern,
@@ -36,7 +37,7 @@ if ($Tag) {
     $cliffArgs += @("--tag", $Tag)
 }
 foreach ($path in $settings.Paths) { $cliffArgs += @("--include-path", $path) }
-$cliffArgs += "$($settings.BaseCommit)..HEAD"
+$cliffArgs += "$($settings.BaselineTag)..HEAD"
 
 & git-cliff @cliffArgs
 if ($LASTEXITCODE -ne 0) { throw "変更履歴の生成に失敗しました。" }
@@ -44,7 +45,7 @@ if ($LASTEXITCODE -ne 0) { throw "変更履歴の生成に失敗しました。"
 $changelogPath = (Resolve-Path $outputPath).Path
 [System.IO.File]::AppendAllText(
     $changelogPath,
-    $settings.LegacySection.TrimEnd() + [Environment]::NewLine,
+    ("`n## $baselineVersion 以前`n`n以前の変更は[旧$($settings.DisplayName)コミット履歴](https://github.com/anvilsaba/platform/commits/$baselineTag)を参照してください。`n").TrimEnd() + [Environment]::NewLine,
     [System.Text.UTF8Encoding]::new($false)
 )
 
