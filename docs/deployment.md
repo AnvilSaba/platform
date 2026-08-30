@@ -198,7 +198,7 @@ helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
   --set-string 'imagePullSecrets[0].name=ghcr-pull' \
   --set-string bot.image.tag="$BOT_IMAGE_TAG" \
   --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
-  --atomic --timeout 10m
+  --rollback-on-failure --wait=watcher --timeout 10m
 ```
 
 ## 4. デプロイの更新
@@ -209,7 +209,7 @@ GitHub ActionsのReleaseで`dry_run=false`かつ`deploy=true`を指定すると�
 - MCGuildLinkリリース：MCGuildLinkのイメージタグだけを更新
 - Chartリリース：Chartバージョンだけを更新
 
-WorkflowはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。Helmの更新では新しいChartのデフォルトへ既存のリリース値を重ねるため、リリースしていないイメージタグも維持されます。
+各デプロイjobは`production` Environmentを直接使用し、共通のComposite ActionからSSHデプロイを実行します。Composite ActionはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。Helmの更新では新しいChartのデフォルトへ既存のリリース値を重ねるため、リリースしていないイメージタグも維持されます。
 
 公開済みリリースをデプロイし直す場合は、GitHub Actionsの**Production deployment**を実行し、対象と既存リリースタグを指定します。新しいタグや成果物は作成せず、指定したリリースのデプロイだけを実行します。Chartには、そのリリースタグのコミットに記録されたバージョンを使用します。
 
@@ -221,12 +221,12 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
   --namespace anvilsaba \
   --reset-then-reuse-values \
   --set-string bot.image.tag='<NEW_BOT_TAG>' \
-  --atomic --timeout 10m
+  --rollback-on-failure --wait=watcher --timeout 10m
 ```
 
 MCGuildLinkの場合は`mcguildlink.image.tag`を指定します。Chartだけを更新する場合はイメージタグを指定せず、`--version`だけを新しいChartバージョンへ変更します。
 
-リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--atomic`により更新失敗時は直前のHelm revisionへ戻ります。本番へ反映する場合だけReleaseで`deploy=true`を指定してください。
+リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--rollback-on-failure`により更新失敗時は直前のHelm revisionへ戻ります。本番へ反映する場合だけReleaseで`deploy=true`を指定してください。
 
 履歴の確認とロールバックは次のとおりです。
 

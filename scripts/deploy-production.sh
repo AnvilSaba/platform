@@ -60,7 +60,8 @@ helm upgrade "$helm_release" "$chart" \
   --namespace "$namespace" \
   --reset-then-reuse-values \
   "${image_args[@]}" \
-  --atomic \
+  --rollback-on-failure \
+  --wait=watcher \
   --timeout 10m \
   --history-max 20
 
