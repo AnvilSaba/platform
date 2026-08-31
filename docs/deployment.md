@@ -83,7 +83,7 @@ helm show chart oci://ghcr.io/anvilsaba/charts/platform --version '<CHART_VERSIO
 
 本番設定はリポジトリ外に置き、Gitへ追加しません。
 
-Secretへ登録する元ファイルは、本番サーバー上のroot管理領域に配置します。`/opt/`は特定ユーザー専用ではありませんが、設定ファイルの用途が明確になるため、ここでは`/etc/anvilsaba/`を使用します。
+Secretへ登録する元ファイルは、本番サーバー上のroot管理領域に配置します。
 
 ```text
 /etc/anvilsaba/secrets/bot/config.toml
@@ -163,80 +163,10 @@ SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も�
 
 必要に応じて`production` EnvironmentへRequired reviewersを設定すると、本番デプロイ前に承認を挟めます。
 
-## 3. 初期デプロイ
+## 3. GitHub Actions からデプロイ
+GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
 
-GitHub ActionsでChart、Bot、MCGuildLinkをGHCRへ登録します。`latest`ではなく、実際に生成された固定バージョンを使用します。初期デプロイでは両方のイメージタグが必要なため、手動で実行します。
-
-各対象の初回リリースでは、デフォルトのまま成果物だけを公開します。Chartと両方のイメージが揃ってから、以下の初期デプロイを実行してください。
-
-```bash
-CHART_VERSION='<CHART_VERSION>'
-BOT_IMAGE_TAG='<BOT_RELEASE_TAG>'
-MCGUILDLINK_IMAGE_TAG='<MCGUILDLINK_RELEASE_TAG>'
-```
-
-まずdry-runします。
-
-```bash
-helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$CHART_VERSION" \
-  --namespace anvilsaba \
-  --create-namespace \
-  --values deploy/helm/platform/values.prod.yaml \
-  --set-string bot.image.tag="$BOT_IMAGE_TAG" \
-  --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
-  --dry-run
-```
-
-内容を確認したら、`--dry-run`を外して実行します。
-
-```bash
-helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$CHART_VERSION" \
-  --namespace anvilsaba \
-  --create-namespace \
-  --values deploy/helm/platform/values.prod.yaml \
-  --set-string bot.image.tag="$BOT_IMAGE_TAG" \
-  --set-string mcguildlink.image.tag="$MCGUILDLINK_IMAGE_TAG" \
-  --rollback-on-failure --wait=watcher --timeout 10m
-```
-
-## 4. デプロイの更新
-
-GitHub ActionsのReleaseで`dry_run=false`かつ`deploy=true`を指定すると、成果物の公開成功後にSSH経由で自動更新します。
-
-- Botリリース：Botのイメージタグだけを更新
-- MCGuildLinkリリース：MCGuildLinkのイメージタグだけを更新
-- Chartリリース：Chartバージョンだけを更新
-
-各デプロイjobは`production` Environmentを直接使用し、共通のComposite ActionからSSHデプロイを実行します。Composite ActionはリリースタグのコミットからChartバージョンを取得し、リポジトリ内の`scripts/deploy-production.sh`をSSH標準入力で本番サーバーへ渡します。スクリプトを本番サーバーへ配置する必要はありません。自動更新では指定バージョンのChartを一時展開し、Chartに同梱された`values.prod.yaml`を適用します。`values.prod.yaml`はイメージタグを上書きしないため、新しいChartのデフォルトへ既存のリリース値を重ねた際に、リリースしていないイメージタグも維持されます。
-
-公開済みリリースをデプロイし直す場合は、GitHub Actionsの**Production deployment**を実行し、対象と既存リリースタグを指定します。新しいタグや成果物は作成せず、指定したリリースのデプロイだけを実行します。Chartには、そのリリースタグのコミットに記録されたバージョンを使用します。
-
-Botだけを手動更新する場合の同等コマンドは次のとおりです。
-
-```bash
-helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version '<CHART_VERSION>' \
-  --namespace anvilsaba \
-  --reset-then-reuse-values \
-  --values deploy/helm/platform/values.prod.yaml \
-  --set-string bot.image.tag='<NEW_BOT_TAG>' \
-  --rollback-on-failure --wait=watcher --timeout 10m
-```
-
-MCGuildLinkの場合は`mcguildlink.image.tag`を指定します。Chartだけを更新する場合はイメージタグを指定せず、`--version`だけを新しいChartバージョンへ変更します。
-
-リリースは本番デプロイまで直列化され、サーバー上でもユーザー単位のファイルロックを取得します。`--rollback-on-failure`により更新失敗時は直前のHelm revisionへ戻ります。本番へ反映する場合だけReleaseで`deploy=true`を指定してください。
-
-履歴の確認とロールバックは次のとおりです。
-
-```bash
-helm history platform -n anvilsaba
-helm rollback platform <REVISION> -n anvilsaba --wait --timeout 10m
-```
-
-## 5. デプロイ後の確認
+## 4. デプロイ後の確認
 
 動いてる Pod のイメージ確認
 ```bash
@@ -279,3 +209,15 @@ kubectl logs -n anvilsaba statefulset/postgres --tail=100
 - MCGuildLink再起動後もSQLiteのデータが残る
 - PostgreSQL再起動後もデータが残る
 - Secretの実値がGitやログに含まれていない
+
+## Pod 起動直後の外向き通信
+
+OCI Ubuntu のホスト firewall では `FORWARD` に catch-all `REJECT` が存在する。
+
+k3s の kube-router NetworkPolicy controller が新規 Pod 用の firewall rule を作成するまでに短い遅延があるため、Pod 作成直後の外向き通信が一時的に `Host is unreachable` となる場合がある。
+
+現在の環境では約 0.1 秒後には正常に通信できることを確認している。
+
+Discord Bot では Serenity の Gateway URL 取得がこの期間に失敗すると警告が出るが、既定の `wss://gateway.discord.gg` へフォールバックし、その後正常に接続することを確認している。
+
+現時点では実害がないため、ホスト側の `FORWARD` ルールは変更しない。
