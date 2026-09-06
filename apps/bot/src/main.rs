@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use bpaf::Bpaf;
 use poise::{Framework, FrameworkOptions, PrefixFrameworkOptions};
-use serenity::{cache::Settings as CacheSettings, prelude::*};
+use serenity::{all::GuildId, cache::Settings as CacheSettings, prelude::*};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -24,6 +24,8 @@ use crate::{
 struct Options {
     #[bpaf(short, long)]
     check_config: bool,
+    #[bpaf(long, argument("GUILD_ID"))]
+    register_guild: Option<u64>,
 }
 
 fn init_tracing() {
@@ -85,6 +87,14 @@ async fn main() -> Result<(), AppError> {
     .data(Arc::new(BotData::new(config)))
     .await
     .context("Failed to create Discord client")?;
+
+    if let Some(guild_id) = options.register_guild {
+        poise::builtins::register_in_guild(&client.http, &commands(), GuildId::new(guild_id))
+            .await
+            .with_context(|| format!("Failed to register commands in guild {guild_id}"))?;
+        println!("Registered all application commands in guild {guild_id}");
+        return Ok(());
+    }
 
     install_signal_handler(&client);
 
