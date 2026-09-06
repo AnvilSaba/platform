@@ -5,6 +5,34 @@ use serenity::all::{GuildId as SerenityGuildId, Http, Permissions, RoleId as Ser
 use super::ids::{GuildId, RoleId};
 use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
 
+impl TryFrom<SerenityGuildId> for GuildId {
+    type Error = &'static str;
+
+    fn try_from(id: SerenityGuildId) -> Result<Self, Self::Error> {
+        Self::new(id.get()).ok_or("u64::MAX は Guild ID として使用できません")
+    }
+}
+
+impl From<GuildId> for SerenityGuildId {
+    fn from(id: GuildId) -> Self {
+        Self::new(id.get())
+    }
+}
+
+impl TryFrom<SerenityRoleId> for RoleId {
+    type Error = &'static str;
+
+    fn try_from(id: SerenityRoleId) -> Result<Self, Self::Error> {
+        Self::new(id.get()).ok_or("u64::MAX は Role ID として使用できません")
+    }
+}
+
+impl From<RoleId> for SerenityRoleId {
+    fn from(id: RoleId) -> Self {
+        Self::new(id.get())
+    }
+}
+
 fn is_lower_in_hierarchy(position: i16, id: SerenityRoleId, highest_position: i16, highest_id: SerenityRoleId) -> bool {
     position < highest_position || (position == highest_position && id > highest_id)
 }
@@ -22,7 +50,7 @@ impl<'a> SerenityRoleSource<'a> {
 
 impl RoleSource for SerenityRoleSource<'_> {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
-        let guild_id = SerenityGuildId::new(guild_id.get());
+        let guild_id = SerenityGuildId::from(*guild_id);
         let roles = guild_id
             .roles(self.http)
             .await
@@ -59,7 +87,7 @@ impl RoleSource for SerenityRoleSource<'_> {
         let mut snapshots = roles
             .into_iter()
             .map(|role| RoleSnapshot {
-                id: RoleId::new(role.id.get()).expect("Serenity の Role ID は常に有効な Snowflake です"),
+                id: RoleId::try_from(role.id).expect("Serenity の Role ID は常に有効な Snowflake です"),
                 manageable: role.id != everyone_id
                     && !role.managed()
                     && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
