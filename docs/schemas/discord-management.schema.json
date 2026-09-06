@@ -1,0 +1,1029 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Discord 管理定義（設計草案・名前付き設定セット）",
+  "description": "TOMLを解析したオブジェクト用。設定セットの展開後の必須属性、参照、ID重複、Discord型別制約は別途意味検証が必要。",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "enum": [
+        1
+      ]
+    },
+    "settings_sets": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9_-]+$": {
+              "$ref": "#/definitions/channel_settings_set"
+            }
+          },
+          "additionalProperties": false
+        },
+        "role": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9_-]+$": {
+              "$ref": "#/definitions/role_settings_set"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "roles": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+          "$ref": "#/definitions/role"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channels": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+          "$ref": "#/definitions/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "reference"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "message_sets": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+          "$ref": "#/definitions/message_set"
+        }
+      },
+      "additionalProperties": false
+    },
+    "threads": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+          "$ref": "#/definitions/thread"
+        }
+      },
+      "additionalProperties": false
+    },
+    "order": {
+      "type": "object",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "uniqueItems": true
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "uniqueItems": true
+        },
+        "children": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9_-]+$": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ],
+  "definitions": {
+    "default": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "enum": [
+            true
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default"
+      ]
+    },
+    "clear": {
+      "type": "object",
+      "properties": {
+        "clear": {
+          "enum": [
+            true
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "clear"
+      ]
+    },
+    "message": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "body"
+      ]
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/message"
+      },
+      "description": "各要素が1投稿。ID重複は意味検証で拒否。"
+    },
+    "thread": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "body": {
+              "$ref": "#/definitions/messages"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "channel",
+            "name",
+            "body"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ensure": {
+              "enum": [
+                "absent"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ensure"
+          ]
+        }
+      ]
+    },
+    "overwrite": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {
+          "enum": [
+            "allow",
+            "deny",
+            "clear"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "tag": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "managed"
+              ]
+            },
+            "ensure": {
+              "enum": [
+                "present"
+              ]
+            },
+            "name": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "moderated": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "emoji": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "reference"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ensure": {
+              "enum": [
+                "absent"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ensure"
+          ]
+        }
+      ]
+    },
+    "role_settings_set": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "color": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16777215
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "hoist": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "mentionable": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "permissions": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Z][A-Z0-9_]*$": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "managed"
+              ]
+            },
+            "ensure": {
+              "enum": [
+                "present"
+              ]
+            },
+            "name": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "color": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16777215
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "hoist": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "mentionable": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "permissions": {
+              "type": "object",
+              "patternProperties": {
+                "^[A-Z][A-Z0-9_]*$": {
+                  "oneOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "$ref": "#/definitions/default"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "settings_sets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "uniqueItems": true,
+              "description": "settings_sets.role の名前を低優先度から列挙。後のセットを優先し、Role の直接指定を最優先にする。"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "reference"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ensure": {
+              "enum": [
+                "absent"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ensure"
+          ]
+        }
+      ]
+    },
+    "channel_settings_set": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "category",
+            "text",
+            "announcement",
+            "voice",
+            "stage",
+            "forum",
+            "media"
+          ]
+        },
+        "name": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "parent": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            {
+              "$ref": "#/definitions/clear"
+            }
+          ]
+        },
+        "topic": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/default"
+            },
+            {
+              "$ref": "#/definitions/clear"
+            }
+          ]
+        },
+        "nsfw": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "slowmode_seconds": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "default_auto_archive_minutes": {
+          "oneOf": [
+            {
+              "enum": [
+                60,
+                1440,
+                4320,
+                10080
+              ]
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "default_thread_slowmode_seconds": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "bitrate": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "user_limit": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "rtc_region": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/default"
+            },
+            {
+              "$ref": "#/definitions/clear"
+            }
+          ]
+        },
+        "video_quality": {
+          "oneOf": [
+            {
+              "enum": [
+                "auto",
+                "full"
+              ]
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "permissions_sync": {
+          "type": "boolean"
+        },
+        "overwrites": {
+          "type": "object",
+          "patternProperties": {
+            "^(everyone|role:[A-Za-z0-9_-]+|member:[A-Za-z0-9_-]+)$": {
+              "$ref": "#/definitions/overwrite"
+            }
+          },
+          "additionalProperties": false
+        },
+        "tags": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9_-]+$": {
+              "$ref": "#/definitions/tag"
+            }
+          },
+          "additionalProperties": false
+        },
+        "require_tag": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        },
+        "default_reaction": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/default"
+            },
+            {
+              "$ref": "#/definitions/clear"
+            }
+          ]
+        },
+        "default_sort_order": {
+          "oneOf": [
+            {
+              "enum": [
+                "latest_activity",
+                "creation_date"
+              ]
+            },
+            {
+              "$ref": "#/definitions/default"
+            },
+            {
+              "$ref": "#/definitions/clear"
+            }
+          ]
+        },
+        "default_forum_layout": {
+          "oneOf": [
+            {
+              "enum": [
+                "not_set",
+                "list",
+                "gallery"
+              ]
+            },
+            {
+              "$ref": "#/definitions/default"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "channel": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "managed"
+              ]
+            },
+            "ensure": {
+              "enum": [
+                "present"
+              ]
+            },
+            "type": {
+              "enum": [
+                "category",
+                "text",
+                "announcement",
+                "voice",
+                "stage",
+                "forum",
+                "media"
+              ]
+            },
+            "name": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "parent": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            },
+            "topic": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            },
+            "nsfw": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "slowmode_seconds": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "default_auto_archive_minutes": {
+              "oneOf": [
+                {
+                  "enum": [
+                    60,
+                    1440,
+                    4320,
+                    10080
+                  ]
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "default_thread_slowmode_seconds": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "bitrate": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "user_limit": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "rtc_region": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            },
+            "video_quality": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "auto",
+                    "full"
+                  ]
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "permissions_sync": {
+              "type": "boolean"
+            },
+            "overwrites": {
+              "type": "object",
+              "patternProperties": {
+                "^(everyone|role:[A-Za-z0-9_-]+|member:[A-Za-z0-9_-]+)$": {
+                  "$ref": "#/definitions/overwrite"
+                }
+              },
+              "additionalProperties": false
+            },
+            "tags": {
+              "type": "object",
+              "patternProperties": {
+                "^[A-Za-z0-9_-]+$": {
+                  "$ref": "#/definitions/tag"
+                }
+              },
+              "additionalProperties": false
+            },
+            "require_tag": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "default_reaction": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/default"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            },
+            "default_sort_order": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "latest_activity",
+                    "creation_date"
+                  ]
+                },
+                {
+                  "$ref": "#/definitions/default"
+                },
+                {
+                  "$ref": "#/definitions/clear"
+                }
+              ]
+            },
+            "default_forum_layout": {
+              "oneOf": [
+                {
+                  "enum": [
+                    "not_set",
+                    "list",
+                    "gallery"
+                  ]
+                },
+                {
+                  "$ref": "#/definitions/default"
+                }
+              ]
+            },
+            "settings_sets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "uniqueItems": true,
+              "description": "settings_sets.channel の名前を低優先度から列挙。後のセットを優先し、Channel の直接指定を最優先にする。"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "reference"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ensure": {
+              "enum": [
+                "absent"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ensure"
+          ]
+        }
+      ]
+    },
+    "message_set": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "body": {
+              "$ref": "#/definitions/messages"
+            },
+            "ensure": {
+              "enum": [
+                "present"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ensure": {
+              "enum": [
+                "absent"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ensure"
+          ]
+        }
+      ]
+    }
+  }
+}
