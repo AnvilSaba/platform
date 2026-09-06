@@ -11,13 +11,13 @@ use serdev::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::{Validate, ValidationError};
 
-use super::ids::{GuildSnowflake, RoleLogicalId, RoleSettingsSetId, RoleSnowflake};
+use super::ids::{GuildId, RoleId, RoleLogicalId, RoleSettingsSetId};
 
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleSnapshot {
-    pub id: RoleSnowflake,
+    pub id: RoleId,
     pub manageable: bool,
     pub name: String,
     pub color: u32,
@@ -34,7 +34,7 @@ pub struct RoleCatalog {
 }
 
 pub trait RoleSource {
-    async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError>;
+    async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -53,8 +53,8 @@ pub enum ManagementError {
     InvalidInputFile(String),
     #[error("state の Guild {state_guild_id} は実行 Guild {actual_guild_id} と一致しません")]
     GuildMismatch {
-        state_guild_id: GuildSnowflake,
-        actual_guild_id: GuildSnowflake,
+        state_guild_id: GuildId,
+        actual_guild_id: GuildId,
     },
 }
 
@@ -67,7 +67,7 @@ pub struct ExportFiles {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttributeChange {
     pub logical_id: RoleLogicalId,
-    pub discord_id: RoleSnowflake,
+    pub discord_id: RoleId,
     pub attribute: String,
     pub current: String,
     pub desired: String,
@@ -109,7 +109,7 @@ where
 
     pub async fn export_roles(
         &self,
-        guild_id: GuildSnowflake,
+        guild_id: GuildId,
         previous_state_json: Option<&str>,
     ) -> Result<ExportFiles, ManagementError> {
         let previous_state = previous_state_json
@@ -191,7 +191,7 @@ where
 
     pub async fn plan_roles(
         &self,
-        guild_id: GuildSnowflake,
+        guild_id: GuildId,
         definition_toml: &str,
         state_json: &str,
     ) -> Result<RolePlan, ManagementError> {
@@ -361,7 +361,7 @@ fn validate_attribute_permission_names(
 
 fn compare_attributes(
     logical_id: &RoleLogicalId,
-    discord_id: &RoleSnowflake,
+    discord_id: &RoleId,
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
     default_permissions: &BTreeMap<String, bool>,
@@ -439,7 +439,7 @@ fn resolve<T: Clone>(value: &ManagedValue<T>, default: T, attribute: &str) -> Re
 fn push_change(
     changes: &mut Vec<AttributeChange>,
     logical_id: &RoleLogicalId,
-    discord_id: &RoleSnowflake,
+    discord_id: &RoleId,
     attribute: &str,
     current: &str,
     desired: &str,
@@ -581,20 +581,20 @@ struct StateFile {
         message = "対応していない schema_version です"
     ))]
     schema_version: u32,
-    guild_id: GuildSnowflake,
+    guild_id: GuildId,
     #[validate(custom(function = "validate_role_mappings"))]
     #[serde(deserialize_with = "deserialize_unique_role_mappings")]
-    roles: BTreeMap<RoleLogicalId, RoleSnowflake>,
+    roles: BTreeMap<RoleLogicalId, RoleId>,
 }
 
-fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleSnowflake>, D::Error>
+fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
 where
     D: Deserializer<'de>,
 {
     struct UniqueRoleMappingsVisitor;
 
     impl<'de> Visitor<'de> for UniqueRoleMappingsVisitor {
-        type Value = BTreeMap<RoleLogicalId, RoleSnowflake>;
+        type Value = BTreeMap<RoleLogicalId, RoleId>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("重複しない Role 論理 ID と Snowflake の対応表")
@@ -605,7 +605,7 @@ where
             A: MapAccess<'de>,
         {
             let mut mappings = BTreeMap::new();
-            while let Some((logical_id, discord_id)) = map.next_entry::<RoleLogicalId, RoleSnowflake>()? {
+            while let Some((logical_id, discord_id)) = map.next_entry::<RoleLogicalId, RoleId>()? {
                 if mappings.insert(logical_id.clone(), discord_id).is_some() {
                     return Err(de::Error::custom(format!("Role 論理 ID {logical_id} が重複しています")));
                 }
@@ -617,7 +617,7 @@ where
     deserializer.deserialize_map(UniqueRoleMappingsVisitor)
 }
 
-fn deserialize_state_for_guild(contents: &str, guild_id: GuildSnowflake) -> Result<StateFile, ManagementError> {
+fn deserialize_state_for_guild(contents: &str, guild_id: GuildId) -> Result<StateFile, ManagementError> {
     let state: StateFile =
         serde_json::from_str(contents).map_err(|error| ManagementError::InvalidState(error.to_string()))?;
     if state.guild_id != guild_id {
@@ -634,7 +634,7 @@ fn validation_error(code: &'static str, message: impl Into<String>) -> Validatio
     ValidationError::new(code).with_message(message.into().into())
 }
 
-fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleSnowflake>) -> Result<(), ValidationError> {
+fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) -> Result<(), ValidationError> {
     let mut seen_ids = BTreeMap::new();
     for (logical_id, discord_id) in roles {
         if let Some(first_logical_id) = seen_ids.insert(discord_id, logical_id) {
@@ -658,7 +658,7 @@ mod tests {
     }
 
     impl RoleSource for StatefulFakeRoleSource {
-        async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError> {
+        async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
             if guild_id.to_string() != self.guild_id {
                 return Err(ManagementError::RoleSource(format!("Guild {guild_id} は存在しません")));
             }
@@ -715,12 +715,12 @@ mod tests {
         RoleLogicalId::parse(value).unwrap()
     }
 
-    fn role_id(value: &str) -> RoleSnowflake {
+    fn role_id(value: &str) -> RoleId {
         value.parse().unwrap()
     }
 
-    fn guild_id(value: u64) -> GuildSnowflake {
-        GuildSnowflake::new(value).unwrap()
+    fn guild_id(value: u64) -> GuildId {
+        GuildId::new(value).unwrap()
     }
 
     #[tokio::test]
