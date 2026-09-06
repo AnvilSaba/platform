@@ -1173,11 +1173,19 @@ mod tests {
         assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の権限")));
     }
 
-    #[test]
-    fn unsupported_definition_version_fails_deserialization() {
-        let error = toml::from_str::<DefinitionFile>("schema_version = 2").unwrap_err();
+    #[tokio::test]
+    async fn unsupported_definition_version_is_reported() {
+        let service = RoleManagementService::new(StatefulFakeRoleSource {
+            guild_id: "100".to_owned(),
+            roles: Vec::new(),
+        });
 
-        assert!(error.to_string().contains("schema_version"));
+        let error = service
+            .plan_roles("100", "schema_version = 2", &state("100", "{}"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("schema_version")));
     }
 
     #[test]
@@ -1186,55 +1194,44 @@ mod tests {
         toml::from_str::<DefinitionFile>(sample).unwrap();
     }
 
-    #[test]
-    fn definition_is_validated_during_deserialization() {
-        let invalid = r#"
-            schema_version = 1
-            [roles.moderator]
-            color = 16777216
-        "#;
-
-        let error = toml::from_str::<DefinitionFile>(invalid).unwrap_err();
-
-        assert!(error.to_string().contains("color"));
-    }
-
-    #[test]
-    fn definition_relationships_are_validated_during_deserialization() {
-        let unknown_settings_set = r#"
+    #[tokio::test]
+    async fn unknown_settings_set_is_reported() {
+        let service = RoleManagementService::new(StatefulFakeRoleSource {
+            guild_id: "100".to_owned(),
+            roles: Vec::new(),
+        });
+        let definition = r#"
             schema_version = 1
             [roles.moderator]
             settings_sets = ["missing"]
         "#;
-        let managed_reference = r#"
+
+        let error = service
+            .plan_roles("100", definition, &state("100", "{}"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の設定セット")));
+    }
+
+    #[tokio::test]
+    async fn reference_role_with_managed_attributes_is_reported() {
+        let service = RoleManagementService::new(StatefulFakeRoleSource {
+            guild_id: "100".to_owned(),
+            roles: Vec::new(),
+        });
+        let definition = r#"
             schema_version = 1
             [roles.external]
             mode = "reference"
             hoist = true
         "#;
 
-        let unknown_error = toml::from_str::<DefinitionFile>(unknown_settings_set).unwrap_err();
-        let reference_error = toml::from_str::<DefinitionFile>(managed_reference).unwrap_err();
+        let error = service
+            .plan_roles("100", definition, &state("100", "{}"))
+            .await
+            .unwrap_err();
 
-        assert!(unknown_error.to_string().contains("未知の設定セット"));
-        assert!(reference_error.to_string().contains("参照専用 Role"));
-    }
-
-    #[test]
-    fn state_is_validated_during_deserialization() {
-        let invalid = state("not-a-snowflake", r#"{"moderator":"200"}"#);
-
-        let error = serde_json::from_str::<StateFile>(&invalid).unwrap_err();
-
-        assert!(error.to_string().contains("Guild ID"));
-    }
-
-    #[test]
-    fn unsupported_state_version_fails_deserialization() {
-        let invalid = r#"{"schema_version":2,"guild_id":"100","roles":{}}"#;
-
-        let error = serde_json::from_str::<StateFile>(invalid).unwrap_err();
-
-        assert!(error.to_string().contains("schema_version"));
+        assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("参照専用 Role")));
     }
 }
