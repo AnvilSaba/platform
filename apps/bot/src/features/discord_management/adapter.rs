@@ -1,0 +1,107 @@
+use std::collections::BTreeMap;
+
+use serenity::{
+    all::{GuildId, Http, Permissions, UserId},
+    model::id::RoleId,
+};
+
+use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
+
+fn is_lower_in_hierarchy(position: i16, id: RoleId, highest_position: i16, highest_id: RoleId) -> bool {
+    position < highest_position || (position == highest_position && id > highest_id)
+}
+
+pub struct SerenityRoleSource<'a> {
+    http: &'a Http,
+    bot_user_id: UserId,
+}
+
+impl<'a> SerenityRoleSource<'a> {
+    pub fn new(http: &'a Http, bot_user_id: UserId) -> Self {
+        Self { http, bot_user_id }
+    }
+}
+
+impl RoleSource for SerenityRoleSource<'_> {
+    async fn role_catalog(&self, guild_id: &str) -> Result<RoleCatalog, ManagementError> {
+        let guild_id = guild_id
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .map(GuildId::new)
+            .ok_or_else(|| ManagementError::RoleSource("Guild ID が不正です".to_owned()))?;
+        let roles = guild_id
+            .roles(self.http)
+            .await
+            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+        let bot_member = guild_id
+            .member(self.http, self.bot_user_id)
+            .await
+            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+
+        let everyone_id = RoleId::new(guild_id.get());
+        let everyone_permissions = roles
+            .get(&everyone_id)
+            .map(|role| role.permissions)
+            .ok_or_else(|| ManagementError::RoleSource("@everyone Role が存在しません".to_owned()))?;
+        let mut bot_permissions = everyone_permissions;
+        for role in bot_member.roles.iter().filter_map(|role_id| roles.get(role_id)) {
+            bot_permissions |= role.permissions;
+        }
+        let bot_highest_role = bot_member
+            .roles
+            .iter()
+            .filter_map(|role_id| roles.get(role_id))
+            .max()
+            .or_else(|| roles.get(&everyone_id))
+            .cloned()
+            .ok_or_else(|| ManagementError::RoleSource("@everyone Role が存在しません".to_owned()))?;
+
+        if !bot_permissions.intersects(Permissions::MANAGE_ROLES | Permissions::ADMINISTRATOR) {
+            return Err(ManagementError::RoleSource(
+                "Bot に MANAGE_ROLES 権限がありません".to_owned(),
+            ));
+        }
+
+        let mut snapshots = roles
+            .into_iter()
+            .map(|role| RoleSnapshot {
+                id: role.id.to_string(),
+                manageable: role.id != everyone_id
+                    && !role.managed()
+                    && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
+                name: role.name.to_string(),
+                color: role.colour.0,
+                hoist: role.hoist(),
+                mentionable: role.mentionable(),
+                permissions: Permissions::all()
+                    .iter_names()
+                    .map(|(name, permission)| (name.to_owned(), role.permissions.contains(permission)))
+                    .collect::<BTreeMap<_, _>>(),
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(RoleCatalog {
+            roles: snapshots,
+            permission_names: Permissions::all()
+                .iter_names()
+                .map(|(name, _)| name.to_owned())
+                .collect(),
+            default_permissions: Permissions::all()
+                .iter_names()
+                .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
+                .collect(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_position_role_with_larger_snowflake_is_lower() {
+        assert!(is_lower_in_hierarchy(10, RoleId::new(201), 10, RoleId::new(200)));
+        assert!(!is_lower_in_hierarchy(10, RoleId::new(199), 10, RoleId::new(200)));
+    }
+}
