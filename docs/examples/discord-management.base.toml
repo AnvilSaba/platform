@@ -1,0 +1,59 @@
+#:schema ../schemas/discord-management.schema.json
+schema_version = 1
+
+[roles.moderator]
+name = "運営"
+hoist = true
+mentionable = false
+
+[roles.moderator.permissions]
+MANAGE_MESSAGES = true
+
+[channels.information]
+type = "category"
+name = "案内"
+
+[channels.rules]
+type = "text"
+name = "ルール"
+parent = "information"
+topic = "共通の案内"
+slowmode_seconds = { default = true }
+
+[channels.rules.overwrites.everyone]
+VIEW_CHANNEL = "allow"
+SEND_MESSAGES = "deny"
+
+[message_sets.guidelines]
+channel = "rules"
+
+[[message_sets.guidelines.body]]
+id = "basic"
+body = '''
+# 基本ルール
+互いを尊重してください。
+
+[具体例を見る](thread:basic_details)
+
+[質問について](message:guidelines/questions)
+'''
+
+[[message_sets.guidelines.body]]
+id = "questions"
+body = '''
+## 質問について
+質問先を確認してください。
+
+[基本ルールへ戻る](message:guidelines/basic)
+'''
+
+[threads.basic_details]
+channel = "rules"
+name = "基本ルールの補足"
+
+[[threads.basic_details.body]]
+id = "examples"
+body = '''
+# 具体例
+補足の説明です。
+'''
