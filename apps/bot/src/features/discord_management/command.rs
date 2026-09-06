@@ -47,7 +47,7 @@ pub async fn role_export(
         },
         None => None,
     };
-    let guild_id = GuildId::new(ctx.guild_id().expect("guild_only command").get())
+    let guild_id = GuildId::try_from(ctx.guild_id().expect("guild_only command"))
         .expect("Serenity の Guild ID は常に有効な Snowflake です");
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
     let service = RoleManagementService::new(source);
@@ -89,7 +89,7 @@ pub async fn role_plan(
         Ok(text) => text,
         Err(error) => return send_input_error(ctx, error).await,
     };
-    let guild_id = GuildId::new(ctx.guild_id().expect("guild_only command").get())
+    let guild_id = GuildId::try_from(ctx.guild_id().expect("guild_only command"))
         .expect("Serenity の Guild ID は常に有効な Snowflake です");
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
     let service = RoleManagementService::new(source);
