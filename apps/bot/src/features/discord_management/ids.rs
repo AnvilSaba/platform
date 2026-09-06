@@ -4,66 +4,86 @@ use nonmax::NonMaxU64;
 use nutype::nutype;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-macro_rules! snowflake_id {
-    ($name:ident, $label:literal) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-        #[repr(transparent)]
-        pub(crate) struct $name(NonMaxU64);
-
-        impl $name {
-            pub(crate) const fn new(value: u64) -> Option<Self> {
-                match NonMaxU64::new(value) {
-                    Some(value) => Some(Self(value)),
-                    None => None,
-                }
-            }
-
-            pub(crate) const fn get(self) -> u64 {
-                self.0.get()
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.get().fmt(formatter)
-            }
-        }
-
-        impl FromStr for $name {
-            type Err = &'static str;
-
-            fn from_str(value: &str) -> Result<Self, Self::Err> {
-                let value = value
-                    .parse::<u64>()
-                    .map_err(|_| "Snowflake は整数文字列である必要があります")?;
-                Self::new(value).ok_or("u64::MAX は Snowflake として使用できません")
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                serializer.serialize_str(&self.to_string())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                String::deserialize(deserializer)?
-                    .parse()
-                    .map_err(|error| de::Error::custom(format_args!(concat!($label, " が不正です: {}"), error)))
-            }
-        }
-    };
+pub(crate) trait DiscordIdTag {
+    const LABEL: &'static str;
 }
 
-snowflake_id!(GuildSnowflake, "Guild ID");
-snowflake_id!(RoleSnowflake, "Role ID");
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub(crate) struct DiscordId<Tag> {
+    value: NonMaxU64,
+    tag: PhantomData<fn() -> Tag>,
+}
+
+impl<Tag> DiscordId<Tag> {
+    pub(crate) const fn new(value: u64) -> Option<Self> {
+        match NonMaxU64::new(value) {
+            Some(value) => Some(Self {
+                value,
+                tag: PhantomData,
+            }),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn get(self) -> u64 {
+        self.value.get()
+    }
+}
+
+impl<Tag> fmt::Display for DiscordId<Tag> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.get().fmt(formatter)
+    }
+}
+
+impl<Tag> FromStr for DiscordId<Tag> {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value
+            .parse::<u64>()
+            .map_err(|_| "Snowflake は整数文字列である必要があります")?;
+        Self::new(value).ok_or("u64::MAX は Snowflake として使用できません")
+    }
+}
+
+impl<Tag> Serialize for DiscordId<Tag> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de, Tag: DiscordIdTag> Deserialize<'de> for DiscordId<Tag> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(|error| de::Error::custom(format_args!("{} が不正です: {error}", Tag::LABEL)))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum GuildIdTag {}
+
+impl DiscordIdTag for GuildIdTag {
+    const LABEL: &'static str = "Guild ID";
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum RoleIdTag {}
+
+impl DiscordIdTag for RoleIdTag {
+    const LABEL: &'static str = "Role ID";
+}
+
+pub(crate) type GuildId = DiscordId<GuildIdTag>;
+pub(crate) type RoleId = DiscordId<RoleIdTag>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -150,14 +170,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snowflake_newtypes_preserve_the_nonmax_niche() {
-        assert_eq!(
-            std::mem::size_of::<Option<GuildSnowflake>>(),
-            std::mem::size_of::<GuildSnowflake>()
-        );
-        assert_eq!(
-            std::mem::size_of::<Option<RoleSnowflake>>(),
-            std::mem::size_of::<RoleSnowflake>()
-        );
+    fn discord_ids_preserve_the_nonmax_niche() {
+        assert_eq!(std::mem::size_of::<Option<GuildId>>(), std::mem::size_of::<GuildId>());
+        assert_eq!(std::mem::size_of::<Option<RoleId>>(), std::mem::size_of::<RoleId>());
     }
 }

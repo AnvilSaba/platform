@@ -1,14 +1,11 @@
 use std::collections::BTreeMap;
 
-use serenity::{
-    all::{GuildId, Http, Permissions, UserId},
-    model::id::RoleId,
-};
+use serenity::all::{GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId};
 
-use super::ids::{GuildSnowflake, RoleSnowflake};
+use super::ids::{GuildId, RoleId};
 use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
 
-fn is_lower_in_hierarchy(position: i16, id: RoleId, highest_position: i16, highest_id: RoleId) -> bool {
+fn is_lower_in_hierarchy(position: i16, id: SerenityRoleId, highest_position: i16, highest_id: SerenityRoleId) -> bool {
     position < highest_position || (position == highest_position && id > highest_id)
 }
 
@@ -24,8 +21,8 @@ impl<'a> SerenityRoleSource<'a> {
 }
 
 impl RoleSource for SerenityRoleSource<'_> {
-    async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError> {
-        let guild_id = GuildId::new(guild_id.get());
+    async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+        let guild_id = SerenityGuildId::new(guild_id.get());
         let roles = guild_id
             .roles(self.http)
             .await
@@ -35,7 +32,7 @@ impl RoleSource for SerenityRoleSource<'_> {
             .await
             .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
 
-        let everyone_id = RoleId::new(guild_id.get());
+        let everyone_id = SerenityRoleId::new(guild_id.get());
         let everyone_permissions = roles
             .get(&everyone_id)
             .map(|role| role.permissions)
@@ -62,7 +59,7 @@ impl RoleSource for SerenityRoleSource<'_> {
         let mut snapshots = roles
             .into_iter()
             .map(|role| RoleSnapshot {
-                id: RoleSnowflake::new(role.id.get()).expect("Serenity の Role ID は常に有効な Snowflake です"),
+                id: RoleId::new(role.id.get()).expect("Serenity の Role ID は常に有効な Snowflake です"),
                 manageable: role.id != everyone_id
                     && !role.managed()
                     && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
@@ -97,7 +94,17 @@ mod tests {
 
     #[test]
     fn same_position_role_with_larger_snowflake_is_lower() {
-        assert!(is_lower_in_hierarchy(10, RoleId::new(201), 10, RoleId::new(200)));
-        assert!(!is_lower_in_hierarchy(10, RoleId::new(199), 10, RoleId::new(200)));
+        assert!(is_lower_in_hierarchy(
+            10,
+            SerenityRoleId::new(201),
+            10,
+            SerenityRoleId::new(200)
+        ));
+        assert!(!is_lower_in_hierarchy(
+            10,
+            SerenityRoleId::new(199),
+            10,
+            SerenityRoleId::new(200)
+        ));
     }
 }
