@@ -5,6 +5,7 @@ use serenity::{
     model::id::RoleId,
 };
 
+use super::ids::{GuildSnowflake, RoleSnowflake};
 use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
 
 fn is_lower_in_hierarchy(position: i16, id: RoleId, highest_position: i16, highest_id: RoleId) -> bool {
@@ -23,13 +24,8 @@ impl<'a> SerenityRoleSource<'a> {
 }
 
 impl RoleSource for SerenityRoleSource<'_> {
-    async fn role_catalog(&self, guild_id: &str) -> Result<RoleCatalog, ManagementError> {
-        let guild_id = guild_id
-            .parse::<u64>()
-            .ok()
-            .filter(|id| *id > 0)
-            .map(GuildId::new)
-            .ok_or_else(|| ManagementError::RoleSource("Guild ID が不正です".to_owned()))?;
+    async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError> {
+        let guild_id = GuildId::new(guild_id.get());
         let roles = guild_id
             .roles(self.http)
             .await
@@ -66,7 +62,7 @@ impl RoleSource for SerenityRoleSource<'_> {
         let mut snapshots = roles
             .into_iter()
             .map(|role| RoleSnapshot {
-                id: role.id.to_string(),
+                id: RoleSnowflake::new(role.id.get()).expect("Serenity の Role ID は常に有効な Snowflake です"),
                 manageable: role.id != everyone_id
                     && !role.managed()
                     && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
@@ -80,7 +76,7 @@ impl RoleSource for SerenityRoleSource<'_> {
                     .collect::<BTreeMap<_, _>>(),
             })
             .collect::<Vec<_>>();
-        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        snapshots.sort_by_key(|role| role.id);
         Ok(RoleCatalog {
             roles: snapshots,
             permission_names: Permissions::all()
