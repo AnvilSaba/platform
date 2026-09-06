@@ -16,7 +16,14 @@ pub(crate) struct DiscordId<Tag> {
 }
 
 impl<Tag> DiscordId<Tag> {
-    pub(crate) const fn new(value: u64) -> Option<Self> {
+    pub(crate) const fn new(value: u64) -> Self {
+        match Self::try_new(value) {
+            Some(id) => id,
+            None => panic!("u64::MAX は Discord ID として使用できません"),
+        }
+    }
+
+    const fn try_new(value: u64) -> Option<Self> {
         match NonMaxU64::new(value) {
             Some(value) => Some(Self {
                 value,
@@ -44,7 +51,7 @@ impl<Tag> FromStr for DiscordId<Tag> {
         let value = value
             .parse::<u64>()
             .map_err(|_| "Snowflake は整数文字列である必要があります")?;
-        Self::new(value).ok_or("u64::MAX は Snowflake として使用できません")
+        Self::try_new(value).ok_or("u64::MAX は Snowflake として使用できません")
     }
 }
 

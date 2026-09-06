@@ -720,7 +720,7 @@ mod tests {
     }
 
     fn guild_id(value: u64) -> GuildId {
-        GuildId::new(value).unwrap()
+        GuildId::new(value)
     }
 
     #[tokio::test]
