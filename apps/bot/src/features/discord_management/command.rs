@@ -5,6 +5,7 @@ use crate::app::{AppContext, AppError};
 
 use super::{
     adapter::SerenityRoleSource,
+    ids::GuildSnowflake,
     service::{ManagementError, RoleManagementService},
 };
 
@@ -46,11 +47,12 @@ pub async fn role_export(
         },
         None => None,
     };
-    let guild_id = ctx.guild_id().expect("guild_only command").to_string();
+    let guild_id = GuildSnowflake::new(ctx.guild_id().expect("guild_only command").get())
+        .expect("Serenity の Guild ID は常に有効な Snowflake です");
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
     let service = RoleManagementService::new(source);
 
-    match service.export_roles(&guild_id, state_text.as_deref()).await {
+    match service.export_roles(guild_id, state_text.as_deref()).await {
         Ok(files) => {
             ctx.send(
                 CreateReply::default()
@@ -87,11 +89,12 @@ pub async fn role_plan(
         Ok(text) => text,
         Err(error) => return send_input_error(ctx, error).await,
     };
-    let guild_id = ctx.guild_id().expect("guild_only command").to_string();
+    let guild_id = GuildSnowflake::new(ctx.guild_id().expect("guild_only command").get())
+        .expect("Serenity の Guild ID は常に有効な Snowflake です");
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
     let service = RoleManagementService::new(source);
 
-    match service.plan_roles(&guild_id, &definition_text, &state_text).await {
+    match service.plan_roles(guild_id, &definition_text, &state_text).await {
         Ok(plan) => {
             ctx.send(
                 CreateReply::default()
