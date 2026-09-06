@@ -1,0 +1,24 @@
+schema_version = 1
+
+# 設定セットは左から右へ適用し、Role 自身の指定を最後に優先する。
+[settings_sets.role.staff]
+hoist = true
+mentionable = false
+
+[settings_sets.role.staff.permissions]
+VIEW_CHANNEL = true
+MANAGE_MESSAGES = true
+
+[roles.moderator]
+settings_sets = ["staff"]
+name = "運営"
+color = 5793266
+
+# 省略した属性は現在値を維持する。default は schema_version 1 の具体値へ解決する。
+[roles.visitor]
+name = "見学者"
+mentionable = { default = true }
+
+# 属性を変更せず、state の対応先が存在することだけを検証する。
+[roles.external_bot]
+mode = "reference"
