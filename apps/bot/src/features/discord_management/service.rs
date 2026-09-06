@@ -11,11 +11,13 @@ use serdev::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::{Validate, ValidationError};
 
+use super::ids::{GuildSnowflake, RoleLogicalId, RoleSettingsSetId, RoleSnowflake};
+
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleSnapshot {
-    pub id: String,
+    pub id: RoleSnowflake,
     pub manageable: bool,
     pub name: String,
     pub color: u32,
@@ -32,7 +34,7 @@ pub struct RoleCatalog {
 }
 
 pub trait RoleSource {
-    async fn role_catalog(&self, guild_id: &str) -> Result<RoleCatalog, ManagementError>;
+    async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -51,8 +53,8 @@ pub enum ManagementError {
     InvalidInputFile(String),
     #[error("state の Guild {state_guild_id} は実行 Guild {actual_guild_id} と一致しません")]
     GuildMismatch {
-        state_guild_id: String,
-        actual_guild_id: String,
+        state_guild_id: GuildSnowflake,
+        actual_guild_id: GuildSnowflake,
     },
 }
 
@@ -64,8 +66,8 @@ pub struct ExportFiles {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttributeChange {
-    pub logical_id: String,
-    pub discord_id: String,
+    pub logical_id: RoleLogicalId,
+    pub discord_id: RoleSnowflake,
     pub attribute: String,
     pub current: String,
     pub desired: String,
@@ -107,7 +109,7 @@ where
 
     pub async fn export_roles(
         &self,
-        guild_id: &str,
+        guild_id: GuildSnowflake,
         previous_state_json: Option<&str>,
     ) -> Result<ExportFiles, ManagementError> {
         let previous_state = previous_state_json
@@ -117,11 +119,11 @@ where
         let previous_mappings = previous_state.map(|state| state.roles).unwrap_or_default();
         let previous_logical_ids = previous_mappings
             .iter()
-            .map(|(logical_id, discord_id)| (discord_id.clone(), logical_id.clone()))
+            .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
             .collect::<BTreeMap<_, _>>();
         let roles = self
             .source
-            .role_catalog(guild_id)
+            .role_catalog(&guild_id)
             .await?
             .roles
             .into_iter()
@@ -133,7 +135,8 @@ where
             let logical_id = if let Some(logical_id) = previous_logical_ids.get(&role.id) {
                 logical_id.clone()
             } else {
-                let generated = format!("role_{}", role.id);
+                let generated = RoleLogicalId::parse(format!("role_{}", role.id))
+                    .expect("Role Snowflake から生成した論理 ID は常に有効です");
                 if let Some(reserved_for) = previous_mappings.get(&generated) {
                     return Err(ManagementError::InvalidState(format!(
                         "生成する論理 ID {generated} は state で Snowflake {reserved_for} に使用されています"
@@ -141,7 +144,7 @@ where
                 }
                 generated
             };
-            if let Some(existing_id) = mappings.insert(logical_id.clone(), role.id.clone()) {
+            if let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
                 return Err(ManagementError::InvalidState(format!(
                     "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
                     role.id
@@ -175,7 +178,7 @@ where
         .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
         let state_json = serde_json::to_string_pretty(&StateFile {
             schema_version: SCHEMA_VERSION,
-            guild_id: guild_id.to_owned(),
+            guild_id,
             roles: mappings,
         })
         .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
@@ -188,7 +191,7 @@ where
 
     pub async fn plan_roles(
         &self,
-        guild_id: &str,
+        guild_id: GuildSnowflake,
         definition_toml: &str,
         state_json: &str,
     ) -> Result<RolePlan, ManagementError> {
@@ -196,12 +199,12 @@ where
             toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
         let state = deserialize_state_for_guild(state_json, guild_id)?;
 
-        let catalog = self.source.role_catalog(guild_id).await?;
+        let catalog = self.source.role_catalog(&guild_id).await?;
         validate_permission_names(&definition, &catalog.permission_names)?;
         let actual_roles = catalog
             .roles
             .into_iter()
-            .map(|role| (role.id.clone(), role))
+            .map(|role| (role.id, role))
             .collect::<BTreeMap<_, _>>();
         let mut changes = Vec::new();
 
@@ -235,7 +238,10 @@ where
     }
 }
 
-fn compose_attributes(definition: &RoleDefinition, settings_sets: &BTreeMap<String, RoleAttributes>) -> RoleAttributes {
+fn compose_attributes(
+    definition: &RoleDefinition,
+    settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
+) -> RoleAttributes {
     let mut composed = RoleAttributes::default();
     for name in &definition.settings_sets {
         let attributes = settings_sets
@@ -248,18 +254,7 @@ fn compose_attributes(definition: &RoleDefinition, settings_sets: &BTreeMap<Stri
 }
 
 fn validate_definition(definition: &DefinitionFile) -> Result<(), ValidationError> {
-    for name in definition.settings_sets.role.keys() {
-        validate_logical_id(name).map_err(|error| {
-            validation_error(
-                "invalid_settings_set_id",
-                format!("不正な Role 設定セット論理 ID です: {error}"),
-            )
-        })?;
-    }
     for (logical_id, role) in &definition.roles {
-        validate_logical_id(logical_id)
-            .map_err(|error| validation_error("invalid_role_id", format!("不正な Role 論理 ID です: {error}")))?;
-
         let mut seen = BTreeSet::new();
         for settings_set in &role.settings_sets {
             if !seen.insert(settings_set) {
@@ -364,23 +359,9 @@ fn validate_attribute_permission_names(
     Ok(())
 }
 
-fn validate_logical_id(value: &str) -> Result<(), &str> {
-    if !is_valid_logical_id(value) {
-        return Err(value);
-    }
-    Ok(())
-}
-
-fn is_valid_logical_id(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
 fn compare_attributes(
-    logical_id: &str,
-    discord_id: &str,
+    logical_id: &RoleLogicalId,
+    discord_id: &RoleSnowflake,
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
     default_permissions: &BTreeMap<String, bool>,
@@ -457,16 +438,16 @@ fn resolve<T: Clone>(value: &ManagedValue<T>, default: T, attribute: &str) -> Re
 
 fn push_change(
     changes: &mut Vec<AttributeChange>,
-    logical_id: &str,
-    discord_id: &str,
+    logical_id: &RoleLogicalId,
+    discord_id: &RoleSnowflake,
     attribute: &str,
     current: &str,
     desired: &str,
 ) {
     if current != desired {
         changes.push(AttributeChange {
-            logical_id: logical_id.to_owned(),
-            discord_id: discord_id.to_owned(),
+            logical_id: logical_id.clone(),
+            discord_id: *discord_id,
             attribute: attribute.to_owned(),
             current: current.to_owned(),
             desired: desired.to_owned(),
@@ -490,7 +471,7 @@ struct DefinitionFile {
     settings_sets: RoleSettingsSets,
     #[validate(nested)]
     #[serde(default)]
-    roles: BTreeMap<String, RoleDefinition>,
+    roles: BTreeMap<RoleLogicalId, RoleDefinition>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
@@ -499,7 +480,7 @@ struct DefinitionFile {
 struct RoleSettingsSets {
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    role: BTreeMap<String, RoleAttributes>,
+    role: BTreeMap<RoleSettingsSetId, RoleAttributes>,
 }
 
 impl RoleSettingsSets {
@@ -516,7 +497,7 @@ struct RoleDefinition {
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
     mode: RoleMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    settings_sets: Vec<String>,
+    settings_sets: Vec<RoleSettingsSetId>,
     #[validate(nested)]
     #[serde(flatten)]
     attributes: RoleAttributes,
@@ -600,21 +581,20 @@ struct StateFile {
         message = "対応していない schema_version です"
     ))]
     schema_version: u32,
-    #[validate(custom(function = "validate_guild_id"))]
-    guild_id: String,
+    guild_id: GuildSnowflake,
     #[validate(custom(function = "validate_role_mappings"))]
     #[serde(deserialize_with = "deserialize_unique_role_mappings")]
-    roles: BTreeMap<String, String>,
+    roles: BTreeMap<RoleLogicalId, RoleSnowflake>,
 }
 
-fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleSnowflake>, D::Error>
 where
     D: Deserializer<'de>,
 {
     struct UniqueRoleMappingsVisitor;
 
     impl<'de> Visitor<'de> for UniqueRoleMappingsVisitor {
-        type Value = BTreeMap<String, String>;
+        type Value = BTreeMap<RoleLogicalId, RoleSnowflake>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("重複しない Role 論理 ID と Snowflake の対応表")
@@ -625,7 +605,7 @@ where
             A: MapAccess<'de>,
         {
             let mut mappings = BTreeMap::new();
-            while let Some((logical_id, discord_id)) = map.next_entry::<String, String>()? {
+            while let Some((logical_id, discord_id)) = map.next_entry::<RoleLogicalId, RoleSnowflake>()? {
                 if mappings.insert(logical_id.clone(), discord_id).is_some() {
                     return Err(de::Error::custom(format!("Role 論理 ID {logical_id} が重複しています")));
                 }
@@ -637,13 +617,13 @@ where
     deserializer.deserialize_map(UniqueRoleMappingsVisitor)
 }
 
-fn deserialize_state_for_guild(contents: &str, guild_id: &str) -> Result<StateFile, ManagementError> {
+fn deserialize_state_for_guild(contents: &str, guild_id: GuildSnowflake) -> Result<StateFile, ManagementError> {
     let state: StateFile =
         serde_json::from_str(contents).map_err(|error| ManagementError::InvalidState(error.to_string()))?;
     if state.guild_id != guild_id {
         return Err(ManagementError::GuildMismatch {
             state_guild_id: state.guild_id,
-            actual_guild_id: guild_id.to_owned(),
+            actual_guild_id: guild_id,
         });
     }
 
@@ -654,37 +634,9 @@ fn validation_error(code: &'static str, message: impl Into<String>) -> Validatio
     ValidationError::new(code).with_message(message.into().into())
 }
 
-fn validate_snowflake(value: &str) -> Result<(), ValidationError> {
-    if value.parse::<u64>().is_ok_and(|id| id > 0) {
-        Ok(())
-    } else {
-        Err(validation_error(
-            "invalid_snowflake",
-            "Snowflake は正の整数文字列である必要があります",
-        ))
-    }
-}
-
-fn validate_guild_id(value: &str) -> Result<(), ValidationError> {
-    validate_snowflake(value)
-        .map_err(|_| validation_error("invalid_guild_id", "Guild ID は正の整数文字列である必要があります"))
-}
-
-fn validate_role_mappings(roles: &BTreeMap<String, String>) -> Result<(), ValidationError> {
+fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleSnowflake>) -> Result<(), ValidationError> {
     let mut seen_ids = BTreeMap::new();
     for (logical_id, discord_id) in roles {
-        if !is_valid_logical_id(logical_id) {
-            return Err(validation_error(
-                "invalid_role_id",
-                format!("不正な Role 論理 ID です: {logical_id}"),
-            ));
-        }
-        validate_snowflake(discord_id).map_err(|_| {
-            validation_error(
-                "invalid_role_snowflake",
-                format!("Role {logical_id} の Snowflake は正の整数文字列である必要があります"),
-            )
-        })?;
         if let Some(first_logical_id) = seen_ids.insert(discord_id, logical_id) {
             return Err(validation_error(
                 "duplicate_role_snowflake",
@@ -706,8 +658,8 @@ mod tests {
     }
 
     impl RoleSource for StatefulFakeRoleSource {
-        async fn role_catalog(&self, guild_id: &str) -> Result<RoleCatalog, ManagementError> {
-            if guild_id != self.guild_id {
+        async fn role_catalog(&self, guild_id: &GuildSnowflake) -> Result<RoleCatalog, ManagementError> {
+            if guild_id.to_string() != self.guild_id {
                 return Err(ManagementError::RoleSource(format!("Guild {guild_id} は存在しません")));
             }
             let permission_names = self
@@ -718,7 +670,7 @@ mod tests {
             let default_permissions = self
                 .roles
                 .iter()
-                .find(|role| role.id == guild_id)
+                .find(|role| role.id.get() == guild_id.get())
                 .map(|role| role.permissions.clone())
                 .unwrap_or_else(|| permission_names.iter().map(|name| (name.clone(), false)).collect());
             Ok(RoleCatalog {
@@ -731,7 +683,7 @@ mod tests {
 
     fn role(id: &str, name: &str) -> RoleSnapshot {
         RoleSnapshot {
-            id: id.to_owned(),
+            id: id.parse().unwrap(),
             manageable: true,
             name: name.to_owned(),
             color: 0,
@@ -759,6 +711,18 @@ mod tests {
         format!(r#"{{"schema_version":1,"guild_id":"{guild_id}","roles":{roles}}}"#)
     }
 
+    fn logical_id(value: &str) -> RoleLogicalId {
+        RoleLogicalId::parse(value).unwrap()
+    }
+
+    fn role_id(value: &str) -> RoleSnowflake {
+        value.parse().unwrap()
+    }
+
+    fn guild_id(value: u64) -> GuildSnowflake {
+        GuildSnowflake::new(value).unwrap()
+    }
+
     #[tokio::test]
     async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
         let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -766,26 +730,31 @@ mod tests {
             roles: vec![role("200", "運営"), role("201", "運営")],
         });
 
-        let files = service.export_roles("100", None).await.unwrap();
+        let files = service.export_roles(guild_id(100), None).await.unwrap();
         let definition: DefinitionFile = toml::from_str(&files.definition_toml).unwrap();
         let state: StateFile = serde_json::from_str(&files.state_json).unwrap();
 
         assert_eq!(definition.schema_version, SCHEMA_VERSION);
         assert_eq!(
-            literal_string(&definition.roles["role_200"].attributes.name),
+            literal_string(&definition.roles[&logical_id("role_200")].attributes.name),
             Some("運営")
         );
         assert_eq!(
-            literal_string(&definition.roles["role_201"].attributes.name),
+            literal_string(&definition.roles[&logical_id("role_201")].attributes.name),
             Some("運営")
         );
         assert_eq!(
-            literal_bool(definition.roles["role_200"].attributes.permissions.get("SEND_MESSAGES")),
+            literal_bool(
+                definition.roles[&logical_id("role_200")]
+                    .attributes
+                    .permissions
+                    .get("SEND_MESSAGES"),
+            ),
             Some(false)
         );
-        assert_eq!(state.guild_id, "100");
-        assert_eq!(state.roles["role_200"], "200");
-        assert_eq!(state.roles["role_201"], "201");
+        assert_eq!(state.guild_id.get(), 100);
+        assert_eq!(state.roles[&logical_id("role_200")].get(), 200);
+        assert_eq!(state.roles[&logical_id("role_201")].get(), 201);
     }
 
     #[tokio::test]
@@ -800,16 +769,16 @@ mod tests {
             "roles": { "moderator": "200" }
         }"#;
 
-        let files = service.export_roles("100", Some(previous_state)).await.unwrap();
+        let files = service.export_roles(guild_id(100), Some(previous_state)).await.unwrap();
         let definition: DefinitionFile = toml::from_str(&files.definition_toml).unwrap();
         let state: StateFile = serde_json::from_str(&files.state_json).unwrap();
 
         assert_eq!(
-            literal_string(&definition.roles["moderator"].attributes.name),
+            literal_string(&definition.roles[&logical_id("moderator")].attributes.name),
             Some("名称変更後")
         );
-        assert_eq!(state.roles["moderator"], "200");
-        assert!(!definition.roles.contains_key("role_200"));
+        assert_eq!(state.roles[&logical_id("moderator")].get(), 200);
+        assert!(!definition.roles.contains_key(&logical_id("role_200")));
     }
 
     #[tokio::test]
@@ -819,10 +788,10 @@ mod tests {
             roles: vec![role("200", "運営")],
         };
         let service = RoleManagementService::new(source);
-        let files = service.export_roles("100", None).await.unwrap();
+        let files = service.export_roles(guild_id(100), None).await.unwrap();
 
         let plan = service
-            .plan_roles("100", &files.definition_toml, &files.state_json)
+            .plan_roles(guild_id(100), &files.definition_toml, &files.state_json)
             .await
             .unwrap();
 
@@ -844,7 +813,7 @@ mod tests {
         "#;
 
         let plan = service
-            .plan_roles("100", definition, &state("100", r#"{"external_bot":"200"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"external_bot":"200"}"#))
             .await
             .unwrap();
 
@@ -866,7 +835,7 @@ mod tests {
         "#;
 
         let plan = service
-            .plan_roles("100", definition, &state("100", r#"{"everyone":"100"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"everyone":"100"}"#))
             .await
             .unwrap();
 
@@ -890,7 +859,7 @@ mod tests {
         "#;
 
         let plan = service
-            .plan_roles("100", definition, &state("100", r#"{"moderator":"200"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
             .await
             .unwrap();
 
@@ -908,11 +877,11 @@ mod tests {
             roles: vec![external_role, role("201", "運営")],
         });
 
-        let files = service.export_roles("100", None).await.unwrap();
+        let files = service.export_roles(guild_id(100), None).await.unwrap();
         let definition: DefinitionFile = toml::from_str(&files.definition_toml).unwrap();
 
-        assert!(!definition.roles.contains_key("role_200"));
-        assert!(definition.roles.contains_key("role_201"));
+        assert!(!definition.roles.contains_key(&logical_id("role_200")));
+        assert!(definition.roles.contains_key(&logical_id("role_201")));
     }
 
     #[tokio::test]
@@ -936,13 +905,13 @@ mod tests {
             "roles": { "moderator": "200" }
         }"#;
 
-        let plan = service.plan_roles("100", definition, state).await.unwrap();
+        let plan = service.plan_roles(guild_id(100), definition, state).await.unwrap();
 
         assert_eq!(
             plan.changes,
             vec![AttributeChange {
-                logical_id: "moderator".to_owned(),
-                discord_id: "200".to_owned(),
+                logical_id: logical_id("moderator"),
+                discord_id: role_id("200"),
                 attribute: "hoist".to_owned(),
                 current: "false".to_owned(),
                 desired: "true".to_owned(),
@@ -972,7 +941,7 @@ mod tests {
         "#;
 
         let plan = service
-            .plan_roles("100", definition, &state("100", r#"{"moderator":"200"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
             .await
             .unwrap();
 
@@ -998,7 +967,7 @@ mod tests {
         "#;
 
         let plan = service
-            .plan_roles("100", definition, &state("100", r#"{"moderator":"200"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
             .await
             .unwrap();
 
@@ -1019,15 +988,15 @@ mod tests {
             roles: Vec::new(),
         });
         let error = service
-            .plan_roles("100", "schema_version = 1", &state("999", "{}"))
+            .plan_roles(guild_id(100), "schema_version = 1", &state("999", "{}"))
             .await
             .unwrap_err();
 
         assert_eq!(
             error,
             ManagementError::GuildMismatch {
-                state_guild_id: "999".to_owned(),
-                actual_guild_id: "100".to_owned(),
+                state_guild_id: guild_id(999),
+                actual_guild_id: guild_id(100),
             }
         );
     }
@@ -1035,11 +1004,11 @@ mod tests {
     #[tokio::test]
     async fn non_numeric_state_guild_id_is_reported() {
         let service = RoleManagementService::new(StatefulFakeRoleSource {
-            guild_id: "not-a-snowflake".to_owned(),
+            guild_id: "100".to_owned(),
             roles: Vec::new(),
         });
         let error = service
-            .plan_roles("not-a-snowflake", "schema_version = 1", &state("not-a-snowflake", "{}"))
+            .plan_roles(guild_id(100), "schema_version = 1", &state("not-a-snowflake", "{}"))
             .await
             .unwrap_err();
 
@@ -1053,7 +1022,10 @@ mod tests {
             roles: vec![role("200", "運営")],
         });
         let error = service
-            .export_roles("100", Some(&state("100", r#"{"moderator":"200","staff":"200"}"#)))
+            .export_roles(
+                guild_id(100),
+                Some(&state("100", r#"{"moderator":"200","staff":"200"}"#)),
+            )
             .await
             .unwrap_err();
 
@@ -1072,7 +1044,7 @@ mod tests {
             "roles": { "moderator": "200", "moderator": "201" }
         }"#;
 
-        let error = service.export_roles("100", Some(state)).await.unwrap_err();
+        let error = service.export_roles(guild_id(100), Some(state)).await.unwrap_err();
 
         assert!(
             matches!(error, ManagementError::InvalidState(message) if message.contains("論理 ID moderator が重複"))
@@ -1086,7 +1058,7 @@ mod tests {
             roles: vec![role("200", "運営")],
         });
         let error = service
-            .export_roles("100", Some(&state("100", r#"{"role_200":"999"}"#)))
+            .export_roles(guild_id(100), Some(&state("100", r#"{"role_200":"999"}"#)))
             .await
             .unwrap_err();
 
@@ -1106,7 +1078,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", r#"{"moderator":"200"}"#))
+            .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
             .await
             .unwrap_err();
 
@@ -1126,7 +1098,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", "{}"))
+            .plan_roles(guild_id(100), definition, &state("100", "{}"))
             .await
             .unwrap_err();
 
@@ -1146,7 +1118,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", "{}"))
+            .plan_roles(guild_id(100), definition, &state("100", "{}"))
             .await
             .unwrap_err();
 
@@ -1166,7 +1138,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", "{}"))
+            .plan_roles(guild_id(100), definition, &state("100", "{}"))
             .await
             .unwrap_err();
 
@@ -1181,7 +1153,7 @@ mod tests {
         });
 
         let error = service
-            .plan_roles("100", "schema_version = 2", &state("100", "{}"))
+            .plan_roles(guild_id(100), "schema_version = 2", &state("100", "{}"))
             .await
             .unwrap_err();
 
@@ -1207,7 +1179,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", "{}"))
+            .plan_roles(guild_id(100), definition, &state("100", "{}"))
             .await
             .unwrap_err();
 
@@ -1228,7 +1200,7 @@ mod tests {
         "#;
 
         let error = service
-            .plan_roles("100", definition, &state("100", "{}"))
+            .plan_roles(guild_id(100), definition, &state("100", "{}"))
             .await
             .unwrap_err();
 
