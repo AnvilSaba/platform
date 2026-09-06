@@ -1,0 +1,62 @@
+#:schema ../schemas/discord-management.schema.json
+schema_version = 1
+
+[settings_sets.role.staff]
+hoist = true
+mentionable = false
+
+[settings_sets.role.staff.permissions]
+MANAGE_MESSAGES = true
+
+[settings_sets.role.notify]
+mentionable = true
+
+[roles.moderator]
+name = "運営"
+settings_sets = ["staff", "notify"]
+# セットより直接指定を優先する。
+mentionable = false
+
+[settings_sets.channel.readonly.overwrites.everyone]
+VIEW_CHANNEL = "allow"
+SEND_MESSAGES = "deny"
+
+[settings_sets.channel.writable.overwrites.everyone]
+SEND_MESSAGES = "allow"
+
+[settings_sets.channel.writable.overwrites."role:admin"]
+SEND_MESSAGES = "allow"
+
+# 非公開は専用フラグでなく、閲覧権限で表す。
+[settings_sets.channel.private.overwrites.everyone]
+VIEW_CHANNEL = "deny"
+
+[settings_sets.channel.private.overwrites."role:admin"]
+VIEW_CHANNEL = "allow"
+
+[roles.admin]
+mode = "reference"
+
+[channels.rules]
+type = "text"
+name = "ルール"
+settings_sets = ["readonly", "writable"]
+
+[channels.information]
+type = "text"
+name = "案内"
+settings_sets = ["writable", "readonly"]
+
+# Channel への直接指定を最優先とする例。
+[channels.staff]
+type = "text"
+name = "運営専用"
+settings_sets = ["readonly"]
+
+[channels.staff.overwrites.everyone]
+VIEW_CHANNEL = "deny"
+
+[channels.private_room]
+type = "text"
+name = "非公開"
+settings_sets = ["writable", "private"]
