@@ -1,9 +1,15 @@
 use std::collections::BTreeMap;
 
-use serenity::all::{GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId};
+use serenity::{
+    Error as SerenityError,
+    all::{Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId},
+    http::HttpError,
+};
 
 use super::ids::{GuildId, RoleId};
-use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
+use super::service::{
+    ManagementError, RoleCatalog, RoleSnapshot, RoleSource, RoleTarget, RoleUpdate, RoleUpdateOutcome,
+};
 
 impl From<SerenityGuildId> for GuildId {
     fn from(id: SerenityGuildId) -> Self {
@@ -109,6 +115,55 @@ impl RoleSource for SerenityRoleSource<'_> {
                 .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
                 .collect(),
         })
+    }
+}
+
+impl RoleTarget for SerenityRoleSource<'_> {
+    async fn update_role(
+        &self,
+        guild_id: &GuildId,
+        role_id: &RoleId,
+        update: RoleUpdate,
+    ) -> Result<RoleUpdateOutcome, ManagementError> {
+        let mut edit = EditRole::new();
+        if let Some(name) = update.name {
+            edit = edit.name(name);
+        }
+        if let Some(color) = update.color {
+            edit = edit.colour(Colour::new(color));
+        }
+        if let Some(hoist) = update.hoist {
+            edit = edit.hoist(hoist);
+        }
+        if let Some(mentionable) = update.mentionable {
+            edit = edit.mentionable(mentionable);
+        }
+        if let Some(permission_values) = update.permissions {
+            let mut permissions = Permissions::empty();
+            for (name, enabled) in permission_values {
+                let permission = Permissions::all()
+                    .iter_names()
+                    .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
+                    .ok_or_else(|| {
+                        ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています"))
+                    })?;
+                if enabled {
+                    permissions |= permission;
+                }
+            }
+            edit = edit.permissions(permissions);
+        }
+
+        match SerenityGuildId::from(*guild_id)
+            .edit_role(self.http, SerenityRoleId::from(*role_id), edit)
+            .await
+        {
+            Ok(_) => Ok(RoleUpdateOutcome::Applied),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(RoleUpdateOutcome::ResponseUnknown)
+            }
+            Err(error) => Err(ManagementError::RoleSource(error.to_string())),
+        }
     }
 }
 
