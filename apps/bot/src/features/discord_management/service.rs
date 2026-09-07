@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    sync::{Mutex, OnceLock},
+    time::Instant,
 };
 
 use serde::{
@@ -35,6 +37,59 @@ pub struct RoleCatalog {
 
 pub trait RoleSource {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError>;
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoleUpdate {
+    pub name: Option<String>,
+    pub color: Option<u32>,
+    pub hoist: Option<bool>,
+    pub mentionable: Option<bool>,
+    pub permissions: Option<BTreeMap<String, bool>>,
+}
+
+impl RoleUpdate {
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.color.is_none()
+            && self.hoist.is_none()
+            && self.mentionable.is_none()
+            && self.permissions.is_none()
+    }
+
+    #[cfg(test)]
+    fn apply_to(&self, role: &mut RoleSnapshot) {
+        if let Some(name) = &self.name {
+            role.name.clone_from(name);
+        }
+        if let Some(color) = self.color {
+            role.color = color;
+        }
+        if let Some(hoist) = self.hoist {
+            role.hoist = hoist;
+        }
+        if let Some(mentionable) = self.mentionable {
+            role.mentionable = mentionable;
+        }
+        if let Some(permissions) = &self.permissions {
+            role.permissions.clone_from(permissions);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleUpdateOutcome {
+    Applied,
+    ResponseUnknown,
+}
+
+pub trait RoleTarget: RoleSource {
+    async fn update_role(
+        &self,
+        guild_id: &GuildId,
+        role_id: &RoleId,
+        update: RoleUpdate,
+    ) -> Result<RoleUpdateOutcome, ManagementError>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -76,6 +131,24 @@ pub struct AttributeChange {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RolePlan {
     pub changes: Vec<AttributeChange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoleApplyStatus {
+    Complete,
+    GuildBusy,
+    ReplanRequired,
+    DeadlineExceeded,
+    Failed(String),
+    ResponseUnknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleApplyResult {
+    pub status: RoleApplyStatus,
+    pub applied: Vec<AttributeChange>,
+    pub pending: Vec<AttributeChange>,
+    pub state_json: String,
 }
 
 impl RolePlan {
@@ -200,42 +273,285 @@ where
         let state = deserialize_state_for_guild(state_json, guild_id)?;
 
         let catalog = self.source.role_catalog(&guild_id).await?;
-        validate_permission_names(&definition, &catalog.permission_names)?;
-        let actual_roles = catalog
-            .roles
-            .into_iter()
-            .map(|role| (role.id, role))
-            .collect::<BTreeMap<_, _>>();
-        let mut changes = Vec::new();
+        build_plan(&definition, &state, &catalog)
+    }
+}
 
-        for (logical_id, desired) in definition.roles {
-            let discord_id = state
-                .roles
-                .get(&logical_id)
-                .ok_or_else(|| ManagementError::InvalidState(format!("Role {logical_id} の対応がありません")))?;
-            let actual = actual_roles.get(discord_id).ok_or_else(|| {
-                ManagementError::InvalidState(format!(
-                    "Role {logical_id} の Snowflake {discord_id} が Guild に存在しません"
-                ))
-            })?;
-            if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
-                return Err(ManagementError::InvalidState(format!(
-                    "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
-                )));
-            }
-            let desired_attributes = compose_attributes(&desired, &definition.settings_sets.role);
-            compare_attributes(
-                &logical_id,
-                discord_id,
-                actual,
-                &desired_attributes,
-                &catalog.default_permissions,
-                &mut changes,
-            )?;
+static APPLYING_GUILDS: OnceLock<Mutex<BTreeSet<GuildId>>> = OnceLock::new();
+
+struct GuildApplyGuard(GuildId);
+
+impl GuildApplyGuard {
+    fn acquire(guild_id: GuildId) -> Option<Self> {
+        let mut guilds = APPLYING_GUILDS
+            .get_or_init(|| Mutex::new(BTreeSet::new()))
+            .lock()
+            .expect("guild apply mutex poisoned");
+        if guilds.insert(guild_id) {
+            Some(Self(guild_id))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for GuildApplyGuard {
+    fn drop(&mut self) {
+        APPLYING_GUILDS
+            .get_or_init(|| Mutex::new(BTreeSet::new()))
+            .lock()
+            .expect("guild apply mutex poisoned")
+            .remove(&self.0);
+    }
+}
+
+impl<S> RoleManagementService<S>
+where
+    S: RoleTarget,
+{
+    pub async fn apply_roles(
+        &self,
+        guild_id: GuildId,
+        definition_toml: &str,
+        state_json: &str,
+        confirmed_plan: &RolePlan,
+        processing_deadline: Instant,
+    ) -> Result<RoleApplyResult, ManagementError> {
+        let state = deserialize_state_for_guild(state_json, guild_id)?;
+        let latest_state_json = serialize_state(&state)?;
+        let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
+            return Ok(RoleApplyResult {
+                status: RoleApplyStatus::GuildBusy,
+                applied: Vec::new(),
+                pending: confirmed_plan.changes.clone(),
+                state_json: latest_state_json,
+            });
+        };
+
+        if Instant::now() >= processing_deadline {
+            return Ok(RoleApplyResult {
+                status: RoleApplyStatus::DeadlineExceeded,
+                applied: Vec::new(),
+                pending: confirmed_plan.changes.clone(),
+                state_json: latest_state_json,
+            });
         }
 
-        Ok(RolePlan { changes })
+        let definition: DefinitionFile =
+            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
+        let mut catalog = self.source.role_catalog(&guild_id).await?;
+        let current_plan = build_plan(&definition, &state, &catalog)?;
+        if current_plan != *confirmed_plan {
+            return Ok(RoleApplyResult {
+                status: RoleApplyStatus::ReplanRequired,
+                applied: Vec::new(),
+                pending: current_plan.changes,
+                state_json: latest_state_json,
+            });
+        }
+
+        let mut applied = Vec::new();
+        let mut pending = confirmed_plan.changes.clone();
+
+        for (logical_id, role_definition) in &definition.roles {
+            let Some(role_id) = state.roles.get(logical_id) else {
+                continue;
+            };
+            let role_changes = pending
+                .iter()
+                .filter(|change| &change.logical_id == logical_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if role_changes.is_empty() {
+                continue;
+            }
+            if Instant::now() >= processing_deadline {
+                return Ok(RoleApplyResult {
+                    status: RoleApplyStatus::DeadlineExceeded,
+                    applied,
+                    pending,
+                    state_json: latest_state_json,
+                });
+            }
+
+            let actual = catalog.roles.iter().find(|role| role.id == *role_id).ok_or_else(|| {
+                ManagementError::InvalidState(format!(
+                    "Role {logical_id} の Snowflake {role_id} が Guild に存在しません"
+                ))
+            })?;
+            let desired = compose_attributes(role_definition, &definition.settings_sets.role);
+            let update = build_role_update(actual, &desired, &catalog.default_permissions, logical_id)?;
+            if update.is_empty() {
+                continue;
+            }
+
+            let outcome = match self.source.update_role(&guild_id, role_id, update.clone()).await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return Ok(RoleApplyResult {
+                        status: RoleApplyStatus::Failed(error.to_string()),
+                        applied,
+                        pending,
+                        state_json: latest_state_json,
+                    });
+                }
+            };
+            catalog = match self.source.role_catalog(&guild_id).await {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    return Ok(RoleApplyResult {
+                        status: RoleApplyStatus::Failed(error.to_string()),
+                        applied,
+                        pending,
+                        state_json: latest_state_json,
+                    });
+                }
+            };
+            let matches = catalog
+                .roles
+                .iter()
+                .find(|role| role.id == *role_id)
+                .is_some_and(|role| role_matches_update(role, &update));
+            if !matches {
+                return Ok(RoleApplyResult {
+                    status: if outcome == RoleUpdateOutcome::ResponseUnknown {
+                        RoleApplyStatus::ResponseUnknown
+                    } else {
+                        RoleApplyStatus::Failed(format!("Role {logical_id} の更新後の値が希望値と一致しません"))
+                    },
+                    applied,
+                    pending,
+                    state_json: latest_state_json,
+                });
+            }
+
+            applied.extend(role_changes);
+            pending.retain(|change| &change.logical_id != logical_id);
+        }
+
+        drop(guard);
+        Ok(RoleApplyResult {
+            status: RoleApplyStatus::Complete,
+            applied,
+            pending,
+            state_json: latest_state_json,
+        })
     }
+}
+
+fn build_plan(
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &RoleCatalog,
+) -> Result<RolePlan, ManagementError> {
+    validate_permission_names(definition, &catalog.permission_names)?;
+    let actual_roles = catalog
+        .roles
+        .iter()
+        .map(|role| (role.id, role))
+        .collect::<BTreeMap<_, _>>();
+    let mut changes = Vec::new();
+
+    for (logical_id, desired) in &definition.roles {
+        let discord_id = state
+            .roles
+            .get(logical_id)
+            .ok_or_else(|| ManagementError::InvalidState(format!("Role {logical_id} の対応がありません")))?;
+        let actual = actual_roles.get(discord_id).ok_or_else(|| {
+            ManagementError::InvalidState(format!(
+                "Role {logical_id} の Snowflake {discord_id} が Guild に存在しません"
+            ))
+        })?;
+        if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+            )));
+        }
+        let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
+        compare_attributes(
+            logical_id,
+            discord_id,
+            actual,
+            &desired_attributes,
+            &catalog.default_permissions,
+            &mut changes,
+        )?;
+    }
+
+    Ok(RolePlan { changes })
+}
+
+fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
+    serde_json::to_string_pretty(state)
+        .map(|json| format!("{json}\n"))
+        .map_err(|error| ManagementError::SerializeState(error.to_string()))
+}
+
+fn build_role_update(
+    actual: &RoleSnapshot,
+    desired: &RoleAttributes,
+    default_permissions: &BTreeMap<String, bool>,
+    logical_id: &RoleLogicalId,
+) -> Result<RoleUpdate, ManagementError> {
+    let mut update = RoleUpdate::default();
+    if let Some(value) = &desired.name {
+        let value = resolve(value, "new role".to_owned(), "name")?;
+        if value != actual.name {
+            update.name = Some(value);
+        }
+    }
+    if let Some(value) = &desired.color {
+        let value = resolve(value, 0, "color")?;
+        if value != actual.color {
+            update.color = Some(value);
+        }
+    }
+    if let Some(value) = &desired.hoist {
+        let value = resolve(value, false, "hoist")?;
+        if value != actual.hoist {
+            update.hoist = Some(value);
+        }
+    }
+    if let Some(value) = &desired.mentionable {
+        let value = resolve(value, false, "mentionable")?;
+        if value != actual.mentionable {
+            update.mentionable = Some(value);
+        }
+    }
+    if !desired.permissions.is_empty() {
+        let mut permissions = actual.permissions.clone();
+        for (permission, value) in &desired.permissions {
+            let current = actual.permissions.get(permission).ok_or_else(|| {
+                ManagementError::InvalidDefinition(format!(
+                    "Role {logical_id} に未知の権限 {permission} が指定されています"
+                ))
+            })?;
+            let default = *default_permissions.get(permission).ok_or_else(|| {
+                ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません"))
+            })?;
+            let value = resolve(value, default, &format!("permissions.{permission}"))?;
+            if value != *current {
+                permissions.insert(permission.clone(), value);
+            }
+        }
+        if permissions != actual.permissions {
+            update.permissions = Some(permissions);
+        }
+    }
+    Ok(update)
+}
+
+fn role_matches_update(role: &RoleSnapshot, update: &RoleUpdate) -> bool {
+    update.name.as_ref().is_none_or(|name| role.name == *name)
+        && update.color.is_none_or(|color| role.color == color)
+        && update.hoist.is_none_or(|hoist| role.hoist == hoist)
+        && update
+            .mentionable
+            .is_none_or(|mentionable| role.mentionable == mentionable)
+        && update
+            .permissions
+            .as_ref()
+            .is_none_or(|permissions| role.permissions == *permissions)
 }
 
 fn compose_attributes(
@@ -651,6 +967,14 @@ fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    use tokio::sync::{Semaphore, mpsc};
 
     struct StatefulFakeRoleSource {
         guild_id: String,
@@ -1205,5 +1529,363 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("参照専用 Role")));
+    }
+
+    #[derive(Clone)]
+    struct ApplyingFakeRoleSource {
+        catalog: Arc<Mutex<RoleCatalog>>,
+        updates: Arc<Mutex<Vec<RoleUpdate>>>,
+        outcome: RoleUpdateOutcome,
+        apply_update: bool,
+    }
+
+    impl RoleSource for ApplyingFakeRoleSource {
+        async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+            Ok(self.catalog.lock().unwrap().clone())
+        }
+    }
+
+    impl RoleTarget for ApplyingFakeRoleSource {
+        async fn update_role(
+            &self,
+            _guild_id: &GuildId,
+            role_id: &RoleId,
+            update: RoleUpdate,
+        ) -> Result<RoleUpdateOutcome, ManagementError> {
+            self.updates.lock().unwrap().push(update.clone());
+            if self.apply_update {
+                let mut catalog = self.catalog.lock().unwrap();
+                let role = catalog.roles.iter_mut().find(|role| role.id == *role_id).unwrap();
+                update.apply_to(role);
+            }
+            Ok(self.outcome)
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
+        let mut moderator = role("200", "運営");
+        moderator.permissions =
+            BTreeMap::from([("VIEW_CHANNEL".to_owned(), false), ("MANAGE_MESSAGES".to_owned(), true)]);
+        let source = ApplyingFakeRoleSource {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![moderator],
+                permission_names: BTreeSet::from(["VIEW_CHANNEL".to_owned(), "MANAGE_MESSAGES".to_owned()]),
+                default_permissions: BTreeMap::from([
+                    ("VIEW_CHANNEL".to_owned(), false),
+                    ("MANAGE_MESSAGES".to_owned(), false),
+                ]),
+            })),
+            updates: Arc::new(Mutex::new(Vec::new())),
+            outcome: RoleUpdateOutcome::Applied,
+            apply_update: true,
+        };
+        let service = RoleManagementService::new(source.clone());
+        let definition = r#"
+            schema_version = 1
+            [roles.moderator]
+            name = "モデレーター"
+            [roles.moderator.permissions]
+            VIEW_CHANNEL = true
+        "#;
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+        let result = service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                std::time::Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, RoleApplyStatus::Complete);
+        assert_eq!(result.applied, plan.changes);
+        assert!(result.pending.is_empty());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "guild_id": "100",
+                "roles": { "moderator": "200" }
+            })
+        );
+        let updates = source.updates.lock().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].name.as_deref(), Some("モデレーター"));
+        assert_eq!(
+            updates[0].permissions,
+            Some(BTreeMap::from([
+                ("MANAGE_MESSAGES".to_owned(), true),
+                ("VIEW_CHANNEL".to_owned(), true),
+            ]))
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirmation() {
+        let source = ApplyingFakeRoleSource {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![role("200", "運営")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            })),
+            updates: Arc::new(Mutex::new(Vec::new())),
+            outcome: RoleUpdateOutcome::Applied,
+            apply_update: true,
+        };
+        let service = RoleManagementService::new(source.clone());
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let confirmed_plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+        source.catalog.lock().unwrap().roles[0].name = "外部変更".to_owned();
+
+        let result = service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &confirmed_plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, RoleApplyStatus::ReplanRequired);
+        assert!(result.applied.is_empty());
+        assert!(source.updates.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
+        let source = ApplyingFakeRoleSource {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![role("200", "運営")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            })),
+            updates: Arc::new(Mutex::new(Vec::new())),
+            outcome: RoleUpdateOutcome::ResponseUnknown,
+            apply_update: false,
+        };
+        let service = RoleManagementService::new(source);
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+        let result = service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, RoleApplyStatus::ResponseUnknown);
+        assert!(result.applied.is_empty());
+        assert_eq!(result.pending, plan.changes);
+    }
+
+    #[tokio::test]
+    async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() {
+        let source = ApplyingFakeRoleSource {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![role("200", "運営")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            })),
+            updates: Arc::new(Mutex::new(Vec::new())),
+            outcome: RoleUpdateOutcome::Applied,
+            apply_update: true,
+        };
+        let service = RoleManagementService::new(source.clone());
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+        let result = service
+            .apply_roles(guild_id(100), definition, &state, &plan, Instant::now())
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, RoleApplyStatus::DeadlineExceeded);
+        assert!(result.applied.is_empty());
+        assert_eq!(result.pending, plan.changes);
+        assert!(source.updates.lock().unwrap().is_empty());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["guild_id"],
+            "100"
+        );
+    }
+
+    #[derive(Clone)]
+    struct FailsOnSecondUpdate {
+        catalog: Arc<Mutex<RoleCatalog>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl RoleSource for FailsOnSecondUpdate {
+        async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+            Ok(self.catalog.lock().unwrap().clone())
+        }
+    }
+
+    impl RoleTarget for FailsOnSecondUpdate {
+        async fn update_role(
+            &self,
+            _guild_id: &GuildId,
+            role_id: &RoleId,
+            update: RoleUpdate,
+        ) -> Result<RoleUpdateOutcome, ManagementError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                return Err(ManagementError::RoleSource("injected failure".to_owned()));
+            }
+            let mut catalog = self.catalog.lock().unwrap();
+            update.apply_to(catalog.roles.iter_mut().find(|role| role.id == *role_id).unwrap());
+            Ok(RoleUpdateOutcome::Applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes() {
+        let source = FailsOnSecondUpdate {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![role("200", "A"), role("201", "B")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            })),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let service = RoleManagementService::new(source);
+        let definition = "schema_version = 1\n[roles.a]\nname = \"new A\"\n[roles.b]\nname = \"new B\"\n";
+        let state = state("100", r#"{"a":"200","b":"201"}"#);
+        let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+        let result = service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("injected failure")));
+        assert_eq!(
+            result
+                .applied
+                .iter()
+                .map(|change| change.logical_id.to_string())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
+        assert_eq!(
+            result
+                .pending
+                .iter()
+                .map(|change| change.logical_id.to_string())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+    }
+
+    #[derive(Clone)]
+    struct BlockingRoleTarget {
+        catalog: Arc<Mutex<RoleCatalog>>,
+        started: mpsc::UnboundedSender<()>,
+        release: Arc<Semaphore>,
+    }
+
+    impl RoleSource for BlockingRoleTarget {
+        async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+            Ok(self.catalog.lock().unwrap().clone())
+        }
+    }
+
+    impl RoleTarget for BlockingRoleTarget {
+        async fn update_role(
+            &self,
+            _guild_id: &GuildId,
+            role_id: &RoleId,
+            update: RoleUpdate,
+        ) -> Result<RoleUpdateOutcome, ManagementError> {
+            self.started.send(()).unwrap();
+            self.release.acquire().await.unwrap().forget();
+            let mut catalog = self.catalog.lock().unwrap();
+            update.apply_to(catalog.roles.iter_mut().find(|role| role.id == *role_id).unwrap());
+            Ok(RoleUpdateOutcome::Applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let source = BlockingRoleTarget {
+            catalog: Arc::new(Mutex::new(RoleCatalog {
+                roles: vec![role("200", "運営")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            })),
+            started: started_tx,
+            release: Arc::new(Semaphore::new(0)),
+        };
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let plan = RoleManagementService::new(source.clone())
+            .plan_roles(guild_id(100), definition, &state)
+            .await
+            .unwrap();
+        let first_source = source.clone();
+        let first_plan = plan.clone();
+        let first_state = state.clone();
+        let first = tokio::spawn(async move {
+            RoleManagementService::new(first_source)
+                .apply_roles(
+                    guild_id(100),
+                    definition,
+                    &first_state,
+                    &first_plan,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+            .await
+            .expect("first apply did not reach the update")
+            .unwrap();
+
+        let second = tokio::time::timeout(
+            Duration::from_secs(1),
+            RoleManagementService::new(source.clone()).apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                Instant::now() + Duration::from_secs(60),
+            ),
+        )
+        .await
+        .expect("second apply waited instead of being rejected")
+        .unwrap();
+        assert_eq!(second.status, RoleApplyStatus::GuildBusy);
+
+        source.release.add_permits(1);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), first)
+                .await
+                .expect("first apply did not finish after release")
+                .unwrap()
+                .unwrap()
+                .status,
+            RoleApplyStatus::Complete
+        );
     }
 }

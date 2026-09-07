@@ -40,6 +40,7 @@ pub fn commands() -> Vec<AppCommand> {
             auth::create_keyword_button,
             question::question,
             pin::pin,
+            discord_management::role_apply,
             discord_management::role_export,
             discord_management::role_plan,
             admin::reload_config,
@@ -87,7 +88,7 @@ mod tests {
 
         for management_command in commands
             .iter()
-            .filter(|command| matches!(command.name.as_ref(), "role_export" | "role_plan"))
+            .filter(|command| matches!(command.name.as_ref(), "role_apply" | "role_export" | "role_plan"))
         {
             assert!(management_command.owners_only);
             assert!(management_command.guild_only);
@@ -98,6 +99,7 @@ mod tests {
             "create_keyword_button",
             "question",
             "pin",
+            "role_apply",
             "role_export",
             "role_plan",
             "reload_config",
