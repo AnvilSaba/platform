@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     sync::{Mutex, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use serde::{
@@ -16,6 +16,7 @@ use validator::{Validate, ValidationError};
 use super::ids::{GuildId, RoleId, RoleLogicalId, RoleSettingsSetId};
 
 const SCHEMA_VERSION: u32 = 1;
+const RESULT_RETURN_BUDGET: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleSnapshot {
@@ -339,7 +340,32 @@ where
 
         let definition: DefinitionFile =
             toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
-        let mut catalog = self.source.role_catalog(&guild_id).await?;
+        let mut applied = Vec::new();
+        let mut pending = confirmed_plan.changes.clone();
+        let mut catalog = match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            self.source.role_catalog(&guild_id),
+        )
+        .await
+        {
+            Ok(Ok(catalog)) => catalog,
+            Ok(Err(error)) => {
+                return Ok(RoleApplyResult {
+                    status: RoleApplyStatus::Failed(error.to_string()),
+                    applied,
+                    pending,
+                    state_json: latest_state_json,
+                });
+            }
+            Err(_) => {
+                return Ok(RoleApplyResult {
+                    status: RoleApplyStatus::DeadlineExceeded,
+                    applied,
+                    pending,
+                    state_json: latest_state_json,
+                });
+            }
+        };
         let current_plan = build_plan(&definition, &state, &catalog)?;
         if current_plan != *confirmed_plan {
             return Ok(RoleApplyResult {
@@ -349,9 +375,6 @@ where
                 state_json: latest_state_json,
             });
         }
-
-        let mut applied = Vec::new();
-        let mut pending = confirmed_plan.changes.clone();
 
         for (logical_id, role_definition) in &definition.roles {
             let Some(role_id) = state.roles.get(logical_id) else {
@@ -385,9 +408,14 @@ where
                 continue;
             }
 
-            let outcome = match self.source.update_role(&guild_id, role_id, update.clone()).await {
-                Ok(outcome) => outcome,
-                Err(error) => {
+            let outcome = match tokio::time::timeout(
+                processing_deadline.saturating_duration_since(Instant::now()),
+                self.source.update_role(&guild_id, role_id, update.clone()),
+            )
+            .await
+            {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(error)) => {
                     return Ok(RoleApplyResult {
                         status: RoleApplyStatus::Failed(error.to_string()),
                         applied,
@@ -395,12 +423,36 @@ where
                         state_json: latest_state_json,
                     });
                 }
+                Err(_) => RoleUpdateOutcome::ResponseUnknown,
             };
-            catalog = match self.source.role_catalog(&guild_id).await {
-                Ok(catalog) => catalog,
-                Err(error) => {
+            if outcome == RoleUpdateOutcome::Applied {
+                applied.extend(role_changes.clone());
+                pending.retain(|change| &change.logical_id != logical_id);
+            }
+
+            let result_deadline = processing_deadline + RESULT_RETURN_BUDGET;
+            catalog = match tokio::time::timeout(
+                result_deadline.saturating_duration_since(Instant::now()),
+                self.source.role_catalog(&guild_id),
+            )
+            .await
+            {
+                Ok(Ok(catalog)) => catalog,
+                Ok(Err(error)) => {
                     return Ok(RoleApplyResult {
                         status: RoleApplyStatus::Failed(error.to_string()),
+                        applied,
+                        pending,
+                        state_json: latest_state_json,
+                    });
+                }
+                Err(_) => {
+                    return Ok(RoleApplyResult {
+                        status: if outcome == RoleUpdateOutcome::Applied {
+                            RoleApplyStatus::DeadlineExceeded
+                        } else {
+                            RoleApplyStatus::ResponseUnknown
+                        },
                         applied,
                         pending,
                         state_json: latest_state_json,
@@ -425,8 +477,10 @@ where
                 });
             }
 
-            applied.extend(role_changes);
-            pending.retain(|change| &change.logical_id != logical_id);
+            if outcome == RoleUpdateOutcome::ResponseUnknown {
+                applied.extend(role_changes);
+                pending.retain(|change| &change.logical_id != logical_id);
+            }
         }
 
         drop(guard);
@@ -1795,6 +1849,64 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["b"]
         );
+    }
+
+    #[derive(Clone)]
+    struct RefetchFailsAfterAppliedUpdate {
+        catalog: RoleCatalog,
+        catalog_calls: Arc<AtomicUsize>,
+    }
+
+    impl RoleSource for RefetchFailsAfterAppliedUpdate {
+        async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+            if self.catalog_calls.fetch_add(1, Ordering::SeqCst) == 2 {
+                Err(ManagementError::RoleSource("refetch failed".to_owned()))
+            } else {
+                Ok(self.catalog.clone())
+            }
+        }
+    }
+
+    impl RoleTarget for RefetchFailsAfterAppliedUpdate {
+        async fn update_role(
+            &self,
+            _guild_id: &GuildId,
+            _role_id: &RoleId,
+            _update: RoleUpdate,
+        ) -> Result<RoleUpdateOutcome, ManagementError> {
+            Ok(RoleUpdateOutcome::Applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
+        let source = RefetchFailsAfterAppliedUpdate {
+            catalog: RoleCatalog {
+                roles: vec![role("200", "運営")],
+                permission_names: BTreeSet::new(),
+                default_permissions: BTreeMap::new(),
+            },
+            catalog_calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let service = RoleManagementService::new(source);
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+        let result = service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("refetch failed")));
+        assert_eq!(result.applied, plan.changes);
+        assert!(result.pending.is_empty());
     }
 
     #[derive(Clone)]
