@@ -9,6 +9,7 @@ use serenity::{
     builder::{CreateAttachment, CreateComponent},
     small_fixed_array::{FixedArray, FixedString},
 };
+use tracing::warn;
 
 use crate::app::{AppContext, AppError};
 
@@ -272,13 +273,16 @@ pub async fn role_apply(
                         .new_attachment(CreateAttachment::bytes(result.state_json, "discord-state.json")),
                     Err(error) => EditInteractionResponse::new().content(format!("入力を確認してください。\n{error}")),
                 };
-                if let Ok(response) = tokio::time::timeout(
+                match tokio::time::timeout(
                     deadlines.response.saturating_duration_since(Instant::now()),
                     interaction.edit_response(ctx.http(), edit),
                 )
                 .await
                 {
-                    response?;
+                    Ok(response) => {
+                        response?;
+                    }
+                    Err(_) => warn!("Role apply result response exceeded the two-minute return budget"),
                 }
                 return Ok(());
             }
