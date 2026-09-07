@@ -209,9 +209,9 @@ pub async fn role_apply(
         .timeout(CONFIRMATION_WINDOW)
         .stream();
     while let Some(interaction) = interactions.next().await {
+        interaction.defer_ephemeral(ctx.http()).await?;
         match confirmations.consume(&token, interaction.user.id.get(), Instant::now()) {
             Err(ConfirmationError::WrongOwner) => {
-                interaction.defer_ephemeral(ctx.http()).await?;
                 interaction
                     .edit_response(
                         ctx.http(),
@@ -220,7 +220,6 @@ pub async fn role_apply(
                     .await?;
             }
             Err(ConfirmationError::Expired) => {
-                interaction.defer_ephemeral(ctx.http()).await?;
                 interaction
                     .edit_response(
                         ctx.http(),
@@ -230,32 +229,32 @@ pub async fn role_apply(
                     .await?;
                 return Ok(());
             }
-            Err(ConfirmationError::AlreadyConsumed | ConfirmationError::Unknown) => return Ok(()),
+            Err(ConfirmationError::AlreadyConsumed | ConfirmationError::Unknown) => {
+                interaction
+                    .edit_response(
+                        ctx.http(),
+                        EditInteractionResponse::new().content("この確認ボタンはすでに使用されています。"),
+                    )
+                    .await?;
+                return Ok(());
+            }
             Ok(payload) => {
-                interaction.defer_ephemeral(ctx.http()).await?;
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
                 let service = RoleManagementService::new(source);
-                let result = tokio::time::timeout(
-                    APPLY_PROCESSING_BUDGET,
-                    service.apply_roles(
+                let result = service
+                    .apply_roles(
                         payload.guild_id,
                         &payload.definition,
                         &payload.state,
                         &payload.plan,
                         Instant::now() + APPLY_PROCESSING_BUDGET,
-                    ),
-                )
-                .await;
+                    )
+                    .await;
                 let edit = match result {
-                    Ok(Ok(result)) => EditInteractionResponse::new()
+                    Ok(result) => EditInteractionResponse::new()
                         .content(render_apply_result(&result))
                         .new_attachment(CreateAttachment::bytes(result.state_json, "discord-state.json")),
-                    Ok(Err(error)) => {
-                        EditInteractionResponse::new().content(format!("入力を確認してください。\n{error}"))
-                    }
-                    Err(_) => EditInteractionResponse::new()
-                        .content("処理期限に達したため停止しました。同じ定義と最新 state を再投入してください。")
-                        .new_attachment(CreateAttachment::bytes(payload.state, "discord-state.json")),
+                    Err(error) => EditInteractionResponse::new().content(format!("入力を確認してください。\n{error}")),
                 };
                 interaction.edit_response(ctx.http(), edit).await?;
                 return Ok(());
