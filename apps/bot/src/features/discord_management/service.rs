@@ -16,7 +16,7 @@ use validator::{Validate, ValidationError};
 use super::ids::{GuildId, RoleId, RoleLogicalId, RoleSettingsSetId};
 
 const SCHEMA_VERSION: u32 = 1;
-const RESULT_RETURN_BUDGET: Duration = Duration::from_secs(2 * 60);
+const RESULT_STATE_REFRESH_BUDGET: Duration = Duration::from_secs(90);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleSnapshot {
@@ -430,7 +430,7 @@ where
                 pending.retain(|change| &change.logical_id != logical_id);
             }
 
-            let result_deadline = processing_deadline + RESULT_RETURN_BUDGET;
+            let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
             catalog = match tokio::time::timeout(
                 result_deadline.saturating_duration_since(Instant::now()),
                 self.source.role_catalog(&guild_id),
@@ -1744,6 +1744,81 @@ mod tests {
         assert_eq!(result.status, RoleApplyStatus::ResponseUnknown);
         assert!(result.applied.is_empty());
         assert_eq!(result.pending, plan.changes);
+    }
+
+    #[derive(Clone)]
+    struct NeverCompletesRoleUpdate {
+        catalog: RoleCatalog,
+    }
+
+    impl RoleSource for NeverCompletesRoleUpdate {
+        async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+            Ok(self.catalog.clone())
+        }
+    }
+
+    impl RoleTarget for NeverCompletesRoleUpdate {
+        async fn update_role(
+            &self,
+            _guild_id: &GuildId,
+            _role_id: &RoleId,
+            _update: RoleUpdate,
+        ) -> Result<RoleUpdateOutcome, ManagementError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
+        let catalog = RoleCatalog {
+            roles: vec![role("200", "運営")],
+            permission_names: BTreeSet::new(),
+            default_permissions: BTreeMap::new(),
+        };
+        let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+        let state = state("100", r#"{"moderator":"200"}"#);
+        let timing_out_service = RoleManagementService::new(NeverCompletesRoleUpdate {
+            catalog: catalog.clone(),
+        });
+        let plan = timing_out_service
+            .plan_roles(guild_id(100), definition, &state)
+            .await
+            .unwrap();
+
+        let timed_out = timing_out_service
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &state,
+                &plan,
+                Instant::now() + Duration::from_millis(10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(timed_out.status, RoleApplyStatus::ResponseUnknown);
+        assert!(timed_out.applied.is_empty());
+        assert_eq!(timed_out.pending, plan.changes);
+
+        let resubmitted_source = ApplyingFakeRoleSource {
+            catalog: Arc::new(Mutex::new(catalog)),
+            updates: Arc::new(Mutex::new(Vec::new())),
+            outcome: RoleUpdateOutcome::Applied,
+            apply_update: true,
+        };
+        let resubmitted = RoleManagementService::new(resubmitted_source)
+            .apply_roles(
+                guild_id(100),
+                definition,
+                &timed_out.state_json,
+                &plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resubmitted.status, RoleApplyStatus::Complete);
+        assert_eq!(resubmitted.applied, plan.changes);
+        assert!(resubmitted.pending.is_empty());
     }
 
     #[tokio::test]
