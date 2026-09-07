@@ -21,6 +21,21 @@ use super::{
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
 const APPLY_PROCESSING_BUDGET: Duration = Duration::from_secs(10 * 60);
+const APPLY_RESULT_BUDGET: Duration = Duration::from_secs(2 * 60);
+
+#[derive(Clone, Copy)]
+struct ApplyDeadlines {
+    processing: Instant,
+    response: Instant,
+}
+
+fn apply_deadlines(started_at: Instant) -> ApplyDeadlines {
+    let processing = started_at + APPLY_PROCESSING_BUDGET;
+    ApplyDeadlines {
+        processing,
+        response: processing + APPLY_RESULT_BUDGET,
+    }
+}
 
 #[derive(Clone)]
 struct PendingRoleApply {
@@ -239,6 +254,7 @@ pub async fn role_apply(
                 return Ok(());
             }
             Ok(payload) => {
+                let deadlines = apply_deadlines(Instant::now());
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
                 let service = RoleManagementService::new(source);
                 let result = service
@@ -247,7 +263,7 @@ pub async fn role_apply(
                         &payload.definition,
                         &payload.state,
                         &payload.plan,
-                        Instant::now() + APPLY_PROCESSING_BUDGET,
+                        deadlines.processing,
                     )
                     .await;
                 let edit = match result {
@@ -256,11 +272,38 @@ pub async fn role_apply(
                         .new_attachment(CreateAttachment::bytes(result.state_json, "discord-state.json")),
                     Err(error) => EditInteractionResponse::new().content(format!("入力を確認してください。\n{error}")),
                 };
-                interaction.edit_response(ctx.http(), edit).await?;
+                if let Ok(response) = tokio::time::timeout(
+                    deadlines.response.saturating_duration_since(Instant::now()),
+                    interaction.edit_response(ctx.http(), edit),
+                )
+                .await
+                {
+                    response?;
+                }
                 return Ok(());
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_deadlines_reserve_two_minutes_after_the_ten_minute_processing_budget() {
+        let started_at = Instant::now();
+        let deadlines = apply_deadlines(started_at);
+
+        assert_eq!(
+            deadlines.processing.duration_since(started_at),
+            Duration::from_secs(10 * 60)
+        );
+        assert_eq!(
+            deadlines.response.duration_since(deadlines.processing),
+            Duration::from_secs(2 * 60)
+        );
+    }
 }
