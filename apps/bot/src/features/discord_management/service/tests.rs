@@ -79,6 +79,7 @@ fn guild_id(value: u64) -> GuildId {
     GuildId::new(value)
 }
 
+/// 同名Roleが複数あっても、名前ではなくSnowflake由来の論理IDで一意にexportできることを保証する。
 #[tokio::test]
 async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -108,6 +109,7 @@ async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
     assert_eq!(state.roles[&logical_id("role_201")].get(), 201);
 }
 
+/// @everyoneを予約論理IDでexportし、stateから除外しつつ、権限のtrue/falseをすべて保持できることを保証する。
 #[tokio::test]
 async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -135,6 +137,7 @@ async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
     assert!(plan.changes.is_empty());
 }
 
+/// @everyoneへ名前など権限以外の管理属性を指定した定義を拒否し、Discord固有の制約を守る。
 #[tokio::test]
 async fn everyone_rejects_non_permission_managed_attributes() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -155,6 +158,7 @@ async fn everyone_rejects_non_permission_managed_attributes() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("@everyone") && message.contains("権限")));
 }
 
+/// 再export時に既存stateの論理IDを引き継ぎ、Role名の変更で対応関係が変わらないことを保証する。
 #[tokio::test]
 async fn re_export_preserves_logical_ids_from_input_state() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -179,6 +183,7 @@ async fn re_export_preserves_logical_ids_from_input_state() {
     assert!(!definition.roles.contains_key(&logical_id("role_200")));
 }
 
+/// 同じGuild状態から生成したdefinitionとstateをそのままplanすると差分が生じないことを保証する。
 #[tokio::test]
 async fn exported_definition_has_no_plan_changes() {
     let source = StatefulFakeRoleSource {
@@ -196,6 +201,7 @@ async fn exported_definition_has_no_plan_changes() {
     assert!(plan.changes.is_empty());
 }
 
+/// 参照専用Roleは更新しないため、Botが管理不能なRoleでも参照先として使用できることを保証する。
 #[tokio::test]
 async fn reference_role_may_target_an_unmanageable_guild_role() {
     let mut external_role = role("200", "外部 Bot");
@@ -218,6 +224,7 @@ async fn reference_role_may_target_an_unmanageable_guild_role() {
     assert!(plan.changes.is_empty());
 }
 
+/// stateに対応を持たない@everyoneも、予約論理IDによって参照専用Roleとして解決できることを保証する。
 #[tokio::test]
 async fn everyone_role_may_be_used_as_a_reference() {
     let mut everyone = role("100", "@everyone");
@@ -240,6 +247,7 @@ async fn everyone_role_may_be_used_as_a_reference() {
     assert!(plan.changes.is_empty());
 }
 
+/// 権限のdefault指定が固定値ではなく、Guildの@everyoneに設定された基底権限を参照することを保証する。
 #[tokio::test]
 async fn permission_default_uses_everyone_role_value() {
     let mut everyone = role("100", "@everyone");
@@ -266,6 +274,7 @@ async fn permission_default_uses_everyone_role_value() {
     assert_eq!(plan.changes[0].desired, "true");
 }
 
+/// export対象をBotが管理可能なRoleに限定し、管理不能なRoleを編集用定義へ混入させない。
 #[tokio::test]
 async fn export_omits_unmanageable_roles_but_keeps_manageable_roles() {
     let mut external_role = role("200", "外部 Bot");
@@ -282,6 +291,7 @@ async fn export_omits_unmanageable_roles_but_keeps_manageable_roles() {
     assert!(definition.roles.contains_key(&logical_id("role_201")));
 }
 
+/// Role設定セットで指定した属性が合成され、実際のRoleとの差分としてplanされることを保証する。
 #[tokio::test]
 async fn role_settings_set_attributes_are_planned() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -317,6 +327,7 @@ async fn role_settings_set_attributes_are_planned() {
     );
 }
 
+/// 複数設定セットの後勝ちと直接指定の最優先を確認し、省略属性を変更しない合成規則を保証する。
 #[tokio::test]
 async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_are_retained() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -349,6 +360,7 @@ async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_a
     assert!(!plan.changes.iter().any(|change| change.attribute == "name"));
 }
 
+/// 各属性のdefault指定がschemaで定めた既定値へ解決され、必要な差分だけがplanされることを保証する。
 #[tokio::test]
 async fn default_specifiers_are_resolved_to_schema_version_values() {
     let mut actual = role("200", "運営");
@@ -379,6 +391,7 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
     );
 }
 
+/// stateのGuildが要求先と異なる場合、Discordへ問い合わせる前に誤投入として拒否することを保証する。
 #[tokio::test]
 async fn guild_mismatch_is_reported_before_reading_discord() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -399,6 +412,7 @@ async fn guild_mismatch_is_reported_before_reading_discord() {
     );
 }
 
+/// Snowflake形式でないGuild IDをデシリアライズ時に拒否し、不正なstateを後段へ渡さない。
 #[tokio::test]
 async fn non_numeric_state_guild_id_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -413,6 +427,7 @@ async fn non_numeric_state_guild_id_is_reported() {
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("Guild ID")));
 }
 
+/// 予約論理ID everyoneをstateに保存する旧・不正形式を、stateモデルの検証で拒否することを保証する。
 #[tokio::test]
 async fn everyone_mapping_in_state_is_rejected() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -431,6 +446,7 @@ async fn everyone_mapping_in_state_is_rejected() {
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("everyone") && message.contains("state に含めず")));
 }
 
+/// 複数の論理IDが同じRole Snowflakeを指す曖昧なstateを拒否することを保証する。
 #[tokio::test]
 async fn duplicate_snowflakes_in_state_are_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -448,6 +464,7 @@ async fn duplicate_snowflakes_in_state_are_reported() {
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("同じ Snowflake 200")));
 }
 
+/// JSONの重複キーがMap変換で黙って上書きされず、不正なstateとして報告されることを保証する。
 #[tokio::test]
 async fn duplicate_logical_id_keys_in_state_are_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -467,6 +484,7 @@ async fn duplicate_logical_id_keys_in_state_are_reported() {
     );
 }
 
+/// 新規Role用に生成する論理IDが古いstateの予約と衝突した場合、誤対応せず拒否することを保証する。
 #[tokio::test]
 async fn generated_logical_id_collision_with_stale_state_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -481,6 +499,7 @@ async fn generated_logical_id_collision_with_stale_state_is_reported() {
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("論理 ID role_200")));
 }
 
+/// タイプミスなどの未知フィールドを無視せず、definitionの入力エラーとして報告することを保証する。
 #[tokio::test]
 async fn unknown_definition_keys_are_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -501,6 +520,7 @@ async fn unknown_definition_keys_are_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(_)));
 }
 
+/// Roleから未参照の設定セットも検証し、潜在的な不正定義を見逃さないことを保証する。
 #[tokio::test]
 async fn invalid_unreferenced_settings_set_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -521,6 +541,7 @@ async fn invalid_unreferenced_settings_set_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("color")));
 }
 
+/// 未参照設定セット内でも無効なdefault指定を拒否し、定義全体を一貫して検証する。
 #[tokio::test]
 async fn false_default_in_unreferenced_settings_set_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -541,6 +562,7 @@ async fn false_default_in_unreferenced_settings_set_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("default")));
 }
 
+/// 未参照設定セット内の未知権限も検出し、将来参照された際の遅延エラーを防ぐ。
 #[tokio::test]
 async fn unknown_permission_in_unreferenced_settings_set_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -561,6 +583,7 @@ async fn unknown_permission_in_unreferenced_settings_set_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の権限")));
 }
 
+/// 対応外schema_versionのdefinitionを拒否し、異なる解釈でRoleを更新しないことを保証する。
 #[tokio::test]
 async fn unsupported_definition_version_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -576,12 +599,14 @@ async fn unsupported_definition_version_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("schema_version")));
 }
 
+/// 利用者向けサンプルTOMLが現在のDefinitionFileとして読み取れる状態を維持する。
 #[test]
 fn editor_sample_matches_the_supported_definition_shape() {
     let sample = include_str!("../../../../../../docs/examples/discord-role-management.toml");
     toml::from_str::<DefinitionFile>(sample).unwrap();
 }
 
+/// Roleが存在しない設定セットを参照した場合、合成処理へ進む前に定義エラーとして報告する。
 #[tokio::test]
 async fn unknown_settings_set_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -602,6 +627,7 @@ async fn unknown_settings_set_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の設定セット")));
 }
 
+/// 参照専用Roleへの管理属性指定を拒否し、更新されない設定を利用者に誤認させない。
 #[tokio::test]
 async fn reference_role_with_managed_attributes_is_reported() {
     let service = RoleManagementService::new(StatefulFakeRoleSource {
@@ -654,6 +680,7 @@ impl RoleTarget for ApplyingFakeRoleSource {
     }
 }
 
+/// applyが明示属性だけを更新し、省略された権限や属性を現在値のまま保持することを保証する。
 #[tokio::test]
 async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
     let mut moderator = role("200", "運営");
@@ -717,6 +744,7 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
     );
 }
 
+/// 確認後に管理対象の現在値が変わった場合、古いplanを適用せず再planを要求することを保証する。
 #[tokio::test]
 async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirmation() {
     let source = ApplyingFakeRoleSource {
@@ -751,6 +779,7 @@ async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirm
     assert!(source.updates.lock().unwrap().is_empty());
 }
 
+/// 更新応答が不明で再取得値も希望値と違う場合、成功扱いせず以降の更新を停止する。
 #[tokio::test]
 async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
     let source = ApplyingFakeRoleSource {
@@ -806,6 +835,7 @@ impl RoleTarget for NeverCompletesRoleUpdate {
     }
 }
 
+/// 更新期限超過時に進捗を不明として返し、未完了変更を安全に再投入できることを保証する。
 #[tokio::test]
 async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     let catalog = RoleCatalog {
@@ -859,6 +889,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     assert!(resubmitted.pending.is_empty());
 }
 
+/// 処理開始時点で期限切れなら更新を一件も始めず、取得済みの最新stateを返すことを保証する。
 #[tokio::test]
 async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() {
     let source = ApplyingFakeRoleSource {
@@ -919,6 +950,7 @@ impl RoleTarget for FailsOnSecondUpdate {
     }
 }
 
+/// 途中の更新失敗で処理を停止し、適用済みと未適用の差分を正確に分けて返すことを保証する。
 #[tokio::test]
 async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes() {
     let source = FailsOnSecondUpdate {
@@ -991,6 +1023,7 @@ impl RoleTarget for RefetchFailsAfterAppliedUpdate {
     }
 }
 
+/// Discordが更新受理を返した後の再取得失敗でも、確定済み更新を未適用へ戻さないことを保証する。
 #[tokio::test]
 async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
     let source = RefetchFailsAfterAppliedUpdate {
@@ -1050,6 +1083,7 @@ impl RoleTarget for BlockingRoleTarget {
     }
 }
 
+/// 同一Guildへの並行applyを待機させず拒否し、競合更新と二重適用を防ぐ。
 #[tokio::test]
 async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();

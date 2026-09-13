@@ -15,6 +15,7 @@ mod tests {
 
     use super::confirmation::{ConfirmationError, ConfirmationStore};
 
+    /// 確認トークンを発行者だけが期限内に一度だけ消費でき、再利用や期限切れを拒否することを保証する。
     #[test]
     fn confirmation_is_owner_only_expires_after_five_minutes_and_is_consumed_once() {
         let confirmations = ConfirmationStore::default();
@@ -38,6 +39,7 @@ mod tests {
         );
     }
 
+    /// 同じ確認ボタンが同時に押されても一方だけが成功し、Role変更が二重適用されないことを保証する。
     #[test]
     fn concurrent_confirmation_clicks_have_exactly_one_winner() {
         let confirmations = Arc::new(ConfirmationStore::default());
