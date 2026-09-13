@@ -35,10 +35,6 @@ impl From<RoleId> for SerenityRoleId {
     }
 }
 
-fn is_lower_in_hierarchy(position: i16, id: SerenityRoleId, highest_position: i16, highest_id: SerenityRoleId) -> bool {
-    position < highest_position || (position == highest_position && id > highest_id)
-}
-
 pub struct SerenityRoleSource<'a> {
     http: &'a Http,
     bot_user_id: UserId,
@@ -90,9 +86,9 @@ impl RoleSource for SerenityRoleSource<'_> {
             .into_iter()
             .map(|role| RoleSnapshot {
                 id: RoleId::from(role.id),
-                manageable: role.id != everyone_id
-                    && !role.managed()
-                    && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
+                // Serenity の Role::Ord が Discord の階層順（position、同値時は Snowflake）を表す。
+                // @everyone は通常の階層編集ではなく、基底権限の更新対象として明示的に許可する。
+                manageable: role.id == everyone_id || (!role.managed() && role.cmp(&bot_highest_role).is_lt()),
                 name: role.name.to_string(),
                 color: role.colour.0,
                 hoist: role.hoist(),
@@ -164,26 +160,5 @@ impl RoleTarget for SerenityRoleSource<'_> {
             }
             Err(error) => Err(ManagementError::RoleSource(error.to_string())),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn same_position_role_with_larger_snowflake_is_lower() {
-        assert!(is_lower_in_hierarchy(
-            10,
-            SerenityRoleId::new(201),
-            10,
-            SerenityRoleId::new(200)
-        ));
-        assert!(!is_lower_in_hierarchy(
-            10,
-            SerenityRoleId::new(199),
-            10,
-            SerenityRoleId::new(200)
-        ));
     }
 }
