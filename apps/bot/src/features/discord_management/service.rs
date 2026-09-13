@@ -21,6 +21,7 @@ pub struct RoleSnapshot {
 pub struct RoleCatalog {
     pub roles: Vec<RoleSnapshot>,
     pub permission_names: BTreeSet<String>,
+    pub grantable_permissions: BTreeSet<String>,
     pub default_permissions: BTreeMap<String, bool>,
 }
 
@@ -334,6 +335,7 @@ fn build_plan(
             actual,
             &desired_attributes,
             &catalog.default_permissions,
+            &catalog.grantable_permissions,
             &mut changes,
         )?;
     }
