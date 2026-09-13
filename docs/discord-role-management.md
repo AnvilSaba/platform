@@ -14,6 +14,8 @@ cargo run --package bot --locked -- --register-guild <TEST_GUILD_ID>
 
 Bot をテスト Guild に導入する際は `applications.commands` と `bot` scope を使い、少なくとも `View Channels` と `Manage Roles` を付与します。Bot が扱えるのは Bot 自身の最上位 Role より下にある、Discord integration に管理されていない Role だけです。
 
+`@everyone` は予約論理 ID `everyone` で表し、state の Role 対応表には含めません。Guild ID から自動的に解決されます。基底権限だけを管理し、名前・色・表示・メンション可否は管理しません。export では `@everyone` の権限を true/false とも列挙しますが、通常 Role は有効な権限だけを列挙します。通常 Role で省略された権限ビットは変更されず、明示的に `false` を指定した権限だけが無効化されます。
+
 ## 操作手順
 
 1. `/role_export` を state 添付なしで実行し、`discord-roles.toml` と `discord-state.json` を保存します。
