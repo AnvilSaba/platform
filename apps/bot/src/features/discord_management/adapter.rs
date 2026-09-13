@@ -50,14 +50,11 @@ impl<'a> SerenityRoleSource<'a> {
 impl RoleSource for SerenityRoleSource<'_> {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
         let guild_id = SerenityGuildId::from(*guild_id);
-        let roles = guild_id
-            .roles(self.http)
-            .await
-            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+        let roles = guild_id.roles(self.http).await.map_err(map_role_catalog_error)?;
         let bot_member = guild_id
             .member(self.http, self.bot_user_id)
             .await
-            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+            .map_err(map_role_catalog_error)?;
 
         let everyone_id = SerenityRoleId::new(guild_id.get());
         let everyone_permissions = roles
@@ -122,6 +119,15 @@ impl RoleSource for SerenityRoleSource<'_> {
                 .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
                 .collect(),
         })
+    }
+}
+
+fn map_role_catalog_error(error: SerenityError) -> ManagementError {
+    match error {
+        SerenityError::Http(error) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+            ManagementError::RoleCatalogPermissionDenied(error.to_string())
+        }
+        error => ManagementError::RoleSource(error.to_string()),
     }
 }
 

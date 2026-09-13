@@ -119,6 +119,8 @@ pub trait RoleTarget: RoleSource {
 pub enum ManagementError {
     #[error("Discord から Role を取得できません: {0}")]
     RoleSource(String),
+    #[error("Discord から Role を取得する権限が不足しています: {0}")]
+    RoleCatalogPermissionDenied(String),
     #[error("Role の操作権限が不足しています: {0}")]
     RolePermissionDenied(String),
     #[error("定義ファイルを生成できません: {0}")]
@@ -188,6 +190,7 @@ pub enum RoleApplyStatus {
     DeadlineExceeded,
     DeletionPermissionRequired,
     DeletionPermissionDenied(String),
+    DeletionVerificationPermissionDenied(String),
     CreationResponseUnknown,
     DeletionResponseUnknown,
     DeletionVerificationIndeterminate(String),
@@ -419,6 +422,13 @@ fn build_plan(
             if !state.pending_deletions.contains(logical_id) && !actual_roles.contains_key(&discord_id) {
                 return Err(ManagementError::InvalidState(format!(
                     "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+                )));
+            }
+            if let Some(actual) = actual_roles.get(&discord_id)
+                && !actual.manageable
+            {
+                return Err(ManagementError::InvalidState(format!(
+                    "Role {logical_id} の Snowflake {discord_id} は Bot が管理できないため削除できません"
                 )));
             }
             lifecycle.push(RoleLifecycleChange::Delete {
