@@ -56,7 +56,7 @@ async fn main() -> Result<(), AppError> {
         .options(FrameworkOptions {
             prefix_options: PrefixFrameworkOptions {
                 prefix: None,
-                mention_as_prefix: false,
+                mention_as_prefix: cfg!(debug_assertions),
                 ..Default::default()
             },
             commands: commands(),
