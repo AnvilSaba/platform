@@ -730,13 +730,18 @@ struct LifecycleFakeRoleSource {
     delete_permission_denied: bool,
     apply_delete: bool,
     catalog_error_on_call: Option<usize>,
+    catalog_permission_denied: bool,
 }
 
 impl RoleSource for LifecycleFakeRoleSource {
     async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
         let call = self.catalog_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if self.catalog_error_on_call == Some(call) {
-            return Err(ManagementError::RoleSource("取得に失敗しました".to_owned()));
+            return Err(if self.catalog_permission_denied {
+                ManagementError::RoleCatalogPermissionDenied("Role の閲覧権限がありません".to_owned())
+            } else {
+                ManagementError::RoleSource("取得に失敗しました".to_owned())
+            });
         }
         Ok(self.catalog.lock().unwrap().clone())
     }
@@ -802,6 +807,7 @@ fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
         delete_permission_denied: false,
         apply_delete: true,
         catalog_error_on_call: None,
+        catalog_permission_denied: false,
     }
 }
 
@@ -917,6 +923,49 @@ async fn unknown_create_response_is_recorded_without_retrying_creation() {
             .await
             .is_err()
     );
+}
+
+/// 削除済み Role の再作成応答不明でも旧 ID と pending 状態を矛盾なく保持することを保証する。
+#[tokio::test]
+async fn unknown_recreation_response_keeps_deleted_mapping_until_confirmation() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.create_outcome = RoleCreateOutcome::ResponseUnknown;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"再作成\"\n";
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "deleted_roles": ["moderator"]
+    }"#;
+    let plan = service.plan_roles(guild_id(100), definition, state_json).await.unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["moderator"], "200");
+    assert_eq!(returned_state["deleted_roles"], serde_json::json!(["moderator"]));
+    assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
+    let error = service
+        .plan_roles(guild_id(100), definition, &result.state_json)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("作成結果不明")));
 }
 
 /// 定義から Role を外す管理解除が実物を残し、state だけを更新して再適用を無差分にすることを保証する。
@@ -1247,6 +1296,45 @@ async fn unknown_delete_response_with_failed_verification_is_indeterminate() {
     assert_eq!(returned_state["roles"]["unused"], "200");
     assert_eq!(returned_state["pending_deletions"], serde_json::json!(["unused"]));
     assert!(returned_state.get("deleted_roles").is_none());
+}
+
+/// 削除後の存在確認で閲覧権限が不足した場合、一般的な取得不能とは別に返すことを保証する。
+#[tokio::test]
+async fn unknown_delete_response_with_verification_permission_shortage_is_distinguished() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
+    source.apply_delete = false;
+    source.catalog_error_on_call = Some(3);
+    source.catalog_permission_denied = true;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result.status,
+        RoleApplyStatus::DeletionVerificationPermissionDenied(message) if message.contains("閲覧権限")
+    ));
 }
 
 /// active 対応先が予期せず消えた場合、自動再作成せず state エラーで停止することを保証する。

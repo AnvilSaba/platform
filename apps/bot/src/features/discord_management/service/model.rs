@@ -500,7 +500,7 @@ pub(super) fn validate_state(state: &StateFile) -> Result<(), ValidationError> {
                 format!("削除済み Role {logical_id} に対応する Snowflake がありません"),
             ));
         }
-        if state.pending_deletions.contains(logical_id) || state.pending_creations.contains(logical_id) {
+        if state.pending_deletions.contains(logical_id) {
             return Err(validation_error(
                 "conflicting_role_operation",
                 format!("Role {logical_id} に競合する未完了状態があります"),
@@ -516,7 +516,7 @@ pub(super) fn validate_state(state: &StateFile) -> Result<(), ValidationError> {
         }
     }
     for logical_id in &state.pending_creations {
-        if state.roles.contains_key(logical_id) {
+        if state.roles.contains_key(logical_id) && !state.deleted_roles.contains(logical_id) {
             return Err(validation_error(
                 "invalid_pending_creation",
                 format!("作成結果不明の Role {logical_id} に Snowflake が設定されています"),
