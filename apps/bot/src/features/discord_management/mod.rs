@@ -4,7 +4,7 @@ mod confirmation;
 mod ids;
 mod service;
 
-pub use command::{role_apply, role_export, role_plan};
+pub use command::{bind, role_apply, role_export, role_plan};
 
 #[cfg(test)]
 mod tests {

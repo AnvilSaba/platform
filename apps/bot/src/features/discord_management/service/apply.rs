@@ -6,7 +6,7 @@ use std::{
 
 use super::model::{
     DefinitionFile, RoleAttributes, StateFile, compose_attributes, deserialize_state_for_guild, resolve,
-    resolve_role_id,
+    resolve_role_id, serialize_state,
 };
 use super::{
     ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCatalog, RoleCreate, RoleCreateOutcome,
@@ -586,12 +586,6 @@ fn desired_role_attributes(definition: &DefinitionFile) -> Vec<(RoleLogicalId, R
             )
         })
         .collect()
-}
-
-fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
-    serde_json::to_string_pretty(state)
-        .map(|json| format!("{json}\n"))
-        .map_err(|error| ManagementError::SerializeState(error.to_string()))
 }
 
 fn build_role_create(

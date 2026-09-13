@@ -48,6 +48,7 @@ pub fn commands() -> Vec<AppCommand> {
         auth::create_keyword_button,
         question::question,
         pin::pin,
+        discord_management::bind,
         discord_management::role_apply,
         discord_management::role_export,
         discord_management::role_plan,
