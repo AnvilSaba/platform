@@ -360,6 +360,22 @@ pub(super) fn everyone_logical_id() -> RoleLogicalId {
     RoleLogicalId::parse("everyone").expect("予約済み論理 ID は常に有効です")
 }
 
+pub(super) fn resolve_role_id(logical_id: &RoleLogicalId, state: &StateFile) -> Result<RoleId, ManagementError> {
+    if *logical_id == everyone_logical_id() {
+        return Ok(state
+            .guild_id
+            .to_string()
+            .parse::<RoleId>()
+            .expect("Guild Snowflake は Role Snowflake と同じ形式です"));
+    }
+
+    state
+        .roles
+        .get(logical_id)
+        .copied()
+        .ok_or_else(|| ManagementError::InvalidState(format!("Role {logical_id} の対応がありません")))
+}
+
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(validate = "Validate::validate")]
 #[serde(deny_unknown_fields)]

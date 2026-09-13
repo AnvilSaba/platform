@@ -299,21 +299,8 @@ fn build_plan(
     let mut changes = Vec::new();
 
     for (logical_id, desired) in &definition.roles {
-        let everyone_id;
-        let discord_id = if *logical_id == everyone_logical_id() {
-            everyone_id = state
-                .guild_id
-                .to_string()
-                .parse::<RoleId>()
-                .expect("Guild Snowflake は Role Snowflake と同じ形式です");
-            &everyone_id
-        } else {
-            state
-                .roles
-                .get(logical_id)
-                .ok_or_else(|| ManagementError::InvalidState(format!("Role {logical_id} の対応がありません")))?
-        };
-        let actual = actual_roles.get(discord_id).ok_or_else(|| {
+        let discord_id = resolve_role_id(logical_id, state)?;
+        let actual = actual_roles.get(&discord_id).ok_or_else(|| {
             ManagementError::InvalidState(format!(
                 "Role {logical_id} の Snowflake {discord_id} が Guild に存在しません"
             ))
@@ -331,7 +318,7 @@ fn build_plan(
         }
         compare_attributes(
             logical_id,
-            discord_id,
+            &discord_id,
             actual,
             &desired_attributes,
             &catalog.default_permissions,

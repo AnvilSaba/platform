@@ -8,7 +8,10 @@ use super::{
     ManagementError, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan, RoleSnapshot, RoleTarget,
     RoleUpdate, RoleUpdateOutcome, build_plan,
 };
-use super::model::{DefinitionFile, RoleAttributes, StateFile, compose_attributes, deserialize_state_for_guild, resolve};
+use super::model::{
+    DefinitionFile, RoleAttributes, StateFile, compose_attributes, deserialize_state_for_guild, resolve,
+    resolve_role_id,
+};
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
 const RESULT_STATE_REFRESH_BUDGET: Duration = Duration::from_secs(90);
@@ -112,9 +115,7 @@ where
         }
 
         for (logical_id, role_definition) in &definition.roles {
-            let Some(role_id) = state.roles.get(logical_id) else {
-                continue;
-            };
+            let role_id = resolve_role_id(logical_id, &state)?;
             let role_changes = pending
                 .iter()
                 .filter(|change| &change.logical_id == logical_id)
@@ -132,7 +133,7 @@ where
                 });
             }
 
-            let actual = catalog.roles.iter().find(|role| role.id == *role_id).ok_or_else(|| {
+            let actual = catalog.roles.iter().find(|role| role.id == role_id).ok_or_else(|| {
                 ManagementError::InvalidState(format!(
                     "Role {logical_id} の Snowflake {role_id} が Guild に存在しません"
                 ))
@@ -145,7 +146,7 @@ where
 
             let outcome = match tokio::time::timeout(
                 processing_deadline.saturating_duration_since(Instant::now()),
-                self.source.update_role(&guild_id, role_id, update.clone()),
+                self.source.update_role(&guild_id, &role_id, update.clone()),
             )
             .await
             {
@@ -197,7 +198,7 @@ where
             let matches = catalog
                 .roles
                 .iter()
-                .find(|role| role.id == *role_id)
+                .find(|role| role.id == role_id)
                 .is_some_and(|role| role_matches_update(role, &update));
             if !matches {
                 return Ok(RoleApplyResult {
