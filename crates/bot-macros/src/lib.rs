@@ -8,7 +8,7 @@ pub fn event_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if function.sig.asyncness.is_none() {
         return syn::Error::new_spanned(
-            &function.sig.fn_token,
+            function.sig.fn_token,
             "`#[event_handler]` can only be used on async functions",
         )
         .into_compile_error()
@@ -74,7 +74,7 @@ pub fn event_error_handler(_attr: TokenStream, item: TokenStream) -> TokenStream
 
     if function.sig.asyncness.is_none() {
         return syn::Error::new_spanned(
-            &function.sig.fn_token,
+            function.sig.fn_token,
             "`#[event_error_handler]` can only be used on async functions",
         )
         .into_compile_error()
