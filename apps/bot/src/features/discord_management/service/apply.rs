@@ -10,8 +10,8 @@ use super::model::{
 };
 use super::{
     ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCreate, RoleCreateOutcome,
-    RoleDeleteOutcome, RoleLifecycleChange, RoleManagementService, RolePlan, RoleSnapshot, RoleTarget, RoleUpdate,
-    RoleUpdateOutcome, build_plan,
+    RoleDeleteOutcome, RoleLifecycleChange, RoleLifecycleTarget, RoleManagementService, RolePlan, RoleSnapshot,
+    RoleUpdate, RoleUpdateOutcome, build_plan,
 };
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
@@ -47,7 +47,7 @@ impl Drop for GuildApplyGuard {
 
 impl<S> RoleManagementService<S>
 where
-    S: RoleTarget,
+    S: RoleLifecycleTarget,
 {
     pub async fn apply_roles(
         &self,

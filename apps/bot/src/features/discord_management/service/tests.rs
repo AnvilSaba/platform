@@ -701,7 +701,7 @@ impl RoleSource for ApplyingFakeRoleSource {
     }
 }
 
-impl RoleTarget for ApplyingFakeRoleSource {
+impl RoleUpdater for ApplyingFakeRoleSource {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -717,6 +717,22 @@ impl RoleTarget for ApplyingFakeRoleSource {
         Ok(self.outcome)
     }
 }
+
+macro_rules! impl_update_only_lifecycle_target {
+    ($target:ty) => {
+        impl RoleLifecycleTarget for $target {
+            async fn create_role(&self, _: &GuildId, _: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
+                unreachable!("この fake は Role 更新だけを検証します")
+            }
+
+            async fn delete_role(&self, _: &GuildId, _: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
+                unreachable!("この fake は Role 更新だけを検証します")
+            }
+        }
+    };
+}
+
+impl_update_only_lifecycle_target!(ApplyingFakeRoleSource);
 
 #[derive(Clone)]
 struct LifecycleFakeRoleSource {
@@ -747,7 +763,7 @@ impl RoleSource for LifecycleFakeRoleSource {
     }
 }
 
-impl RoleTarget for LifecycleFakeRoleSource {
+impl RoleUpdater for LifecycleFakeRoleSource {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -756,7 +772,9 @@ impl RoleTarget for LifecycleFakeRoleSource {
     ) -> Result<RoleUpdateOutcome, ManagementError> {
         Ok(RoleUpdateOutcome::Applied)
     }
+}
 
+impl RoleLifecycleTarget for LifecycleFakeRoleSource {
     async fn create_role(&self, _guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let call = {
             let mut creates = self.creates.lock().unwrap();
@@ -1615,7 +1633,7 @@ impl RoleSource for NeverCompletesRoleUpdate {
     }
 }
 
-impl RoleTarget for NeverCompletesRoleUpdate {
+impl RoleUpdater for NeverCompletesRoleUpdate {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -1625,6 +1643,8 @@ impl RoleTarget for NeverCompletesRoleUpdate {
         std::future::pending().await
     }
 }
+
+impl_update_only_lifecycle_target!(NeverCompletesRoleUpdate);
 
 /// 更新期限超過時に進捗を不明として返し、未完了変更を安全に再投入できることを保証する。
 #[tokio::test]
@@ -1727,7 +1747,7 @@ impl RoleSource for FailsOnSecondUpdate {
     }
 }
 
-impl RoleTarget for FailsOnSecondUpdate {
+impl RoleUpdater for FailsOnSecondUpdate {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -1742,6 +1762,8 @@ impl RoleTarget for FailsOnSecondUpdate {
         Ok(RoleUpdateOutcome::Applied)
     }
 }
+
+impl_update_only_lifecycle_target!(FailsOnSecondUpdate);
 
 /// 途中の更新失敗で処理を停止し、適用済みと未適用の差分を正確に分けて返すことを保証する。
 #[tokio::test]
@@ -1806,7 +1828,7 @@ impl RoleSource for RefetchFailsAfterAppliedUpdate {
     }
 }
 
-impl RoleTarget for RefetchFailsAfterAppliedUpdate {
+impl RoleUpdater for RefetchFailsAfterAppliedUpdate {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -1816,6 +1838,8 @@ impl RoleTarget for RefetchFailsAfterAppliedUpdate {
         Ok(RoleUpdateOutcome::Applied)
     }
 }
+
+impl_update_only_lifecycle_target!(RefetchFailsAfterAppliedUpdate);
 
 /// Discordが更新受理を返した後の再取得失敗でも、確定済み更新を未適用へ戻さないことを保証する。
 #[tokio::test]
@@ -1863,7 +1887,7 @@ impl RoleSource for BlockingRoleTarget {
     }
 }
 
-impl RoleTarget for BlockingRoleTarget {
+impl RoleUpdater for BlockingRoleTarget {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
@@ -1877,6 +1901,8 @@ impl RoleTarget for BlockingRoleTarget {
         Ok(RoleUpdateOutcome::Applied)
     }
 }
+
+impl_update_only_lifecycle_target!(BlockingRoleTarget);
 
 /// 同一Guildへの並行applyを待機させず拒否し、競合更新と二重適用を防ぐ。
 #[tokio::test]
