@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    marker::PhantomData,
 };
 
 use serde::{
@@ -11,7 +12,10 @@ use serdev::{Deserialize, Serialize};
 use validator::{Validate, ValidationError};
 
 use super::{AttributeChange, ManagementError, RoleSnapshot, SCHEMA_VERSION};
-use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId, RoleSettingsSetId};
+use crate::features::discord_management::ids::{
+    ChannelId, ChannelLogicalId, ChannelSettingsSetId, GuildId, MemberId, MemberLogicalId, RoleId, RoleLogicalId,
+    RoleSettingsSetId,
+};
 
 pub(super) fn compose_attributes(
     definition: &RoleDefinition,
@@ -44,6 +48,61 @@ pub(super) fn validate_definition(definition: &DefinitionFile) -> Result<(), Val
                     format!("Role {logical_id} が未知の設定セット {settings_set} を参照しています"),
                 ));
             }
+        }
+    }
+    for (logical_id, channel) in &definition.channels {
+        validate_channel_settings_sets(logical_id, channel, &definition.settings_sets.channel)?;
+    }
+    for (logical_id, member) in &definition.members {
+        if !matches!(member.mode, RoleMode::Reference) {
+            return Err(validation_error(
+                "member_must_be_reference",
+                format!("Member {logical_id} は参照専用として宣言してください"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_channel_settings_sets(
+    logical_id: &ChannelLogicalId,
+    channel: &ChannelDefinition,
+    settings_sets: &BTreeMap<ChannelSettingsSetId, ChannelSettingsSet>,
+) -> Result<(), ValidationError> {
+    let Some(value) = channel.attributes.get("settings_sets") else {
+        return Ok(());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(validation_error(
+            "invalid_channel_settings_sets",
+            format!("Channel {logical_id} の settings_sets は配列で指定してください"),
+        ));
+    };
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let Some(value) = value.as_str() else {
+            return Err(validation_error(
+                "invalid_channel_settings_set_id",
+                format!("Channel {logical_id} の settings_sets に文字列でない値があります"),
+            ));
+        };
+        let settings_set = ChannelSettingsSetId::parse(value).map_err(|error| {
+            validation_error(
+                "invalid_channel_settings_set_id",
+                format!("Channel {logical_id} の settings_sets に不正な ID {value}: {error}"),
+            )
+        })?;
+        if !seen.insert(settings_set.clone()) {
+            return Err(validation_error(
+                "duplicate_channel_settings_set",
+                format!("Channel {logical_id} で設定セット {settings_set} が重複しています"),
+            ));
+        }
+        if !settings_sets.contains_key(&settings_set) {
+            return Err(validation_error(
+                "unknown_channel_settings_set",
+                format!("Channel {logical_id} が未知の設定セット {settings_set} を参照しています"),
+            ));
         }
     }
     Ok(())
@@ -253,6 +312,18 @@ pub(super) struct DefinitionFile {
     #[validate(nested)]
     #[serde(default)]
     pub(super) roles: BTreeMap<RoleLogicalId, RoleDefinition>,
+    #[validate(nested)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) channels: BTreeMap<ChannelLogicalId, ChannelDefinition>,
+    #[validate(nested)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) members: BTreeMap<MemberLogicalId, MemberDefinition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) message_sets: BTreeMap<String, toml::Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) threads: BTreeMap<String, toml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) order: Option<toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
@@ -262,11 +333,14 @@ pub(super) struct RoleSettingsSets {
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) role: BTreeMap<RoleSettingsSetId, RoleAttributes>,
+    #[validate(nested)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) channel: BTreeMap<ChannelSettingsSetId, ChannelSettingsSet>,
 }
 
 impl RoleSettingsSets {
     fn is_empty(&self) -> bool {
-        self.role.is_empty()
+        self.role.is_empty() && self.channel.is_empty()
     }
 }
 
@@ -296,6 +370,105 @@ impl RoleMode {
     fn is_managed(&self) -> bool {
         matches!(self, Self::Managed)
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+#[validate(schema(function = "validate_channel_definition"))]
+#[serde(validate = "Validate::validate")]
+pub(super) struct ChannelDefinition {
+    #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
+    pub(super) mode: RoleMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ensure: Option<Ensure>,
+    #[serde(flatten)]
+    pub(super) attributes: BTreeMap<String, toml::Value>,
+}
+
+impl ChannelDefinition {
+    pub(super) fn is_absent(&self) -> bool {
+        matches!(self.ensure, Some(Ensure::Absent))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Ensure {
+    Present,
+    Absent,
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+#[serde(validate = "Validate::validate")]
+#[serde(deny_unknown_fields)]
+pub(super) struct MemberDefinition {
+    #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
+    pub(super) mode: RoleMode,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Validate)]
+#[validate(schema(function = "validate_channel_settings_set"))]
+#[serde(validate = "Validate::validate")]
+pub(super) struct ChannelSettingsSet {
+    #[serde(flatten)]
+    pub(super) attributes: BTreeMap<String, toml::Value>,
+}
+
+const CHANNEL_ATTRIBUTE_NAMES: &[&str] = &[
+    "type",
+    "name",
+    "parent",
+    "topic",
+    "nsfw",
+    "slowmode_seconds",
+    "default_auto_archive_minutes",
+    "default_thread_slowmode_seconds",
+    "bitrate",
+    "user_limit",
+    "rtc_region",
+    "video_quality",
+    "permissions_sync",
+    "overwrites",
+    "tags",
+    "require_tag",
+    "default_reaction",
+    "default_sort_order",
+    "default_forum_layout",
+    "settings_sets",
+];
+
+fn validate_channel_definition(channel: &ChannelDefinition) -> Result<(), ValidationError> {
+    validate_channel_attributes(&channel.attributes)?;
+    if matches!(channel.mode, RoleMode::Reference)
+        && (channel.ensure.is_some() || !channel.attributes.is_empty())
+    {
+        return Err(validation_error(
+            "reference_with_managed_attributes",
+            "参照専用 Channel には管理属性を指定できません",
+        ));
+    }
+    if matches!(channel.ensure, Some(Ensure::Absent))
+        && (matches!(channel.mode, RoleMode::Reference) || !channel.attributes.is_empty())
+    {
+        return Err(validation_error(
+            "absent_with_managed_attributes",
+            "削除宣言 Channel には mode や管理属性を指定できません",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_channel_settings_set(settings_set: &ChannelSettingsSet) -> Result<(), ValidationError> {
+    validate_channel_attributes(&settings_set.attributes)
+}
+
+fn validate_channel_attributes(attributes: &BTreeMap<String, toml::Value>) -> Result<(), ValidationError> {
+    if let Some(name) = attributes.keys().find(|name| !CHANNEL_ATTRIBUTE_NAMES.contains(&name.as_str())) {
+        return Err(validation_error(
+            "unknown_channel_attribute",
+            format!("Channel の未知の属性 {name} が指定されています"),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
@@ -388,21 +561,43 @@ pub(super) struct StateFile {
     pub(super) schema_version: u32,
     pub(super) guild_id: GuildId,
     #[validate(custom(function = "validate_role_mappings"))]
+    #[serde(default)]
     #[serde(deserialize_with = "deserialize_unique_role_mappings")]
     pub(super) roles: BTreeMap<RoleLogicalId, RoleId>,
+    #[validate(custom(function = "validate_channel_mappings"))]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "deserialize_unique_channel_mappings")]
+    pub(super) channels: BTreeMap<ChannelLogicalId, ChannelId>,
+    #[validate(custom(function = "validate_member_mappings"))]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "deserialize_unique_member_mappings")]
+    pub(super) members: BTreeMap<MemberLogicalId, MemberId>,
 }
 
-pub(super) fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
+fn deserialize_unique_mappings<'de, D, LogicalIdType, DiscordIdType>(
+    deserializer: D,
+    resource_type: &'static str,
+) -> Result<BTreeMap<LogicalIdType, DiscordIdType>, D::Error>
 where
     D: Deserializer<'de>,
+    LogicalIdType: serde::Deserialize<'de> + Clone + Ord + fmt::Display,
+    DiscordIdType: serde::Deserialize<'de> + Copy,
 {
-    struct UniqueRoleMappingsVisitor;
+    struct UniqueMappingsVisitor<LogicalIdType, DiscordIdType> {
+        resource_type: &'static str,
+        marker: PhantomData<fn() -> (LogicalIdType, DiscordIdType)>,
+    }
 
-    impl<'de> Visitor<'de> for UniqueRoleMappingsVisitor {
-        type Value = BTreeMap<RoleLogicalId, RoleId>;
+    impl<'de, LogicalIdType, DiscordIdType> Visitor<'de>
+        for UniqueMappingsVisitor<LogicalIdType, DiscordIdType>
+    where
+        LogicalIdType: serde::Deserialize<'de> + Clone + Ord + fmt::Display,
+        DiscordIdType: serde::Deserialize<'de> + Copy,
+    {
+        type Value = BTreeMap<LogicalIdType, DiscordIdType>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("重複しない Role 論理 ID と Snowflake の対応表")
+            write!(formatter, "重複しない {} 論理 ID と Snowflake の対応表", self.resource_type)
         }
 
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -410,16 +605,45 @@ where
             A: MapAccess<'de>,
         {
             let mut mappings = BTreeMap::new();
-            while let Some((logical_id, discord_id)) = map.next_entry::<RoleLogicalId, RoleId>()? {
+            while let Some((logical_id, discord_id)) = map.next_entry::<LogicalIdType, DiscordIdType>()? {
                 if mappings.insert(logical_id.clone(), discord_id).is_some() {
-                    return Err(de::Error::custom(format!("Role 論理 ID {logical_id} が重複しています")));
+                    return Err(de::Error::custom(format!(
+                        "{} 論理 ID {logical_id} が重複しています",
+                        self.resource_type
+                    )));
                 }
             }
             Ok(mappings)
         }
     }
 
-    deserializer.deserialize_map(UniqueRoleMappingsVisitor)
+    deserializer.deserialize_map(UniqueMappingsVisitor {
+        resource_type,
+        marker: PhantomData,
+    })
+}
+
+pub(super) fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_unique_mappings(deserializer, "Role")
+}
+
+pub(super) fn deserialize_unique_channel_mappings<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<ChannelLogicalId, ChannelId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_unique_mappings(deserializer, "Channel")
+}
+
+pub(super) fn deserialize_unique_member_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<MemberLogicalId, MemberId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_unique_mappings(deserializer, "Member")
 }
 
 pub(super) fn deserialize_state_for_guild(contents: &str, guild_id: GuildId) -> Result<StateFile, ManagementError> {
@@ -431,7 +655,246 @@ pub(super) fn deserialize_state_for_guild(contents: &str, guild_id: GuildId) -> 
             actual_guild_id: guild_id,
         });
     }
+    if state.roles.values().any(|role_id| role_id.get() == guild_id.get()) {
+        return Err(ManagementError::InvalidState(
+            "予約参照 everyone の Role ID は state の別の論理 ID に対応付けできません".to_owned(),
+        ));
+    }
     Ok(state)
+}
+
+pub(super) fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
+    serde_json::to_string_pretty(state)
+        .map(|json| format!("{json}\n"))
+        .map_err(|error| ManagementError::SerializeState(error.to_string()))
+}
+
+pub(super) fn validate_references(definition: &DefinitionFile, state: &StateFile) -> Result<(), ManagementError> {
+    for logical_id in definition.roles.keys() {
+        if *logical_id != everyone_logical_id() && !state.roles.contains_key(logical_id) {
+            return Err(ManagementError::InvalidState(format!(
+                "Role {logical_id} の対応がありません"
+            )));
+        }
+    }
+
+    for (logical_id, channel) in &definition.channels {
+        if channel.is_absent() {
+            continue;
+        }
+        if !state.channels.contains_key(logical_id) {
+            return Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の対応がありません"
+            )));
+        }
+        validate_channel_references(logical_id, &channel.attributes, definition, state)?;
+    }
+
+    for (logical_id, member) in &definition.members {
+        if !matches!(member.mode, RoleMode::Reference) {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Member {logical_id} は参照専用として宣言してください"
+            )));
+        }
+        if !state.members.contains_key(logical_id) {
+            return Err(ManagementError::InvalidState(format!(
+                "Member {logical_id} の対応がありません"
+            )));
+        }
+    }
+
+    for (name, message_set) in &definition.message_sets {
+        validate_channel_container_reference("管理メッセージ群", name, message_set, definition, state)?;
+    }
+    for (name, thread) in &definition.threads {
+        validate_channel_container_reference("管理スレッド", name, thread, definition, state)?;
+    }
+
+    for (name, settings_set) in &definition.settings_sets.channel {
+        validate_channel_references(
+            &ChannelLogicalId::parse(format!("settings_set_{name}"))
+                .expect("設定セット検証用の論理 ID は常に有効です"),
+            &settings_set.attributes,
+            definition,
+            state,
+        )?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn validate_role_plan_scope(definition: &DefinitionFile) -> Result<(), ManagementError> {
+    if let Some(logical_id) = definition
+        .channels
+        .iter()
+        .find_map(|(logical_id, channel)| (!matches!(channel.mode, RoleMode::Reference)).then_some(logical_id))
+    {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の属性管理は Channel plan の対象外です。参照専用として宣言してください"
+        )));
+    }
+    if let Some(logical_id) = definition
+        .channels
+        .iter()
+        .find_map(|(logical_id, channel)| channel.is_absent().then_some(logical_id))
+    {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の削除管理は Channel plan の対象外です"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_channel_container_reference(
+    resource_kind: &str,
+    resource_name: &str,
+    value: &toml::Value,
+    definition: &DefinitionFile,
+    state: &StateFile,
+) -> Result<(), ManagementError> {
+    let Some(table) = value.as_table() else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "{resource_kind} {resource_name} はテーブルで指定してください"
+        )));
+    };
+    if table
+        .get("ensure")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|ensure| ensure == "absent")
+    {
+        return Ok(());
+    }
+
+    let Some(channel) = table.get("channel") else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "{resource_kind} {resource_name} の channel がありません"
+        )));
+    };
+    let Some(channel) = channel.as_str() else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "{resource_kind} {resource_name} の channel は Channel 論理 ID で指定してください"
+        )));
+    };
+    let channel_id = ChannelLogicalId::parse(channel).map_err(|error| {
+        ManagementError::InvalidDefinition(format!(
+            "{resource_kind} {resource_name} の channel {channel} が不正です: {error}"
+        ))
+    })?;
+    require_channel_reference(
+        &channel_id,
+        definition,
+        state,
+        &format!("{resource_kind} {resource_name} の投稿先"),
+    )
+}
+
+fn validate_channel_references(
+    channel_id: &ChannelLogicalId,
+    attributes: &BTreeMap<String, toml::Value>,
+    definition: &DefinitionFile,
+    state: &StateFile,
+) -> Result<(), ManagementError> {
+    if let Some(parent) = attributes.get("parent") {
+        if let Some(parent) = parent.as_str() {
+            let parent_id = ChannelLogicalId::parse(parent).map_err(|error| {
+                ManagementError::InvalidDefinition(format!(
+                    "Channel {channel_id} の親 {parent} が不正です: {error}"
+                ))
+            })?;
+            require_channel_reference(&parent_id, definition, state, &format!("Channel {channel_id} の親"))?;
+        } else if !is_clear_value(parent) {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {channel_id} の parent は Channel 論理 ID または clear で指定してください"
+            )));
+        }
+    }
+
+    if let Some(overwrites) = attributes.get("overwrites") {
+        let Some(overwrites) = overwrites.as_table() else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {channel_id} の overwrites はテーブルで指定してください"
+            )));
+        };
+        for subject in overwrites.keys() {
+            if subject == "everyone" {
+                continue;
+            }
+            if let Some(logical_id) = subject.strip_prefix("role:") {
+                let logical_id = RoleLogicalId::parse(logical_id).map_err(|error| {
+                    ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の {subject} が不正です: {error}"
+                    ))
+                })?;
+                if logical_id == everyone_logical_id() {
+                    continue;
+                }
+                if !definition.roles.contains_key(&logical_id) {
+                    return Err(ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の権限対象 Role {logical_id} の宣言がありません"
+                    )));
+                }
+                if !state.roles.contains_key(&logical_id) {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Channel {channel_id} の権限対象 Role {logical_id} の対応がありません"
+                    )));
+                }
+            } else if let Some(logical_id) = subject.strip_prefix("member:") {
+                let logical_id = MemberLogicalId::parse(logical_id).map_err(|error| {
+                    ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の {subject} が不正です: {error}"
+                    ))
+                })?;
+                if !definition.members.contains_key(&logical_id) {
+                    return Err(ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の権限対象 Member {logical_id} の宣言がありません"
+                    )));
+                }
+                if !state.members.contains_key(&logical_id) {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Channel {channel_id} の権限対象 Member {logical_id} の対応がありません"
+                    )));
+                }
+            } else {
+                return Err(ManagementError::InvalidDefinition(format!(
+                    "Channel {channel_id} の権限対象 {subject} は everyone、role:<論理 ID>、member:<論理 ID> のいずれかで指定してください"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn require_channel_reference(
+    logical_id: &ChannelLogicalId,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    context: &str,
+) -> Result<(), ManagementError> {
+    let Some(channel) = definition.channels.get(logical_id) else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "{context} Channel {logical_id} の宣言がありません"
+        )));
+    };
+    if channel.is_absent() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "{context} Channel {logical_id} は削除宣言です"
+        )));
+    }
+    if !state.channels.contains_key(logical_id) {
+        return Err(ManagementError::InvalidState(format!(
+            "{context} Channel {logical_id} の対応がありません"
+        )));
+    }
+    Ok(())
+}
+
+fn is_clear_value(value: &toml::Value) -> bool {
+    value
+        .as_table()
+        .and_then(|table| table.get("clear"))
+        .and_then(toml::Value::as_bool)
+        .is_some_and(|clear| clear)
 }
 
 pub(super) fn validation_error(code: &'static str, message: impl Into<String>) -> ValidationError {
@@ -446,12 +909,33 @@ pub(super) fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) ->
         ));
     }
 
+    validate_unique_mappings(roles, "Role")
+}
+
+pub(super) fn validate_channel_mappings(channels: &BTreeMap<ChannelLogicalId, ChannelId>) -> Result<(), ValidationError> {
+    validate_unique_mappings(channels, "Channel")
+}
+
+pub(super) fn validate_member_mappings(members: &BTreeMap<MemberLogicalId, MemberId>) -> Result<(), ValidationError> {
+    validate_unique_mappings(members, "Member")
+}
+
+fn validate_unique_mappings<LogicalIdType, DiscordIdType>(
+    mappings: &BTreeMap<LogicalIdType, DiscordIdType>,
+    resource_type: &str,
+) -> Result<(), ValidationError>
+where
+    LogicalIdType: Clone + Ord + fmt::Display,
+    DiscordIdType: Copy + Ord + fmt::Display,
+{
     let mut seen_ids = BTreeMap::new();
-    for (logical_id, discord_id) in roles {
-        if let Some(first_logical_id) = seen_ids.insert(discord_id, logical_id) {
+    for (logical_id, discord_id) in mappings {
+        if let Some(first_logical_id) = seen_ids.insert(*discord_id, logical_id.clone()) {
             return Err(validation_error(
-                "duplicate_role_snowflake",
-                format!("Role {first_logical_id} と {logical_id} が同じ Snowflake {discord_id} を参照しています"),
+                "duplicate_snowflake",
+                format!(
+                    "{resource_type} {first_logical_id} と {logical_id} が同じ Snowflake {discord_id} を参照しています"
+                ),
             ));
         }
     }

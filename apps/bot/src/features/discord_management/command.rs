@@ -17,7 +17,7 @@ use super::{
     adapter::SerenityRoleSource,
     confirmation::{ConfirmationError, ConfirmationStore},
     ids::GuildId,
-    service::{ManagementError, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan},
+    service::{ManagementError, ResourceType, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan},
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -82,6 +82,59 @@ async fn send_input_error(ctx: AppContext<'_>, error: ManagementError) -> Result
     ctx.send(CreateReply::default().content(format!("入力を確認してください。\n{error}")))
         .await?;
     Ok(())
+}
+
+/// 作成結果が不明な既存 Resource を、所有者が確認した Discord ID と state に bind します。
+#[poise::command(slash_command, ephemeral, guild_only, owners_only)]
+pub async fn bind(
+    ctx: AppContext<'_>,
+    #[description = "希望構成の TOML"] definition: Attachment,
+    #[description = "現在の対応 state JSON"] state: Attachment,
+    #[description = "role、channel、member のいずれか"] resource_type: String,
+    #[description = "definition にある論理 ID"] logical_id: String,
+    #[description = "所有者が確認した Discord ID"] discord_id: String,
+) -> Result<(), AppError> {
+    ctx.defer_ephemeral().await?;
+    let definition_text = match read_text(&definition).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let state_text = match read_text(&state).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let resource_type = match resource_type.parse::<ResourceType>() {
+        Ok(resource_type) => resource_type,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
+    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let service = RoleManagementService::new(source);
+
+    match service
+        .bind_resource(
+            guild_id,
+            &definition_text,
+            &state_text,
+            resource_type,
+            &logical_id,
+            &discord_id,
+        )
+        .await
+    {
+        Ok(result) => {
+            ctx.send(
+                CreateReply::default()
+                    .content(
+                        "対応 state を更新しました。作成結果が不明な Resource は Discord 上で ID を確認してから bind してください。",
+                    )
+                    .attachment(CreateAttachment::bytes(result.state_json, "discord-state.json")),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(error) => send_input_error(ctx, error).await,
+    }
 }
 
 /// 管理可能な Role の現在値と対応 state を出力します。

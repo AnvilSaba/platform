@@ -2,13 +2,16 @@ use std::collections::BTreeMap;
 
 use serenity::{
     Error as SerenityError,
-    all::{Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId},
-    http::HttpError,
+    all::{
+        Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId,
+    },
+    http::{HttpError, StatusCode},
 };
 
 use super::ids::{GuildId, RoleId};
 use super::service::{
-    ManagementError, RoleCatalog, RoleSnapshot, RoleSource, RoleTarget, RoleUpdate, RoleUpdateOutcome,
+    ManagementError, ResourceLookup, ResourceSource, ResourceType, RoleCatalog, RoleSnapshot, RoleSource,
+    RoleTarget, RoleUpdate, RoleUpdateOutcome,
 };
 
 impl From<SerenityGuildId> for GuildId {
@@ -121,6 +124,50 @@ impl RoleSource for SerenityRoleSource<'_> {
                 .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
                 .collect(),
         })
+    }
+}
+
+impl ResourceSource for SerenityRoleSource<'_> {
+    async fn lookup_resource(
+        &self,
+        guild_id: &GuildId,
+        discord_id: u64,
+    ) -> Result<Option<ResourceLookup>, ManagementError> {
+        let guild_id = SerenityGuildId::from(*guild_id);
+        let channels = guild_id
+            .channels(self.http)
+            .await
+            .map_err(|error| ManagementError::ResourceSource(error.to_string()))?;
+        if channels.into_iter().any(|channel| channel.id.get() == discord_id) {
+            return Ok(Some(ResourceLookup {
+                resource_type: ResourceType::Channel,
+                guild_id: GuildId::from(guild_id),
+            }));
+        }
+
+        let roles = guild_id
+            .roles(self.http)
+            .await
+            .map_err(|error| ManagementError::ResourceSource(error.to_string()))?;
+        if roles.contains_key(&SerenityRoleId::new(discord_id)) {
+            return Ok(Some(ResourceLookup {
+                resource_type: ResourceType::Role,
+                guild_id: GuildId::from(guild_id),
+            }));
+        }
+
+        match guild_id.member(self.http, UserId::new(discord_id)).await {
+            Ok(_) => {
+                return Ok(Some(ResourceLookup {
+                    resource_type: ResourceType::Member,
+                    guild_id: GuildId::from(guild_id),
+                }));
+            }
+            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::NOT_FOUND) => {}
+            Err(error) => return Err(ManagementError::ResourceSource(error.to_string())),
+        }
+
+        Ok(None)
     }
 }
 

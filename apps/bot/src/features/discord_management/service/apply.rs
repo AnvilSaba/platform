@@ -9,8 +9,8 @@ use super::{
     RoleUpdate, RoleUpdateOutcome, build_plan,
 };
 use super::model::{
-    DefinitionFile, RoleAttributes, StateFile, compose_attributes, deserialize_state_for_guild, resolve,
-    resolve_role_id,
+    DefinitionFile, RoleAttributes, compose_attributes, deserialize_state_for_guild, resolve, resolve_role_id,
+    serialize_state,
 };
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
@@ -227,12 +227,6 @@ where
             state_json: latest_state_json,
         })
     }
-}
-
-fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
-    serde_json::to_string_pretty(state)
-        .map(|json| format!("{json}\n"))
-        .map_err(|error| ManagementError::SerializeState(error.to_string()))
 }
 
 fn build_role_update(
