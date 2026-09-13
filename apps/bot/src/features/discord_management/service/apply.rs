@@ -319,9 +319,15 @@ where
                             {
                                 Ok(Ok(catalog)) => catalog,
                                 Ok(Err(error)) => {
+                                    let status = match error {
+                                        ManagementError::RoleCatalogPermissionDenied(message) => {
+                                            RoleApplyStatus::DeletionVerificationPermissionDenied(message)
+                                        }
+                                        error => RoleApplyStatus::DeletionVerificationIndeterminate(error.to_string()),
+                                    };
                                     return result(
                                         &state,
-                                        RoleApplyStatus::DeletionVerificationIndeterminate(error.to_string()),
+                                        status,
                                         applied,
                                         pending,
                                         applied_lifecycle,

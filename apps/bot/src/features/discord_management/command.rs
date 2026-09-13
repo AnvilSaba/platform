@@ -61,6 +61,9 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
         RoleApplyStatus::DeletionPermissionDenied(error) => {
             format!("Discord の Role 削除権限が不足しているため停止しました: {error}")
         }
+        RoleApplyStatus::DeletionVerificationPermissionDenied(error) => {
+            format!("削除後の存在確認に必要な権限が不足しているため停止しました: {error}")
+        }
         RoleApplyStatus::CreationResponseUnknown => {
             "Role 作成の応答を確認できませんでした。重複作成を避けるため、state の確認が必要です。".to_owned()
         }
@@ -322,6 +325,10 @@ pub async fn role_apply(
                         )
                         .await
                 };
+                let needs_deletion_confirmation = matches!(
+                    &result,
+                    Ok(result) if result.status == RoleApplyStatus::DeletionPermissionRequired
+                );
                 let edit = match result {
                     Ok(result) => EditInteractionResponse::new()
                         .content(render_apply_result(&result))
@@ -338,6 +345,9 @@ pub async fn role_apply(
                         response?;
                     }
                     Err(_) => warn!("Role apply result response exceeded the two-minute return budget"),
+                }
+                if needs_deletion_confirmation {
+                    continue;
                 }
                 return Ok(());
             }
