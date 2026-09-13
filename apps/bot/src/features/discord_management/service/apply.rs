@@ -9,9 +9,9 @@ use super::model::{
     resolve_role_id,
 };
 use super::{
-    ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCreate, RoleCreateOutcome,
+    ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCatalog, RoleCreate, RoleCreateOutcome,
     RoleDeleteOutcome, RoleLifecycleChange, RoleLifecycleTarget, RoleManagementService, RolePlan, RoleSnapshot,
-    RoleUpdate, RoleUpdateOutcome, build_plan,
+    RoleUpdate, RoleUpdateOutcome, RoleUpdater, build_plan,
 };
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
@@ -42,6 +42,262 @@ impl Drop for GuildApplyGuard {
             .lock()
             .expect("guild apply mutex poisoned")
             .remove(&self.0);
+    }
+}
+
+struct ApplySession {
+    _guard: GuildApplyGuard,
+    state: StateFile,
+    definition: DefinitionFile,
+    catalog: RoleCatalog,
+    applied: Vec<super::AttributeChange>,
+    pending: Vec<super::AttributeChange>,
+    applied_lifecycle: Vec<RoleLifecycleChange>,
+    pending_lifecycle: Vec<RoleLifecycleChange>,
+}
+
+enum ApplyPreparation {
+    Finished(RoleApplyResult),
+    Ready(Box<ApplySession>),
+}
+
+impl ApplySession {
+    fn into_result(self, status: RoleApplyStatus) -> Result<RoleApplyResult, ManagementError> {
+        let Self {
+            state,
+            applied,
+            pending,
+            applied_lifecycle,
+            pending_lifecycle,
+            ..
+        } = self;
+        result(&state, status, applied, pending, applied_lifecycle, pending_lifecycle)
+    }
+}
+
+impl<S> RoleManagementService<S>
+where
+    S: RoleUpdater,
+{
+    pub async fn apply_role_updates(
+        &self,
+        guild_id: GuildId,
+        definition_toml: &str,
+        state_json: &str,
+        confirmed_plan: &RolePlan,
+        processing_deadline: Instant,
+    ) -> Result<RoleApplyResult, ManagementError> {
+        let preparation = self
+            .prepare_apply(
+                guild_id,
+                definition_toml,
+                state_json,
+                confirmed_plan,
+                processing_deadline,
+            )
+            .await?;
+        let mut session = match preparation {
+            ApplyPreparation::Finished(result) => return Ok(result),
+            ApplyPreparation::Ready(session) => *session,
+        };
+        if !session.pending_lifecycle.is_empty() {
+            return Err(ManagementError::InvalidState(
+                "属性更新専用の apply_role_updates には lifecycle 変更を含められません".to_owned(),
+            ));
+        }
+
+        let desired_attributes = desired_role_attributes(&session.definition);
+        for (logical_id, desired) in desired_attributes {
+            if let Some(status) = self
+                .apply_attribute_changes(&guild_id, &logical_id, &desired, &mut session, processing_deadline)
+                .await?
+            {
+                return session.into_result(status);
+            }
+        }
+
+        session.into_result(RoleApplyStatus::Complete)
+    }
+
+    async fn prepare_apply(
+        &self,
+        guild_id: GuildId,
+        definition_toml: &str,
+        state_json: &str,
+        confirmed_plan: &RolePlan,
+        processing_deadline: Instant,
+    ) -> Result<ApplyPreparation, ManagementError> {
+        let state = deserialize_state_for_guild(state_json, guild_id)?;
+        let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
+            return Ok(ApplyPreparation::Finished(result(
+                &state,
+                RoleApplyStatus::GuildBusy,
+                Vec::new(),
+                confirmed_plan.changes.clone(),
+                Vec::new(),
+                confirmed_plan.lifecycle.clone(),
+            )?));
+        };
+
+        if Instant::now() >= processing_deadline {
+            return Ok(ApplyPreparation::Finished(result(
+                &state,
+                RoleApplyStatus::DeadlineExceeded,
+                Vec::new(),
+                confirmed_plan.changes.clone(),
+                Vec::new(),
+                confirmed_plan.lifecycle.clone(),
+            )?));
+        }
+
+        let definition: DefinitionFile =
+            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
+        let applied = Vec::new();
+        let pending = confirmed_plan.changes.clone();
+        let applied_lifecycle = Vec::new();
+        let pending_lifecycle = confirmed_plan.lifecycle.clone();
+        let catalog = match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            self.source.role_catalog(&guild_id),
+        )
+        .await
+        {
+            Ok(Ok(catalog)) => catalog,
+            Ok(Err(error)) => {
+                return Ok(ApplyPreparation::Finished(result(
+                    &state,
+                    RoleApplyStatus::Failed(error.to_string()),
+                    applied,
+                    pending,
+                    applied_lifecycle,
+                    pending_lifecycle,
+                )?));
+            }
+            Err(_) => {
+                return Ok(ApplyPreparation::Finished(result(
+                    &state,
+                    RoleApplyStatus::DeadlineExceeded,
+                    applied,
+                    pending,
+                    applied_lifecycle,
+                    pending_lifecycle,
+                )?));
+            }
+        };
+        let current_plan = build_plan(&definition, &state, &catalog)?;
+        if current_plan != *confirmed_plan {
+            return Ok(ApplyPreparation::Finished(result(
+                &state,
+                RoleApplyStatus::ReplanRequired,
+                Vec::new(),
+                current_plan.changes,
+                Vec::new(),
+                current_plan.lifecycle,
+            )?));
+        }
+
+        Ok(ApplyPreparation::Ready(Box::new(ApplySession {
+            _guard: guard,
+            state,
+            definition,
+            catalog,
+            applied,
+            pending,
+            applied_lifecycle,
+            pending_lifecycle,
+        })))
+    }
+
+    async fn apply_attribute_changes(
+        &self,
+        guild_id: &GuildId,
+        logical_id: &super::RoleLogicalId,
+        desired: &RoleAttributes,
+        session: &mut ApplySession,
+        processing_deadline: Instant,
+    ) -> Result<Option<RoleApplyStatus>, ManagementError> {
+        let role_id = resolve_role_id(logical_id, &session.state)?;
+        let role_changes = session
+            .pending
+            .iter()
+            .filter(|change| &change.logical_id == logical_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if role_changes.is_empty() {
+            return Ok(None);
+        }
+        if Instant::now() >= processing_deadline {
+            return Ok(Some(RoleApplyStatus::DeadlineExceeded));
+        }
+
+        let update = {
+            let actual = session
+                .catalog
+                .roles
+                .iter()
+                .find(|role| role.id == role_id)
+                .ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Role {logical_id} の Snowflake {role_id} が Guild に存在しません"
+                    ))
+                })?;
+            build_role_update(actual, desired, &session.catalog.default_permissions, logical_id)?
+        };
+        if update.is_empty() {
+            return Ok(None);
+        }
+
+        let outcome = match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            self.source.update_role(guild_id, &role_id, update.clone()),
+        )
+        .await
+        {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => return Ok(Some(RoleApplyStatus::Failed(error.to_string()))),
+            Err(_) => RoleUpdateOutcome::ResponseUnknown,
+        };
+        if outcome == RoleUpdateOutcome::Applied {
+            session.applied.extend(role_changes.clone());
+            session.pending.retain(|change| &change.logical_id != logical_id);
+        }
+
+        let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
+        session.catalog = match tokio::time::timeout(
+            result_deadline.saturating_duration_since(Instant::now()),
+            self.source.role_catalog(guild_id),
+        )
+        .await
+        {
+            Ok(Ok(catalog)) => catalog,
+            Ok(Err(error)) => return Ok(Some(RoleApplyStatus::Failed(error.to_string()))),
+            Err(_) => {
+                return Ok(Some(if outcome == RoleUpdateOutcome::Applied {
+                    RoleApplyStatus::DeadlineExceeded
+                } else {
+                    RoleApplyStatus::ResponseUnknown
+                }));
+            }
+        };
+        let matches = session
+            .catalog
+            .roles
+            .iter()
+            .find(|role| role.id == role_id)
+            .is_some_and(|role| role_matches_update(role, &update));
+        if !matches {
+            return Ok(Some(if outcome == RoleUpdateOutcome::ResponseUnknown {
+                RoleApplyStatus::ResponseUnknown
+            } else {
+                RoleApplyStatus::Failed(format!("Role {logical_id} の更新後の値が希望値と一致しません"))
+            }));
+        }
+
+        if outcome == RoleUpdateOutcome::ResponseUnknown {
+            session.applied.extend(role_changes);
+            session.pending.retain(|change| &change.logical_id != logical_id);
+        }
+        Ok(None)
     }
 }
 
@@ -77,118 +333,61 @@ where
         options: RoleApplyOptions,
         processing_deadline: Instant,
     ) -> Result<RoleApplyResult, ManagementError> {
-        let state = deserialize_state_for_guild(state_json, guild_id)?;
-        let mut state = state;
-        let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
-            return result(
-                &state,
-                RoleApplyStatus::GuildBusy,
-                Vec::new(),
-                confirmed_plan.changes.clone(),
-                Vec::new(),
-                confirmed_plan.lifecycle.clone(),
-            );
-        };
-
-        if Instant::now() >= processing_deadline {
-            return result(
-                &state,
-                RoleApplyStatus::DeadlineExceeded,
-                Vec::new(),
-                confirmed_plan.changes.clone(),
-                Vec::new(),
-                confirmed_plan.lifecycle.clone(),
-            );
+        if confirmed_plan.lifecycle.is_empty() {
+            return self
+                .apply_role_updates(
+                    guild_id,
+                    definition_toml,
+                    state_json,
+                    confirmed_plan,
+                    processing_deadline,
+                )
+                .await;
         }
 
-        let definition: DefinitionFile =
-            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
-        let mut applied = Vec::new();
-        let mut pending = confirmed_plan.changes.clone();
-        let mut applied_lifecycle = Vec::new();
-        let mut pending_lifecycle = confirmed_plan.lifecycle.clone();
-        let mut catalog = match tokio::time::timeout(
-            processing_deadline.saturating_duration_since(Instant::now()),
-            self.source.role_catalog(&guild_id),
-        )
-        .await
-        {
-            Ok(Ok(catalog)) => catalog,
-            Ok(Err(error)) => {
-                return result(
-                    &state,
-                    RoleApplyStatus::Failed(error.to_string()),
-                    applied,
-                    pending,
-                    applied_lifecycle,
-                    pending_lifecycle,
-                );
-            }
-            Err(_) => {
-                return result(
-                    &state,
-                    RoleApplyStatus::DeadlineExceeded,
-                    applied,
-                    pending,
-                    applied_lifecycle,
-                    pending_lifecycle,
-                );
-            }
+        let preparation = self
+            .prepare_apply(
+                guild_id,
+                definition_toml,
+                state_json,
+                confirmed_plan,
+                processing_deadline,
+            )
+            .await?;
+        let mut session = match preparation {
+            ApplyPreparation::Finished(result) => return Ok(result),
+            ApplyPreparation::Ready(session) => *session,
         };
-        let current_plan = build_plan(&definition, &state, &catalog)?;
-        if current_plan != *confirmed_plan {
-            return result(
-                &state,
-                RoleApplyStatus::ReplanRequired,
-                Vec::new(),
-                current_plan.changes,
-                Vec::new(),
-                current_plan.lifecycle,
-            );
-        }
         if !options.allow_deletions
-            && current_plan
-                .lifecycle
+            && session
+                .pending_lifecycle
                 .iter()
                 .any(|change| matches!(change, RoleLifecycleChange::Delete { .. }))
         {
-            return result(
-                &state,
-                RoleApplyStatus::DeletionPermissionRequired,
-                Vec::new(),
-                current_plan.changes,
-                Vec::new(),
-                current_plan.lifecycle,
-            );
+            return session.into_result(RoleApplyStatus::DeletionPermissionRequired);
         }
 
-        for (logical_id, role_definition) in &definition.roles {
-            let lifecycle = pending_lifecycle
+        let desired_attributes = desired_role_attributes(&session.definition);
+        for (logical_id, desired) in desired_attributes {
+            let lifecycle = session
+                .pending_lifecycle
                 .iter()
-                .find(|change| lifecycle_logical_id(change) == logical_id)
+                .find(|change| lifecycle_logical_id(change) == &logical_id)
                 .cloned();
 
             if let Some(lifecycle) = lifecycle {
                 match lifecycle.clone() {
                     RoleLifecycleChange::Create { .. } => {
                         if Instant::now() >= processing_deadline {
-                            return result(
-                                &state,
-                                RoleApplyStatus::DeadlineExceeded,
-                                applied,
-                                pending,
-                                applied_lifecycle,
-                                pending_lifecycle,
-                            );
+                            return session.into_result(RoleApplyStatus::DeadlineExceeded);
                         }
-                        let desired = compose_attributes(role_definition, &definition.settings_sets.role);
                         let create = build_role_create(
                             &desired,
-                            &catalog.permission_names,
-                            &catalog.default_permissions,
-                            logical_id,
+                            &session.catalog.permission_names,
+                            &session.catalog.default_permissions,
+                            &logical_id,
                         )?;
-                        state.pending_creations.insert(logical_id.clone());
+                        session.state.pending_creations.insert(logical_id.clone());
                         let outcome = match tokio::time::timeout(
                             processing_deadline.saturating_duration_since(Instant::now()),
                             self.source.create_role(&guild_id, create),
@@ -197,42 +396,28 @@ where
                         {
                             Ok(Ok(outcome)) => outcome,
                             Ok(Err(error)) => {
-                                state.pending_creations.remove(logical_id);
-                                return result(
-                                    &state,
-                                    RoleApplyStatus::Failed(error.to_string()),
-                                    applied,
-                                    pending,
-                                    applied_lifecycle,
-                                    pending_lifecycle,
-                                );
+                                session.state.pending_creations.remove(&logical_id);
+                                return session.into_result(RoleApplyStatus::Failed(error.to_string()));
                             }
                             Err(_) => RoleCreateOutcome::ResponseUnknown,
                         };
                         let RoleCreateOutcome::Created(role_id) = outcome else {
-                            return result(
-                                &state,
-                                RoleApplyStatus::CreationResponseUnknown,
-                                applied,
-                                pending,
-                                applied_lifecycle,
-                                pending_lifecycle,
-                            );
+                            return session.into_result(RoleApplyStatus::CreationResponseUnknown);
                         };
-                        if state.roles.values().any(|existing_id| *existing_id == role_id) {
-                            state.pending_creations.remove(logical_id);
+                        if session.state.roles.values().any(|existing_id| *existing_id == role_id) {
+                            session.state.pending_creations.remove(&logical_id);
                             return Err(ManagementError::InvalidState(format!(
                                 "新しく作成した Role {role_id} は既存の対応と衝突しています"
                             )));
                         }
-                        state.roles.insert(logical_id.clone(), role_id);
-                        state.deleted_roles.remove(logical_id);
-                        state.pending_creations.remove(logical_id);
-                        pending_lifecycle.retain(|change| change != &lifecycle);
-                        applied_lifecycle.push(lifecycle);
+                        session.state.roles.insert(logical_id.clone(), role_id);
+                        session.state.deleted_roles.remove(&logical_id);
+                        session.state.pending_creations.remove(&logical_id);
+                        session.pending_lifecycle.retain(|change| change != &lifecycle);
+                        session.applied_lifecycle.push(lifecycle);
 
                         let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-                        catalog = match tokio::time::timeout(
+                        session.catalog = match tokio::time::timeout(
                             refresh_deadline.saturating_duration_since(Instant::now()),
                             self.source.role_catalog(&guild_id),
                         )
@@ -240,55 +425,27 @@ where
                         {
                             Ok(Ok(catalog)) => catalog,
                             Ok(Err(error)) => {
-                                return result(
-                                    &state,
-                                    RoleApplyStatus::Failed(error.to_string()),
-                                    applied,
-                                    pending,
-                                    applied_lifecycle,
-                                    pending_lifecycle,
-                                );
+                                return session.into_result(RoleApplyStatus::Failed(error.to_string()));
                             }
                             Err(_) => {
-                                return result(
-                                    &state,
-                                    RoleApplyStatus::DeadlineExceeded,
-                                    applied,
-                                    pending,
-                                    applied_lifecycle,
-                                    pending_lifecycle,
-                                );
+                                return session.into_result(RoleApplyStatus::DeadlineExceeded);
                             }
                         };
                     }
                     RoleLifecycleChange::Delete { discord_id, .. } => {
                         if !options.allow_deletions {
-                            return result(
-                                &state,
-                                RoleApplyStatus::DeletionPermissionRequired,
-                                applied,
-                                pending,
-                                applied_lifecycle,
-                                pending_lifecycle,
-                            );
+                            return session.into_result(RoleApplyStatus::DeletionPermissionRequired);
                         }
                         if Instant::now() >= processing_deadline {
-                            return result(
-                                &state,
-                                RoleApplyStatus::DeadlineExceeded,
-                                applied,
-                                pending,
-                                applied_lifecycle,
-                                pending_lifecycle,
-                            );
+                            return session.into_result(RoleApplyStatus::DeadlineExceeded);
                         }
-                        state.pending_deletions.insert(logical_id.clone());
-                        let exists = catalog.roles.iter().any(|role| role.id == discord_id);
+                        session.state.pending_deletions.insert(logical_id.clone());
+                        let exists = session.catalog.roles.iter().any(|role| role.id == discord_id);
                         if !exists {
-                            state.pending_deletions.remove(logical_id);
-                            state.deleted_roles.insert(logical_id.clone());
-                            pending_lifecycle.retain(|change| change != &lifecycle);
-                            applied_lifecycle.push(lifecycle);
+                            session.state.pending_deletions.remove(&logical_id);
+                            session.state.deleted_roles.insert(logical_id.clone());
+                            session.pending_lifecycle.retain(|change| change != &lifecycle);
+                            session.applied_lifecycle.push(lifecycle);
                             continue;
                         }
                         let outcome = match tokio::time::timeout(
@@ -305,13 +462,13 @@ where
                                     }
                                     error => RoleApplyStatus::Failed(error.to_string()),
                                 };
-                                return result(&state, status, applied, pending, applied_lifecycle, pending_lifecycle);
+                                return session.into_result(status);
                             }
                             Err(_) => RoleDeleteOutcome::ResponseUnknown,
                         };
                         if outcome == RoleDeleteOutcome::ResponseUnknown {
                             let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-                            catalog = match tokio::time::timeout(
+                            session.catalog = match tokio::time::timeout(
                                 refresh_deadline.saturating_duration_since(Instant::now()),
                                 self.source.role_catalog(&guild_id),
                             )
@@ -325,46 +482,25 @@ where
                                         }
                                         error => RoleApplyStatus::DeletionVerificationIndeterminate(error.to_string()),
                                     };
-                                    return result(
-                                        &state,
-                                        status,
-                                        applied,
-                                        pending,
-                                        applied_lifecycle,
-                                        pending_lifecycle,
-                                    );
+                                    return session.into_result(status);
                                 }
                                 Err(_) => {
-                                    return result(
-                                        &state,
-                                        RoleApplyStatus::DeletionVerificationIndeterminate(
-                                            "削除後の Role 存在確認が期限内に完了しませんでした".to_owned(),
-                                        ),
-                                        applied,
-                                        pending,
-                                        applied_lifecycle,
-                                        pending_lifecycle,
-                                    );
+                                    return session.into_result(RoleApplyStatus::DeletionVerificationIndeterminate(
+                                        "削除後の Role 存在確認が期限内に完了しませんでした".to_owned(),
+                                    ));
                                 }
                             };
-                            if catalog.roles.iter().any(|role| role.id == discord_id) {
-                                return result(
-                                    &state,
-                                    RoleApplyStatus::DeletionResponseUnknown,
-                                    applied,
-                                    pending,
-                                    applied_lifecycle,
-                                    pending_lifecycle,
-                                );
+                            if session.catalog.roles.iter().any(|role| role.id == discord_id) {
+                                return session.into_result(RoleApplyStatus::DeletionResponseUnknown);
                             }
                         }
-                        state.pending_deletions.remove(logical_id);
-                        state.deleted_roles.insert(logical_id.clone());
-                        pending_lifecycle.retain(|change| change != &lifecycle);
-                        applied_lifecycle.push(lifecycle);
+                        session.state.pending_deletions.remove(&logical_id);
+                        session.state.deleted_roles.insert(logical_id.clone());
+                        session.pending_lifecycle.retain(|change| change != &lifecycle);
+                        session.applied_lifecycle.push(lifecycle);
                         if outcome == RoleDeleteOutcome::Deleted {
                             let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-                            catalog = match tokio::time::timeout(
+                            session.catalog = match tokio::time::timeout(
                                 refresh_deadline.saturating_duration_since(Instant::now()),
                                 self.source.role_catalog(&guild_id),
                             )
@@ -372,24 +508,10 @@ where
                             {
                                 Ok(Ok(catalog)) => catalog,
                                 Ok(Err(error)) => {
-                                    return result(
-                                        &state,
-                                        RoleApplyStatus::Failed(error.to_string()),
-                                        applied,
-                                        pending,
-                                        applied_lifecycle,
-                                        pending_lifecycle,
-                                    );
+                                    return session.into_result(RoleApplyStatus::Failed(error.to_string()));
                                 }
                                 Err(_) => {
-                                    return result(
-                                        &state,
-                                        RoleApplyStatus::DeadlineExceeded,
-                                        applied,
-                                        pending,
-                                        applied_lifecycle,
-                                        pending_lifecycle,
-                                    );
+                                    return session.into_result(RoleApplyStatus::DeadlineExceeded);
                                 }
                             };
                         }
@@ -398,144 +520,32 @@ where
                 }
             }
 
-            let role_id = resolve_role_id(logical_id, &state)?;
-            let role_changes = pending
-                .iter()
-                .filter(|change| &change.logical_id == logical_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            if role_changes.is_empty() {
-                continue;
-            }
-            if Instant::now() >= processing_deadline {
-                return result(
-                    &state,
-                    RoleApplyStatus::DeadlineExceeded,
-                    applied,
-                    pending,
-                    applied_lifecycle,
-                    pending_lifecycle,
-                );
-            }
-
-            let actual = catalog.roles.iter().find(|role| role.id == role_id).ok_or_else(|| {
-                ManagementError::InvalidState(format!(
-                    "Role {logical_id} の Snowflake {role_id} が Guild に存在しません"
-                ))
-            })?;
-            let desired = compose_attributes(role_definition, &definition.settings_sets.role);
-            let update = build_role_update(actual, &desired, &catalog.default_permissions, logical_id)?;
-            if update.is_empty() {
-                continue;
-            }
-
-            let outcome = match tokio::time::timeout(
-                processing_deadline.saturating_duration_since(Instant::now()),
-                self.source.update_role(&guild_id, &role_id, update.clone()),
-            )
-            .await
+            if let Some(status) = self
+                .apply_attribute_changes(&guild_id, &logical_id, &desired, &mut session, processing_deadline)
+                .await?
             {
-                Ok(Ok(outcome)) => outcome,
-                Ok(Err(error)) => {
-                    return result(
-                        &state,
-                        RoleApplyStatus::Failed(error.to_string()),
-                        applied,
-                        pending,
-                        applied_lifecycle,
-                        pending_lifecycle,
-                    );
-                }
-                Err(_) => RoleUpdateOutcome::ResponseUnknown,
-            };
-            if outcome == RoleUpdateOutcome::Applied {
-                applied.extend(role_changes.clone());
-                pending.retain(|change| &change.logical_id != logical_id);
-            }
-
-            let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-            catalog = match tokio::time::timeout(
-                result_deadline.saturating_duration_since(Instant::now()),
-                self.source.role_catalog(&guild_id),
-            )
-            .await
-            {
-                Ok(Ok(catalog)) => catalog,
-                Ok(Err(error)) => {
-                    return result(
-                        &state,
-                        RoleApplyStatus::Failed(error.to_string()),
-                        applied,
-                        pending,
-                        applied_lifecycle,
-                        pending_lifecycle,
-                    );
-                }
-                Err(_) => {
-                    return result(
-                        &state,
-                        if outcome == RoleUpdateOutcome::Applied {
-                            RoleApplyStatus::DeadlineExceeded
-                        } else {
-                            RoleApplyStatus::ResponseUnknown
-                        },
-                        applied,
-                        pending,
-                        applied_lifecycle,
-                        pending_lifecycle,
-                    );
-                }
-            };
-            let matches = catalog
-                .roles
-                .iter()
-                .find(|role| role.id == role_id)
-                .is_some_and(|role| role_matches_update(role, &update));
-            if !matches {
-                return result(
-                    &state,
-                    if outcome == RoleUpdateOutcome::ResponseUnknown {
-                        RoleApplyStatus::ResponseUnknown
-                    } else {
-                        RoleApplyStatus::Failed(format!("Role {logical_id} の更新後の値が希望値と一致しません"))
-                    },
-                    applied,
-                    pending,
-                    applied_lifecycle,
-                    pending_lifecycle,
-                );
-            }
-
-            if outcome == RoleUpdateOutcome::ResponseUnknown {
-                applied.extend(role_changes);
-                pending.retain(|change| &change.logical_id != logical_id);
+                return session.into_result(status);
             }
         }
 
-        for lifecycle in confirmed_plan
-            .lifecycle
+        let releases = session
+            .pending_lifecycle
             .iter()
             .filter(|change| matches!(change, RoleLifecycleChange::Release { .. }))
-        {
-            if let RoleLifecycleChange::Release { logical_id, .. } = lifecycle {
-                state.roles.remove(logical_id);
-                state.deleted_roles.remove(logical_id);
-                state.pending_deletions.remove(logical_id);
-                state.pending_creations.remove(logical_id);
-                pending_lifecycle.retain(|change| change != lifecycle);
-                applied_lifecycle.push(lifecycle.clone());
+            .cloned()
+            .collect::<Vec<_>>();
+        for lifecycle in releases {
+            if let RoleLifecycleChange::Release { logical_id, .. } = &lifecycle {
+                session.state.roles.remove(logical_id);
+                session.state.deleted_roles.remove(logical_id);
+                session.state.pending_deletions.remove(logical_id);
+                session.state.pending_creations.remove(logical_id);
+                session.pending_lifecycle.retain(|change| change != &lifecycle);
+                session.applied_lifecycle.push(lifecycle);
             }
         }
 
-        drop(guard);
-        result(
-            &state,
-            RoleApplyStatus::Complete,
-            applied,
-            pending,
-            applied_lifecycle,
-            pending_lifecycle,
-        )
+        session.into_result(RoleApplyStatus::Complete)
     }
 }
 
@@ -563,6 +573,19 @@ fn lifecycle_logical_id(change: &RoleLifecycleChange) -> &RoleLogicalId {
         | RoleLifecycleChange::Release { logical_id, .. }
         | RoleLifecycleChange::Delete { logical_id, .. } => logical_id,
     }
+}
+
+fn desired_role_attributes(definition: &DefinitionFile) -> Vec<(RoleLogicalId, RoleAttributes)> {
+    definition
+        .roles
+        .iter()
+        .map(|(logical_id, role_definition)| {
+            (
+                logical_id.clone(),
+                compose_attributes(role_definition, &definition.settings_sets.role),
+            )
+        })
+        .collect()
 }
 
 fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {

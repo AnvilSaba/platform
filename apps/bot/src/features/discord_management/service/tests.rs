@@ -718,22 +718,6 @@ impl RoleUpdater for ApplyingFakeRoleSource {
     }
 }
 
-macro_rules! impl_update_only_lifecycle_target {
-    ($target:ty) => {
-        impl RoleLifecycleTarget for $target {
-            async fn create_role(&self, _: &GuildId, _: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
-                unreachable!("この fake は Role 更新だけを検証します")
-            }
-
-            async fn delete_role(&self, _: &GuildId, _: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
-                unreachable!("この fake は Role 更新だけを検証します")
-            }
-        }
-    };
-}
-
-impl_update_only_lifecycle_target!(ApplyingFakeRoleSource);
-
 #[derive(Clone)]
 struct LifecycleFakeRoleSource {
     catalog: Arc<Mutex<RoleCatalog>>,
@@ -767,9 +751,12 @@ impl RoleUpdater for LifecycleFakeRoleSource {
     async fn update_role(
         &self,
         _guild_id: &GuildId,
-        _role_id: &RoleId,
-        _update: RoleUpdate,
+        role_id: &RoleId,
+        update: RoleUpdate,
     ) -> Result<RoleUpdateOutcome, ManagementError> {
+        let mut catalog = self.catalog.lock().unwrap();
+        let role = catalog.roles.iter_mut().find(|role| role.id == *role_id).unwrap();
+        update.apply_to(role);
         Ok(RoleUpdateOutcome::Applied)
     }
 }
@@ -1471,7 +1458,7 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1518,7 +1505,7 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1551,6 +1538,36 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
     );
 }
 
+/// apply_rolesを公開入口として維持し、属性更新の共通処理へ委譲できることを保証する。
+#[tokio::test]
+async fn apply_roles_remains_the_entrypoint_for_attribute_updates() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "運営")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+    let state = state("100", r#"{"moderator":"200"}"#);
+    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert_eq!(result.applied, plan.changes);
+    assert_eq!(source.catalog.lock().unwrap().roles[0].name, "モデレーター");
+}
+
 /// 確認後に管理対象の現在値が変わった場合、古いplanを適用せず再planを要求することを保証する。
 #[tokio::test]
 async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirmation() {
@@ -1572,7 +1589,7 @@ async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirm
     source.catalog.lock().unwrap().roles[0].name = "外部変更".to_owned();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1607,7 +1624,7 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1644,8 +1661,6 @@ impl RoleUpdater for NeverCompletesRoleUpdate {
     }
 }
 
-impl_update_only_lifecycle_target!(NeverCompletesRoleUpdate);
-
 /// 更新期限超過時に進捗を不明として返し、未完了変更を安全に再投入できることを保証する。
 #[tokio::test]
 async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
@@ -1666,7 +1681,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
         .unwrap();
 
     let timed_out = timing_out_service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1686,7 +1701,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
         apply_update: true,
     };
     let resubmitted = RoleManagementService::new(resubmitted_source)
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &timed_out.state_json,
@@ -1721,7 +1736,7 @@ async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() 
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(guild_id(100), definition, &state, &plan, Instant::now())
+        .apply_role_updates(guild_id(100), definition, &state, &plan, Instant::now())
         .await
         .unwrap();
 
@@ -1763,8 +1778,6 @@ impl RoleUpdater for FailsOnSecondUpdate {
     }
 }
 
-impl_update_only_lifecycle_target!(FailsOnSecondUpdate);
-
 /// 途中の更新失敗で処理を停止し、適用済みと未適用の差分を正確に分けて返すことを保証する。
 #[tokio::test]
 async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes() {
@@ -1783,7 +1796,7 @@ async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1839,8 +1852,6 @@ impl RoleUpdater for RefetchFailsAfterAppliedUpdate {
     }
 }
 
-impl_update_only_lifecycle_target!(RefetchFailsAfterAppliedUpdate);
-
 /// Discordが更新受理を返した後の再取得失敗でも、確定済み更新を未適用へ戻さないことを保証する。
 #[tokio::test]
 async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
@@ -1859,7 +1870,7 @@ async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
     let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
 
     let result = service
-        .apply_roles(
+        .apply_role_updates(
             guild_id(100),
             definition,
             &state,
@@ -1902,8 +1913,6 @@ impl RoleUpdater for BlockingRoleTarget {
     }
 }
 
-impl_update_only_lifecycle_target!(BlockingRoleTarget);
-
 /// 同一Guildへの並行applyを待機させず拒否し、競合更新と二重適用を防ぐ。
 #[tokio::test]
 async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
@@ -1929,7 +1938,7 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
     let first_state = state.clone();
     let first = tokio::spawn(async move {
         RoleManagementService::new(first_source)
-            .apply_roles(
+            .apply_role_updates(
                 guild_id(100),
                 definition,
                 &first_state,
@@ -1945,7 +1954,7 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
 
     let second = tokio::time::timeout(
         Duration::from_secs(1),
-        RoleManagementService::new(source.clone()).apply_roles(
+        RoleManagementService::new(source.clone()).apply_role_updates(
             guild_id(100),
             definition,
             &state,
