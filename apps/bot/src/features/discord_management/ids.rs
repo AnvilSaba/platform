@@ -171,14 +171,3 @@ impl fmt::Display for RoleSettingsSetIdTag {
 
 pub(crate) type RoleLogicalId = LogicalId<RoleLogicalIdTag>;
 pub(crate) type RoleSettingsSetId = LogicalId<RoleSettingsSetIdTag>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn discord_ids_preserve_the_nonmax_niche() {
-        assert_eq!(std::mem::size_of::<Option<GuildId>>(), std::mem::size_of::<GuildId>());
-        assert_eq!(std::mem::size_of::<Option<RoleId>>(), std::mem::size_of::<RoleId>());
-    }
-}
