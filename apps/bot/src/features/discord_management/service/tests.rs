@@ -738,6 +738,45 @@ async fn plan_allows_removing_a_permission_the_bot_does_not_have() {
     assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
 }
 
+/// stateに対応を持たないeveryoneもGuild IDへ解決され、planどおりにapplyされることを保証する。
+#[tokio::test]
+async fn apply_resolves_everyone_without_a_state_mapping() {
+    let source = ApplyingFakeRoleSource {
+        catalog: Arc::new(Mutex::new(RoleCatalog {
+            roles: vec![role("100", "@everyone")],
+            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
+            grantable_permissions: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
+            default_permissions: BTreeMap::from([
+                ("SEND_MESSAGES".to_owned(), false),
+                ("VIEW_CHANNEL".to_owned(), true),
+            ]),
+        })),
+        updates: Arc::new(Mutex::new(Vec::new())),
+        outcome: RoleUpdateOutcome::Applied,
+        apply_update: true,
+    };
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.everyone.permissions]\nSEND_MESSAGES = true\n";
+    let state = state("100", "{}");
+    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert_eq!(result.applied, plan.changes);
+    assert!(result.pending.is_empty());
+    assert_eq!(source.updates.lock().unwrap().len(), 1);
+}
+
 /// applyが明示属性だけを更新し、省略された権限や属性を現在値のまま保持することを保証する。
 #[tokio::test]
 async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
