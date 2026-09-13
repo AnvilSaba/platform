@@ -8,8 +8,8 @@ use serenity::{
 
 use super::ids::{GuildId, RoleId};
 use super::service::{
-    ManagementError, RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleSnapshot, RoleSource,
-    RoleTarget, RoleUpdate, RoleUpdateOutcome,
+    ManagementError, RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot,
+    RoleSource, RoleUpdate, RoleUpdateOutcome, RoleUpdater,
 };
 
 impl From<SerenityGuildId> for GuildId {
@@ -131,7 +131,7 @@ fn map_role_catalog_error(error: SerenityError) -> ManagementError {
     }
 }
 
-impl RoleTarget for SerenityRoleSource<'_> {
+impl RoleUpdater for SerenityRoleSource<'_> {
     async fn update_role(
         &self,
         guild_id: &GuildId,
@@ -178,7 +178,9 @@ impl RoleTarget for SerenityRoleSource<'_> {
             Err(error) => Err(ManagementError::RoleSource(error.to_string())),
         }
     }
+}
 
+impl RoleLifecycleTarget for SerenityRoleSource<'_> {
     async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let mut edit = EditRole::new()
             .name(create.name)

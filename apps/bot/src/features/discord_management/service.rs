@@ -94,25 +94,19 @@ pub enum RoleUpdateOutcome {
     ResponseUnknown,
 }
 
-pub trait RoleTarget: RoleSource {
+pub trait RoleUpdater: RoleSource {
     async fn update_role(
         &self,
         guild_id: &GuildId,
         role_id: &RoleId,
         update: RoleUpdate,
     ) -> Result<RoleUpdateOutcome, ManagementError>;
+}
 
-    async fn create_role(
-        &self,
-        _guild_id: &GuildId,
-        _create: RoleCreate,
-    ) -> Result<RoleCreateOutcome, ManagementError> {
-        Err(ManagementError::RoleSource("Role 作成に対応していません".to_owned()))
-    }
+pub trait RoleLifecycleTarget: RoleUpdater {
+    async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError>;
 
-    async fn delete_role(&self, _guild_id: &GuildId, _role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
-        Err(ManagementError::RoleSource("Role 削除に対応していません".to_owned()))
-    }
+    async fn delete_role(&self, guild_id: &GuildId, role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
