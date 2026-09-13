@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
-use super::ids::{GuildId, RoleId, RoleLogicalId};
+use super::ids::{GuildId, RoleId, RoleLogicalId, RoleSettingsSetId};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -27,6 +27,27 @@ pub struct RoleCatalog {
 
 pub trait RoleSource {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleCreate {
+    pub name: String,
+    pub color: u32,
+    pub hoist: bool,
+    pub mentionable: bool,
+    pub permissions: BTreeMap<String, bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleCreateOutcome {
+    Created(RoleId),
+    ResponseUnknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleDeleteOutcome {
+    Deleted,
+    ResponseUnknown,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -80,12 +101,26 @@ pub trait RoleTarget: RoleSource {
         role_id: &RoleId,
         update: RoleUpdate,
     ) -> Result<RoleUpdateOutcome, ManagementError>;
+
+    async fn create_role(
+        &self,
+        _guild_id: &GuildId,
+        _create: RoleCreate,
+    ) -> Result<RoleCreateOutcome, ManagementError> {
+        Err(ManagementError::RoleSource("Role 作成に対応していません".to_owned()))
+    }
+
+    async fn delete_role(&self, _guild_id: &GuildId, _role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
+        Err(ManagementError::RoleSource("Role 削除に対応していません".to_owned()))
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ManagementError {
     #[error("Discord から Role を取得できません: {0}")]
     RoleSource(String),
+    #[error("Role の操作権限が不足しています: {0}")]
+    RolePermissionDenied(String),
     #[error("定義ファイルを生成できません: {0}")]
     SerializeDefinition(String),
     #[error("state ファイルを生成できません: {0}")]
@@ -118,9 +153,31 @@ pub struct AttributeChange {
     pub desired: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoleLifecycleChange {
+    Create {
+        logical_id: RoleLogicalId,
+        recreated: bool,
+    },
+    Release {
+        logical_id: RoleLogicalId,
+        discord_id: RoleId,
+    },
+    Delete {
+        logical_id: RoleLogicalId,
+        discord_id: RoleId,
+    },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RolePlan {
     pub changes: Vec<AttributeChange>,
+    pub lifecycle: Vec<RoleLifecycleChange>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoleApplyOptions {
+    pub allow_deletions: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +186,11 @@ pub enum RoleApplyStatus {
     GuildBusy,
     ReplanRequired,
     DeadlineExceeded,
+    DeletionPermissionRequired,
+    DeletionPermissionDenied(String),
+    CreationResponseUnknown,
+    DeletionResponseUnknown,
+    DeletionVerificationIndeterminate(String),
     Failed(String),
     ResponseUnknown,
 }
@@ -138,16 +200,39 @@ pub struct RoleApplyResult {
     pub status: RoleApplyStatus,
     pub applied: Vec<AttributeChange>,
     pub pending: Vec<AttributeChange>,
+    pub applied_lifecycle: Vec<RoleLifecycleChange>,
+    pub pending_lifecycle: Vec<RoleLifecycleChange>,
     pub state_json: String,
 }
 
 impl RolePlan {
     pub fn render(&self) -> String {
-        if self.changes.is_empty() {
+        if self.changes.is_empty() && self.lifecycle.is_empty() {
             return "変更はありません。\n".to_owned();
         }
 
         let mut output = String::from("Role の変更計画\n\n");
+        for change in &self.lifecycle {
+            match change {
+                RoleLifecycleChange::Create {
+                    logical_id,
+                    recreated,
+                } => {
+                    let action = if *recreated { "再作成" } else { "新規作成" };
+                    output.push_str(&format!("- {action}: {logical_id}\n"));
+                }
+                RoleLifecycleChange::Release {
+                    logical_id,
+                    discord_id,
+                } => output.push_str(&format!("- 管理解除: {logical_id} ({discord_id})\n")),
+                RoleLifecycleChange::Delete {
+                    logical_id,
+                    discord_id,
+                } => output.push_str(&format!(
+                    "- 削除: {logical_id} ({discord_id})\n  影響: Guild から Role が削除され、付与済みの割り当ても失われます。\n"
+                )),
+            }
+        }
         for change in &self.changes {
             output.push_str(&format!(
                 "- {} ({}) {}: {} -> {}\n",
@@ -210,16 +295,16 @@ where
                 }
                 generated
             };
-            if !is_everyone
-                && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
-                    return Err(ManagementError::InvalidState(format!(
-                        "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
-                        role.id
-                    )));
-                }
+            if !is_everyone && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
+                return Err(ManagementError::InvalidState(format!(
+                    "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
+                    role.id
+                )));
+            }
             definitions.insert(
                 logical_id.clone(),
                 RoleDefinition {
+                    ensure: RoleEnsure::Present,
                     mode: RoleMode::Managed,
                     settings_sets: Vec::new(),
                     attributes: if is_everyone {
@@ -259,6 +344,9 @@ where
             schema_version: SCHEMA_VERSION,
             guild_id,
             roles: mappings,
+            deleted_roles: BTreeSet::new(),
+            pending_creations: BTreeSet::new(),
+            pending_deletions: BTreeSet::new(),
         })
         .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
 
@@ -283,7 +371,6 @@ where
     }
 }
 
-
 fn build_plan(
     definition: &DefinitionFile,
     state: &StateFile,
@@ -296,20 +383,121 @@ fn build_plan(
         .map(|role| (role.id, role))
         .collect::<BTreeMap<_, _>>();
     let mut changes = Vec::new();
+    let mut lifecycle = Vec::new();
+
+    if let Some(logical_id) = state.pending_creations.iter().next() {
+        return Err(ManagementError::InvalidState(format!(
+            "Role {logical_id} は作成結果不明のため、同じ定義で状態を確認する必要があります"
+        )));
+    }
+    for logical_id in &state.pending_deletions {
+        let Some(role) = definition.roles.get(logical_id) else {
+            return Err(ManagementError::InvalidState(format!(
+                "Role {logical_id} の削除意図が未解決のため、定義を変更できません"
+            )));
+        };
+        if !matches!(role.ensure, RoleEnsure::Absent) {
+            return Err(ManagementError::InvalidState(format!(
+                "Role {logical_id} の削除意図が未解決です"
+            )));
+        }
+    }
 
     for (logical_id, desired) in &definition.roles {
-        let discord_id = resolve_role_id(logical_id, state)?;
+        if matches!(desired.ensure, RoleEnsure::Absent) {
+            if *logical_id == everyone_logical_id() {
+                return Err(ManagementError::InvalidDefinition(
+                    "@everyone Role は削除できません".to_owned(),
+                ));
+            }
+            let Some(discord_id) = state.roles.get(logical_id).copied() else {
+                continue;
+            };
+            if state.deleted_roles.contains(logical_id) {
+                continue;
+            }
+            if !state.pending_deletions.contains(logical_id) && !actual_roles.contains_key(&discord_id) {
+                return Err(ManagementError::InvalidState(format!(
+                    "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+                )));
+            }
+            lifecycle.push(RoleLifecycleChange::Delete {
+                logical_id: logical_id.clone(),
+                discord_id,
+            });
+            continue;
+        }
+
+        if *logical_id == everyone_logical_id() {
+            let discord_id = resolve_role_id(logical_id, state)?;
+            let actual = actual_roles.get(&discord_id).ok_or_else(|| {
+                ManagementError::InvalidState(format!(
+                    "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+                ))
+            })?;
+            let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
+            if desired_attributes.has_non_permission_attributes() {
+                return Err(ManagementError::InvalidDefinition(
+                    "@everyone Role では権限だけを管理できます".to_owned(),
+                ));
+            }
+            if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
+                return Err(ManagementError::InvalidState(format!(
+                    "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+                )));
+            }
+            compare_attributes(
+                logical_id,
+                &discord_id,
+                actual,
+                &desired_attributes,
+                &catalog.default_permissions,
+                &catalog.grantable_permissions,
+                &mut changes,
+            )?;
+            continue;
+        }
+
+        if state.deleted_roles.contains(logical_id) {
+            if matches!(desired.mode, RoleMode::Reference) {
+                return Err(ManagementError::InvalidState(format!(
+                    "削除済みの Role {logical_id} は参照専用として利用できません"
+                )));
+            }
+            validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
+            lifecycle.push(RoleLifecycleChange::Create {
+                logical_id: logical_id.clone(),
+                recreated: true,
+            });
+            continue;
+        }
+
+        let Some(discord_id) = state.roles.get(logical_id).copied() else {
+            if matches!(desired.mode, RoleMode::Reference) {
+                return Err(ManagementError::InvalidState(format!(
+                    "参照専用 Role {logical_id} の対応がありません"
+                )));
+            }
+            validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
+            lifecycle.push(RoleLifecycleChange::Create {
+                logical_id: logical_id.clone(),
+                recreated: false,
+            });
+            continue;
+        };
+
+        if state.pending_deletions.contains(logical_id) {
+            return Err(ManagementError::InvalidState(format!(
+                "Role {logical_id} の削除意図が未解決です"
+            )));
+        }
+
         let actual = actual_roles.get(&discord_id).ok_or_else(|| {
             ManagementError::InvalidState(format!(
-                "Role {logical_id} の Snowflake {discord_id} が Guild に存在しません"
+                "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             ))
         })?;
         let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
-        if discord_id.get() == state.guild_id.get() && desired_attributes.has_non_permission_attributes() {
-            return Err(ManagementError::InvalidDefinition(
-                "@everyone Role では権限だけを管理できます".to_owned(),
-            ));
-        }
         if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
             return Err(ManagementError::InvalidState(format!(
                 "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
@@ -326,16 +514,57 @@ fn build_plan(
         )?;
     }
 
-    Ok(RolePlan { changes })
+    for (logical_id, discord_id) in &state.roles {
+        if *logical_id == everyone_logical_id() || definition.roles.contains_key(logical_id) {
+            continue;
+        }
+        lifecycle.push(RoleLifecycleChange::Release {
+            logical_id: logical_id.clone(),
+            discord_id: *discord_id,
+        });
+    }
+
+    Ok(RolePlan { changes, lifecycle })
+}
+
+fn validate_role_creation(
+    logical_id: &RoleLogicalId,
+    definition: &RoleDefinition,
+    settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
+    catalog: &RoleCatalog,
+) -> Result<(), ManagementError> {
+    let attributes = compose_attributes(definition, settings_sets);
+    let Some(name) = attributes.name.as_ref() else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "新しい Role {logical_id} には name が必要です"
+        )));
+    };
+    let name = resolve(name, "new role".to_owned(), "name")?;
+    if name.is_empty() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "新しい Role {logical_id} の name は空にできません"
+        )));
+    }
+    for (permission, value) in &attributes.permissions {
+        let default = *catalog
+            .default_permissions
+            .get(permission)
+            .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
+        let resolved = resolve(value, default, &format!("permissions.{permission}"))?;
+        if resolved && !catalog.grantable_permissions.contains(permission) {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
+            )));
+        }
+    }
+    Ok(())
 }
 
 mod apply;
 
-
 mod model;
 
 use model::*;
-
 
 #[cfg(test)]
 #[path = "service/tests.rs"]
