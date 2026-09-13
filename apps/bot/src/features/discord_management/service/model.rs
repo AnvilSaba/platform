@@ -100,6 +100,14 @@ pub(super) fn validate_role_definition(role: &RoleDefinition) -> Result<(), Vali
             "参照専用 Role には管理属性を指定できません",
         ));
     }
+    if matches!(role.ensure, RoleEnsure::Absent)
+        && (matches!(role.mode, RoleMode::Reference) || !role.settings_sets.is_empty() || !role.attributes.is_empty())
+    {
+        return Err(validation_error(
+            "delete_with_managed_attributes",
+            "削除する Role には mode、設定セット、管理属性を指定できません",
+        ));
+    }
 
     Ok(())
 }
@@ -275,6 +283,8 @@ impl RoleSettingsSets {
 #[serde(validate = "Validate::validate")]
 #[serde(deny_unknown_fields)]
 pub(super) struct RoleDefinition {
+    #[serde(default, skip_serializing_if = "RoleEnsure::is_present")]
+    pub(super) ensure: RoleEnsure,
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
     pub(super) mode: RoleMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -282,6 +292,20 @@ pub(super) struct RoleDefinition {
     #[validate(nested)]
     #[serde(flatten)]
     pub(super) attributes: RoleAttributes,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RoleEnsure {
+    #[default]
+    Present,
+    Absent,
+}
+
+impl RoleEnsure {
+    fn is_present(&self) -> bool {
+        matches!(self, Self::Present)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -377,6 +401,7 @@ pub(super) fn resolve_role_id(logical_id: &RoleLogicalId, state: &StateFile) -> 
 }
 
 #[derive(Debug, Deserialize, Serialize, Validate)]
+#[validate(schema(function = "validate_state"))]
 #[serde(validate = "Validate::validate")]
 #[serde(deny_unknown_fields)]
 pub(super) struct StateFile {
@@ -390,9 +415,17 @@ pub(super) struct StateFile {
     #[validate(custom(function = "validate_role_mappings"))]
     #[serde(deserialize_with = "deserialize_unique_role_mappings")]
     pub(super) roles: BTreeMap<RoleLogicalId, RoleId>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) deleted_roles: BTreeSet<RoleLogicalId>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) pending_creations: BTreeSet<RoleLogicalId>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) pending_deletions: BTreeSet<RoleLogicalId>,
 }
 
-pub(super) fn deserialize_unique_role_mappings<'de, D>(deserializer: D) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
+pub(super) fn deserialize_unique_role_mappings<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -456,5 +489,39 @@ pub(super) fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) ->
         }
     }
 
+    Ok(())
+}
+
+pub(super) fn validate_state(state: &StateFile) -> Result<(), ValidationError> {
+    for logical_id in &state.deleted_roles {
+        if !state.roles.contains_key(logical_id) {
+            return Err(validation_error(
+                "deleted_role_without_mapping",
+                format!("削除済み Role {logical_id} に対応する Snowflake がありません"),
+            ));
+        }
+        if state.pending_deletions.contains(logical_id) || state.pending_creations.contains(logical_id) {
+            return Err(validation_error(
+                "conflicting_role_operation",
+                format!("Role {logical_id} に競合する未完了状態があります"),
+            ));
+        }
+    }
+    for logical_id in &state.pending_deletions {
+        if !state.roles.contains_key(logical_id) || state.deleted_roles.contains(logical_id) {
+            return Err(validation_error(
+                "invalid_pending_deletion",
+                format!("Role {logical_id} の削除意図に対応する active state がありません"),
+            ));
+        }
+    }
+    for logical_id in &state.pending_creations {
+        if state.roles.contains_key(logical_id) {
+            return Err(validation_error(
+                "invalid_pending_creation",
+                format!("作成結果不明の Role {logical_id} に Snowflake が設定されています"),
+            ));
+        }
+    }
     Ok(())
 }
