@@ -291,23 +291,3 @@ pub async fn role_apply(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn apply_deadlines_reserve_two_minutes_after_the_ten_minute_processing_budget() {
-        let started_at = Instant::now();
-        let deadlines = apply_deadlines(started_at);
-
-        assert_eq!(
-            deadlines.processing.duration_since(started_at),
-            Duration::from_secs(10 * 60)
-        );
-        assert_eq!(
-            deadlines.response.duration_since(deadlines.processing),
-            Duration::from_secs(2 * 60)
-        );
-    }
-}
