@@ -89,8 +89,24 @@ impl DiscordIdTag for RoleIdTag {
     const LABEL: &'static str = "Role ID";
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum ChannelIdTag {}
+
+impl DiscordIdTag for ChannelIdTag {
+    const LABEL: &'static str = "Channel ID";
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum MemberIdTag {}
+
+impl DiscordIdTag for MemberIdTag {
+    const LABEL: &'static str = "Member ID";
+}
+
 pub(crate) type GuildId = DiscordId<GuildIdTag>;
 pub(crate) type RoleId = DiscordId<RoleIdTag>;
+pub(crate) type ChannelId = DiscordId<ChannelIdTag>;
+pub(crate) type MemberId = DiscordId<MemberIdTag>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -171,3 +187,34 @@ impl fmt::Display for RoleSettingsSetIdTag {
 
 pub(crate) type RoleLogicalId = LogicalId<RoleLogicalIdTag>;
 pub(crate) type RoleSettingsSetId = LogicalId<RoleSettingsSetIdTag>;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum ChannelLogicalIdTag {}
+
+impl fmt::Display for ChannelLogicalIdTag {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum MemberLogicalIdTag {}
+
+impl fmt::Display for MemberLogicalIdTag {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum ChannelSettingsSetIdTag {}
+
+impl fmt::Display for ChannelSettingsSetIdTag {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+pub(crate) type ChannelLogicalId = LogicalId<ChannelLogicalIdTag>;
+pub(crate) type MemberLogicalId = LogicalId<MemberLogicalIdTag>;
+pub(crate) type ChannelSettingsSetId = LogicalId<ChannelSettingsSetIdTag>;
