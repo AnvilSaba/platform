@@ -81,6 +81,11 @@ impl RoleSource for SerenityRoleSource<'_> {
                 "Bot に MANAGE_ROLES 権限がありません".to_owned(),
             ));
         }
+        let grantable_permissions = if bot_permissions.contains(Permissions::ADMINISTRATOR) {
+            Permissions::all()
+        } else {
+            bot_permissions
+        };
 
         let mut snapshots = roles
             .into_iter()
@@ -105,6 +110,10 @@ impl RoleSource for SerenityRoleSource<'_> {
             permission_names: Permissions::all()
                 .iter_names()
                 .map(|(name, _)| name.to_owned())
+                .collect(),
+            grantable_permissions: Permissions::all()
+                .iter_names()
+                .filter_map(|(name, permission)| grantable_permissions.contains(permission).then(|| name.to_owned()))
                 .collect(),
             default_permissions: Permissions::all()
                 .iter_names()

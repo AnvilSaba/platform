@@ -140,6 +140,7 @@ pub(super) fn compare_attributes(
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
     default_permissions: &BTreeMap<String, bool>,
+    grantable_permissions: &BTreeSet<String>,
     changes: &mut Vec<AttributeChange>,
 ) -> Result<(), ManagementError> {
     if let Some(value) = &desired.name {
@@ -189,6 +190,11 @@ pub(super) fn compare_attributes(
             .get(permission)
             .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
         let desired = resolve(value, default, &format!("permissions.{permission}"))?;
+        if !*current && desired && !grantable_permissions.contains(permission) {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
+            )));
+        }
         push_change(
             changes,
             logical_id,

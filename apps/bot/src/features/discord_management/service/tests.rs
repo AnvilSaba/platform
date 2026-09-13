@@ -31,6 +31,7 @@ impl RoleSource for StatefulFakeRoleSource {
             .unwrap_or_else(|| permission_names.iter().map(|name| (name.clone(), false)).collect());
         Ok(RoleCatalog {
             roles: self.roles.clone(),
+            grantable_permissions: permission_names.clone(),
             permission_names,
             default_permissions,
         })
@@ -680,6 +681,63 @@ impl RoleTarget for ApplyingFakeRoleSource {
     }
 }
 
+/// Botが持たない権限のfalseからtrueへの変更をplanで拒否し、Discord APIの失敗を事前に示す。
+#[tokio::test]
+async fn plan_rejects_granting_a_permission_the_bot_does_not_have() {
+    let source = ApplyingFakeRoleSource {
+        catalog: Arc::new(Mutex::new(RoleCatalog {
+            roles: vec![role("200", "運営")],
+            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
+            grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
+            default_permissions: BTreeMap::from([
+                ("SEND_MESSAGES".to_owned(), false),
+                ("VIEW_CHANNEL".to_owned(), true),
+            ]),
+        })),
+        updates: Arc::new(Mutex::new(Vec::new())),
+        outcome: RoleUpdateOutcome::Applied,
+        apply_update: true,
+    };
+    let service = RoleManagementService::new(source);
+    let definition = "schema_version = 1\n[roles.moderator.permissions]\nSEND_MESSAGES = true\n";
+
+    let error = service
+        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("SEND_MESSAGES") && message.contains("Bot 自身")));
+}
+
+/// Botが現在持たない権限でも、対象Roleから削除する変更は付与ではないためplanできることを保証する。
+#[tokio::test]
+async fn plan_allows_removing_a_permission_the_bot_does_not_have() {
+    let source = ApplyingFakeRoleSource {
+        catalog: Arc::new(Mutex::new(RoleCatalog {
+            roles: vec![role("200", "運営")],
+            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
+            grantable_permissions: BTreeSet::new(),
+            default_permissions: BTreeMap::from([
+                ("SEND_MESSAGES".to_owned(), false),
+                ("VIEW_CHANNEL".to_owned(), true),
+            ]),
+        })),
+        updates: Arc::new(Mutex::new(Vec::new())),
+        outcome: RoleUpdateOutcome::Applied,
+        apply_update: true,
+    };
+    let service = RoleManagementService::new(source);
+    let definition = "schema_version = 1\n[roles.moderator.permissions]\nVIEW_CHANNEL = false\n";
+
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
+        .await
+        .unwrap();
+
+    assert_eq!(plan.changes.len(), 1);
+    assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
+}
+
 /// applyが明示属性だけを更新し、省略された権限や属性を現在値のまま保持することを保証する。
 #[tokio::test]
 async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
@@ -690,6 +748,7 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![moderator],
             permission_names: BTreeSet::from(["VIEW_CHANNEL".to_owned(), "MANAGE_MESSAGES".to_owned()]),
+            grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned(), "MANAGE_MESSAGES".to_owned()]),
             default_permissions: BTreeMap::from([
                 ("VIEW_CHANNEL".to_owned(), false),
                 ("MANAGE_MESSAGES".to_owned(), false),
@@ -751,6 +810,7 @@ async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirm
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
@@ -786,6 +846,7 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
@@ -841,6 +902,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     let catalog = RoleCatalog {
         roles: vec![role("200", "運営")],
         permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
         default_permissions: BTreeMap::new(),
     };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
@@ -896,6 +958,7 @@ async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() 
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
@@ -957,6 +1020,7 @@ async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "A"), role("201", "B")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         })),
         calls: Arc::new(AtomicUsize::new(0)),
@@ -1030,6 +1094,7 @@ async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
         catalog: RoleCatalog {
             roles: vec![role("200", "運営")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         },
         catalog_calls: Arc::new(AtomicUsize::new(0)),
@@ -1091,6 +1156,7 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
             permission_names: BTreeSet::new(),
+            grantable_permissions: BTreeSet::new(),
             default_permissions: BTreeMap::new(),
         })),
         started: started_tx,

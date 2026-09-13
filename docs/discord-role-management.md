@@ -16,6 +16,8 @@ Bot をテスト Guild に導入する際は `applications.commands` と `bot` s
 
 `@everyone` は予約論理 ID `everyone` で表し、state の Role 対応表には含めません。Guild ID から自動的に解決されます。基底権限だけを管理し、名前・色・表示・メンション可否は管理しません。export では `@everyone` の権限を true/false とも列挙しますが、通常 Role は有効な権限だけを列挙します。通常 Role で省略された権限ビットは変更されず、明示的に `false` を指定した権限だけが無効化されます。
 
+Bot自身が持たない権限をRoleへ新たに付与することはできません。planはそのような `false` から `true` への変更を入力エラーとして報告します。既存権限の維持と削除は許可され、Botが `ADMINISTRATOR` を持つ場合はすべての権限を付与可能として扱います。Role階層の制限は `ADMINISTRATOR` でも別途適用されます。
+
 ## 操作手順
 
 1. `/role_export` を state 添付なしで実行し、`discord-roles.toml` と `discord-state.json` を保存します。
