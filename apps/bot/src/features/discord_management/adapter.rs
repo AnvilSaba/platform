@@ -113,7 +113,8 @@ impl RoleSource for SerenityRoleSource<'_> {
                 .collect(),
             grantable_permissions: Permissions::all()
                 .iter_names()
-                .filter_map(|(name, permission)| grantable_permissions.contains(permission).then(|| name.to_owned()))
+                .filter(|&(_, permission)| grantable_permissions.contains(permission))
+                .map(|(name, _)| name.to_owned())
                 .collect(),
             default_permissions: Permissions::all()
                 .iter_names()

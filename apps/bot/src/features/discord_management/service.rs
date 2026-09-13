@@ -210,14 +210,13 @@ where
                 }
                 generated
             };
-            if !is_everyone {
-                if let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
+            if !is_everyone
+                && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
                     return Err(ManagementError::InvalidState(format!(
                         "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
                         role.id
                     )));
                 }
-            }
             definitions.insert(
                 logical_id.clone(),
                 RoleDefinition {
