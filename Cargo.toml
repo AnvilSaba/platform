@@ -12,6 +12,12 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # Poise が next ブランチを参照しているので、直接の依存関係に合わせる
 [replace."https://github.com/serenity-rs/serenity#serenity:0.12.5"]
 git = "https://github.com/serenity-rs/serenity"
