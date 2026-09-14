@@ -5,13 +5,12 @@ use std::{
 };
 
 use super::model::{
-    DefinitionFile, RoleAttributes, StateFile, compose_attributes, deserialize_state_for_guild, resolve,
-    resolve_role_id, serialize_state,
+    DefinitionFile, PlanInput, RoleAttributes, StateFile, compose_attributes, resolve, resolve_role_id, serialize_state,
 };
 use super::{
-    ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCatalog, RoleCreate, RoleCreateOutcome,
-    RoleDeleteOutcome, RoleLifecycleChange, RoleLifecycleTarget, RoleManagementService, RolePlan, RoleSnapshot,
-    RoleUpdate, RoleUpdateOutcome, RoleUpdater, build_plan,
+    Color, ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleCatalog, RoleCreate,
+    RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleChange, RoleLifecycleTarget, RoleManagementService, RolePlan,
+    RoleSnapshot, RoleUpdate, RoleUpdateOutcome, RoleUpdater, build_plan,
 };
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
@@ -127,7 +126,7 @@ where
         confirmed_plan: &RolePlan,
         processing_deadline: Instant,
     ) -> Result<ApplyPreparation, ManagementError> {
-        let state = deserialize_state_for_guild(state_json, guild_id)?;
+        let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id)?;
         let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
             return Ok(ApplyPreparation::Finished(result(
                 &state,
@@ -150,8 +149,6 @@ where
             )?));
         }
 
-        let definition: DefinitionFile =
-            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
         let applied = Vec::new();
         let pending = confirmed_plan.changes.clone();
         let applied_lifecycle = Vec::new();
@@ -598,24 +595,21 @@ fn build_role_create(
         .name
         .as_ref()
         .ok_or_else(|| ManagementError::InvalidDefinition(format!("新しい Role {logical_id} には name が必要です")))?;
-    let name = resolve(name, "new role".to_owned(), "name")?;
+    let name = resolve(name, "new role".to_owned());
     let color = desired
         .color
         .as_ref()
-        .map(|value| resolve(value, 0, "color"))
-        .transpose()?
-        .unwrap_or(0);
+        .map(|value| resolve(value, Color::default()))
+        .unwrap_or_default();
     let hoist = desired
         .hoist
         .as_ref()
-        .map(|value| resolve(value, false, "hoist"))
-        .transpose()?
+        .map(|value| resolve(value, false))
         .unwrap_or(false);
     let mentionable = desired
         .mentionable
         .as_ref()
-        .map(|value| resolve(value, false, "mentionable"))
-        .transpose()?
+        .map(|value| resolve(value, false))
         .unwrap_or(false);
     let mut permissions = permission_names
         .iter()
@@ -625,10 +619,7 @@ fn build_role_create(
         let default = *default_permissions
             .get(permission)
             .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
-        permissions.insert(
-            permission.clone(),
-            resolve(value, default, &format!("permissions.{permission}"))?,
-        );
+        permissions.insert(permission.clone(), resolve(value, default));
     }
     Ok(RoleCreate {
         name,
@@ -647,25 +638,25 @@ fn build_role_update(
 ) -> Result<RoleUpdate, ManagementError> {
     let mut update = RoleUpdate::default();
     if let Some(value) = &desired.name {
-        let value = resolve(value, "new role".to_owned(), "name")?;
+        let value = resolve(value, "new role".to_owned());
         if value != actual.name {
             update.name = Some(value);
         }
     }
     if let Some(value) = &desired.color {
-        let value = resolve(value, 0, "color")?;
+        let value = resolve(value, Color::default());
         if value != actual.color {
             update.color = Some(value);
         }
     }
     if let Some(value) = &desired.hoist {
-        let value = resolve(value, false, "hoist")?;
+        let value = resolve(value, false);
         if value != actual.hoist {
             update.hoist = Some(value);
         }
     }
     if let Some(value) = &desired.mentionable {
-        let value = resolve(value, false, "mentionable")?;
+        let value = resolve(value, false);
         if value != actual.mentionable {
             update.mentionable = Some(value);
         }
@@ -681,7 +672,7 @@ fn build_role_update(
             let default = *default_permissions.get(permission).ok_or_else(|| {
                 ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません"))
             })?;
-            let value = resolve(value, default, &format!("permissions.{permission}"))?;
+            let value = resolve(value, default);
             if value != *current {
                 permissions.insert(permission.clone(), value);
             }
