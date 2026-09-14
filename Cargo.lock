@@ -194,7 +194,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "serdev",
  "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86)",
  "similar",
  "sysinfo",
@@ -2174,27 +2173,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8705578779c2b6bd90d84d66eb2e206b708b1a4d7b9f17641b293545bf1c7e46"
 dependencies = [
  "darling 0.23.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "serdev"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e4fe8a010ca6819b605a68e11a592b787f1b9cda352491c1fc6c1c3b64d1393"
-dependencies = [
- "serde",
- "serdev_derive",
-]
-
-[[package]]
-name = "serdev_derive"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98a619df9c5d492c6d3ce259fd546e965991582e0b07e4a438cac0df57eb675c"
-dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
