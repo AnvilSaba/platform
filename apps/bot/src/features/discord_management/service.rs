@@ -69,7 +69,7 @@ pub struct RoleSnapshot {
     pub id: RoleId,
     pub manageable: bool,
     pub name: String,
-    pub color: u32,
+    pub color: Color,
     pub hoist: bool,
     pub mentionable: bool,
     pub permissions: BTreeMap<String, bool>,
@@ -90,7 +90,7 @@ pub trait RoleSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleCreate {
     pub name: String,
-    pub color: u32,
+    pub color: Color,
     pub hoist: bool,
     pub mentionable: bool,
     pub permissions: BTreeMap<String, bool>,
@@ -111,7 +111,7 @@ pub enum RoleDeleteOutcome {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoleUpdate {
     pub name: Option<String>,
-    pub color: Option<u32>,
+    pub color: Option<Color>,
     pub hoist: Option<bool>,
     pub mentionable: Option<bool>,
     pub permissions: Option<BTreeMap<String, bool>>,
@@ -345,10 +345,10 @@ where
         previous_state_json: Option<&str>,
     ) -> Result<ExportFiles, ManagementError> {
         let previous_state = previous_state_json
-            .map(|contents| deserialize_state_for_guild(contents, guild_id))
+            .map(|contents| StateFile::parse_for_guild(contents, guild_id))
             .transpose()?;
 
-        let previous_mappings = previous_state.map(|state| state.roles).unwrap_or_default();
+        let previous_mappings = previous_state.map(StateFile::into_role_mappings).unwrap_or_default();
         let previous_logical_ids = previous_mappings
             .iter()
             .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
@@ -387,7 +387,7 @@ where
             }
             definitions.insert(
                 logical_id.clone(),
-                RoleDefinition {
+                RawRoleDefinition {
                     ensure: RoleEnsure::Present,
                     mode: RoleMode::Managed,
                     settings_sets: Vec::new(),
@@ -418,9 +418,9 @@ where
             );
         }
 
-        let definition_toml = toml::to_string_pretty(&DefinitionFile {
+        let definition_toml = toml::to_string_pretty(&RawDefinitionFile {
             schema_version: SCHEMA_VERSION,
-            settings_sets: RoleSettingsSets::default(),
+            settings_sets: SettingsSets::default(),
             roles: definitions,
             channels: BTreeMap::new(),
             members: BTreeMap::new(),
@@ -429,7 +429,7 @@ where
             order: None,
         })
         .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
-        let state_json = serde_json::to_string_pretty(&StateFile {
+        let state_json = serde_json::to_string_pretty(&RawStateFile {
             schema_version: SCHEMA_VERSION,
             guild_id,
             roles: mappings,
@@ -453,201 +453,11 @@ where
         definition_toml: &str,
         state_json: &str,
     ) -> Result<RolePlan, ManagementError> {
-        let definition: DefinitionFile =
-            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
-        let state = deserialize_state_for_guild(state_json, guild_id)?;
-        validate_references(&definition, &state)?;
-        validate_role_plan_scope(&definition)?;
+        let input = PlanInput::parse(definition_toml, state_json, guild_id)?;
 
         let catalog = self.source.role_catalog(&guild_id).await?;
-        build_plan(&definition, &state, &catalog)
+        build_plan(&input.definition, &input.state, &catalog)
     }
-}
-
-impl<S> RoleManagementService<S>
-where
-    S: ResourceSource,
-{
-    pub async fn bind_resource(
-        &self,
-        guild_id: GuildId,
-        definition_toml: &str,
-        state_json: &str,
-        resource_type: ResourceType,
-        logical_id: &str,
-        discord_id: &str,
-    ) -> Result<BindResult, ManagementError> {
-        let definition: DefinitionFile =
-            toml::from_str(definition_toml).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
-        let mut state = deserialize_state_for_guild(state_json, guild_id)?;
-        let discord_id = discord_id.parse::<u64>().map_err(|error| {
-            ManagementError::InvalidInputFile(format!(
-                "{resource_type} の Discord ID {discord_id} が不正です: {error}"
-            ))
-        })?;
-        if discord_id == u64::MAX {
-            return Err(ManagementError::InvalidInputFile(format!(
-                "{resource_type} の Discord ID {discord_id} は使用できません"
-            )));
-        }
-        if resource_type == ResourceType::Role && discord_id == guild_id.get() {
-            return Err(ManagementError::InvalidDefinition(
-                "予約参照 everyone の Role ID は別の論理 ID へ bind できません".to_owned(),
-            ));
-        }
-
-        let logical_id = match resource_type {
-            ResourceType::Role => {
-                let logical_id = RoleLogicalId::parse(logical_id).map_err(|error| {
-                    ManagementError::InvalidDefinition(format!("Role の論理 ID が不正です: {error}"))
-                })?;
-                if logical_id == everyone_logical_id() {
-                    return Err(ManagementError::InvalidDefinition(
-                        "予約参照 everyone は bind せず、Guild ID へ自動解決します".to_owned(),
-                    ));
-                }
-                if !definition.roles.contains_key(&logical_id) {
-                    return Err(ManagementError::InvalidDefinition(format!(
-                        "Role {logical_id} の宣言が definition にありません"
-                    )));
-                }
-                BoundLogicalId::Role(logical_id)
-            }
-            ResourceType::Channel => {
-                let logical_id = ChannelLogicalId::parse(logical_id).map_err(|error| {
-                    ManagementError::InvalidDefinition(format!("Channel の論理 ID が不正です: {error}"))
-                })?;
-                let Some(declaration) = definition.channels.get(&logical_id) else {
-                    return Err(ManagementError::InvalidDefinition(format!(
-                        "Channel {logical_id} の宣言が definition にありません"
-                    )));
-                };
-                if declaration.is_absent() {
-                    return Err(ManagementError::InvalidDefinition(format!(
-                        "Channel {logical_id} は削除宣言のため bind できません"
-                    )));
-                }
-                BoundLogicalId::Channel(logical_id)
-            }
-            ResourceType::Member => {
-                let logical_id = MemberLogicalId::parse(logical_id).map_err(|error| {
-                    ManagementError::InvalidDefinition(format!("Member の論理 ID が不正です: {error}"))
-                })?;
-                if !definition.members.contains_key(&logical_id) {
-                    return Err(ManagementError::InvalidDefinition(format!(
-                        "Member {logical_id} の宣言が definition にありません"
-                    )));
-                }
-                BoundLogicalId::Member(logical_id)
-            }
-        };
-
-        validate_binding_conflicts(&state, &logical_id, discord_id)?;
-        let lookup =
-            self.source
-                .lookup_resource(&guild_id, discord_id)
-                .await?
-                .ok_or(ManagementError::ResourceNotFound {
-                    resource_type,
-                    discord_id,
-                })?;
-        if lookup.resource_type != resource_type {
-            return Err(ManagementError::ResourceTypeMismatch {
-                expected: resource_type,
-                actual: lookup.resource_type,
-                discord_id,
-            });
-        }
-        if lookup.guild_id != guild_id {
-            return Err(ManagementError::ResourceGuildMismatch {
-                resource_type,
-                discord_id,
-                resource_guild_id: lookup.guild_id,
-                actual_guild_id: guild_id,
-            });
-        }
-
-        match logical_id {
-            BoundLogicalId::Role(logical_id) => {
-                state.roles.insert(logical_id, RoleId::new(discord_id));
-            }
-            BoundLogicalId::Channel(logical_id) => {
-                state.channels.insert(logical_id, ChannelId::new(discord_id));
-            }
-            BoundLogicalId::Member(logical_id) => {
-                state.members.insert(logical_id, MemberId::new(discord_id));
-            }
-        }
-
-        Ok(BindResult {
-            state_json: serialize_state(&state)?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum BoundLogicalId {
-    Role(RoleLogicalId),
-    Channel(ChannelLogicalId),
-    Member(MemberLogicalId),
-}
-
-fn validate_binding_conflicts(
-    state: &StateFile,
-    logical_id: &BoundLogicalId,
-    discord_id: u64,
-) -> Result<(), ManagementError> {
-    match logical_id {
-        BoundLogicalId::Role(logical_id) => {
-            if let Some(existing) = state.roles.get(logical_id)
-                && existing.get() != discord_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Role {logical_id} はすでに Snowflake {existing} に対応しており、{discord_id} へ暗黙に付け替えられません"
-                )));
-            }
-            if let Some((existing, _)) = state.roles.iter().find(|(_, value)| value.get() == discord_id)
-                && existing != logical_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Role {existing} がすでに Snowflake {discord_id} を採用しています"
-                )));
-            }
-        }
-        BoundLogicalId::Channel(logical_id) => {
-            if let Some(existing) = state.channels.get(logical_id)
-                && existing.get() != discord_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Channel {logical_id} はすでに Snowflake {existing} に対応しており、{discord_id} へ暗黙に付け替えられません"
-                )));
-            }
-            if let Some((existing, _)) = state.channels.iter().find(|(_, value)| value.get() == discord_id)
-                && existing != logical_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Channel {existing} がすでに Snowflake {discord_id} を採用しています"
-                )));
-            }
-        }
-        BoundLogicalId::Member(logical_id) => {
-            if let Some(existing) = state.members.get(logical_id)
-                && existing.get() != discord_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Member {logical_id} はすでに Snowflake {existing} に対応しており、{discord_id} へ暗黙に付け替えられません"
-                )));
-            }
-            if let Some((existing, _)) = state.members.iter().find(|(_, value)| value.get() == discord_id)
-                && existing != logical_id
-            {
-                return Err(ManagementError::InvalidState(format!(
-                    "Member {existing} がすでに Snowflake {discord_id} を採用しています"
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn build_plan(
@@ -675,7 +485,7 @@ fn build_plan(
                 "Role {logical_id} の削除意図が未解決のため、定義を変更できません"
             )));
         };
-        if !matches!(role.ensure, RoleEnsure::Absent) {
+        if !role.is_absent() {
             return Err(ManagementError::InvalidState(format!(
                 "Role {logical_id} の削除意図が未解決です"
             )));
@@ -683,7 +493,7 @@ fn build_plan(
     }
 
     for (logical_id, desired) in &definition.roles {
-        if matches!(desired.ensure, RoleEnsure::Absent) {
+        if desired.is_absent() {
             if *logical_id == everyone_logical_id() {
                 return Err(ManagementError::InvalidDefinition(
                     "@everyone Role は削除できません".to_owned(),
@@ -727,7 +537,7 @@ fn build_plan(
                     "@everyone Role では権限だけを管理できます".to_owned(),
                 ));
             }
-            if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
+            if desired.is_managed() && !actual.manageable {
                 return Err(ManagementError::InvalidState(format!(
                     "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
                 )));
@@ -745,7 +555,7 @@ fn build_plan(
         }
 
         if state.deleted_roles.contains(logical_id) {
-            if matches!(desired.mode, RoleMode::Reference) {
+            if desired.is_reference() {
                 return Err(ManagementError::InvalidState(format!(
                     "削除済みの Role {logical_id} は参照専用として利用できません"
                 )));
@@ -759,7 +569,7 @@ fn build_plan(
         }
 
         let Some(discord_id) = state.roles.get(logical_id).copied() else {
-            if matches!(desired.mode, RoleMode::Reference) {
+            if desired.is_reference() {
                 return Err(ManagementError::InvalidState(format!(
                     "参照専用 Role {logical_id} の対応がありません"
                 )));
@@ -784,7 +594,7 @@ fn build_plan(
             ))
         })?;
         let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
-        if matches!(desired.mode, RoleMode::Managed) && !actual.manageable {
+        if desired.is_managed() && !actual.manageable {
             return Err(ManagementError::InvalidState(format!(
                 "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
@@ -825,7 +635,7 @@ fn validate_role_creation(
             "新しい Role {logical_id} には name が必要です"
         )));
     };
-    let name = resolve(name, "new role".to_owned(), "name")?;
+    let name = resolve(name, "new role".to_owned());
     if name.is_empty() {
         return Err(ManagementError::InvalidDefinition(format!(
             "新しい Role {logical_id} の name は空にできません"
@@ -836,7 +646,7 @@ fn validate_role_creation(
             .default_permissions
             .get(permission)
             .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
-        let resolved = resolve(value, default, &format!("permissions.{permission}"))?;
+        let resolved = resolve(value, default);
         if resolved && !catalog.grantable_permissions.contains(permission) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
@@ -848,8 +658,11 @@ fn validate_role_creation(
 
 mod apply;
 
+mod bind;
+
 mod model;
 
+pub use model::Color;
 use model::*;
 
 #[cfg(test)]

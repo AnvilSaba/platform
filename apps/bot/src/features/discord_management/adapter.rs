@@ -8,7 +8,7 @@ use serenity::{
 
 use super::ids::{GuildId, RoleId};
 use super::service::{
-    ManagementError, ResourceLookup, ResourceSource, ResourceType, RoleCatalog, RoleCreate, RoleCreateOutcome,
+    Color, ManagementError, ResourceLookup, ResourceSource, ResourceType, RoleCatalog, RoleCreate, RoleCreateOutcome,
     RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleSource, RoleUpdate, RoleUpdateOutcome, RoleUpdater,
 };
 
@@ -93,7 +93,7 @@ impl RoleSource for SerenityRoleSource<'_> {
                 // @everyone は通常の階層編集ではなく、基底権限の更新対象として明示的に許可する。
                 manageable: role.id == everyone_id || (!role.managed() && role.cmp(&bot_highest_role).is_lt()),
                 name: role.name.to_string(),
-                color: role.colour.0,
+                color: Color::new(role.colour.0).expect("Discord Role の color は常に24-bit範囲です"),
                 hoist: role.hoist(),
                 mentionable: role.mentionable(),
                 permissions: Permissions::all()
@@ -187,7 +187,7 @@ impl RoleUpdater for SerenityRoleSource<'_> {
             edit = edit.name(name);
         }
         if let Some(color) = update.color {
-            edit = edit.colour(Colour::new(color));
+            edit = edit.colour(Colour::new(color.get()));
         }
         if let Some(hoist) = update.hoist {
             edit = edit.hoist(hoist);
@@ -228,7 +228,7 @@ impl RoleLifecycleTarget for SerenityRoleSource<'_> {
     async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let mut edit = EditRole::new()
             .name(create.name)
-            .colour(Colour::new(create.color))
+            .colour(Colour::new(create.color.get()))
             .hoist(create.hoist)
             .mentionable(create.mentionable);
         let mut permissions = Permissions::empty();
