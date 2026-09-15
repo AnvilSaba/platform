@@ -1,13 +1,20 @@
 mod adapter;
+mod apply;
+mod bind;
 mod command;
+mod configuration;
 mod confirmation;
+mod domain;
+mod export;
 mod ids;
-mod service;
+mod plan;
+mod port;
+mod resource;
 
 pub use command::{bind, role_apply, role_export, role_plan};
 
 #[cfg(test)]
-mod tests {
+mod confirmation_tests {
     use std::{
         sync::{Arc, Barrier},
         time::{Duration, Instant},
@@ -73,3 +80,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

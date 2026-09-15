@@ -1,19 +1,4 @@
-pub(in super::super) fn compose_attributes(
-    definition: &RoleDefinition,
-    settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
-) -> RoleAttributes {
-    let mut composed = RoleAttributes::default();
-    for name in definition.settings_sets() {
-        let attributes = settings_sets
-            .get(name)
-            .expect("検証済み Role 定義は既知の設定セットだけを参照します");
-        composed.merge(attributes);
-    }
-    composed.merge(definition.attributes());
-    composed
-}
-
-pub(in super::super) fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
+pub(crate) fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
     for (logical_id, member) in &definition.members {
         if !matches!(member.mode, RoleMode::Reference) {
             return Err(validation_error(
@@ -25,7 +10,7 @@ pub(in super::super) fn validate_definition(definition: &RawDefinitionFile) -> R
     Ok(())
 }
 
-pub(in super::super) fn validate_permissions(permissions: &BTreeMap<String, ManagedValue<bool>>) -> Result<(), ValidationError> {
+pub(crate) fn validate_permissions(permissions: &BTreeMap<String, ManagedValue<bool>>) -> Result<(), ValidationError> {
     for permission in permissions.keys() {
         if permission.is_empty()
             || !permission.bytes().enumerate().all(|(index, byte)| {
@@ -43,151 +28,22 @@ pub(in super::super) fn validate_permissions(permissions: &BTreeMap<String, Mana
     Ok(())
 }
 
-pub(in super::super) fn validate_permission_names(
-    definition: &DefinitionFile,
-    known_permissions: &BTreeSet<String>,
-) -> Result<(), ManagementError> {
-    for (name, attributes) in &definition.settings_sets.role {
-        validate_attribute_permission_names(attributes, known_permissions, &format!("Role 設定セット {name}"))?;
-    }
-    for (logical_id, role) in &definition.roles {
-        validate_attribute_permission_names(role.attributes(), known_permissions, &format!("Role {logical_id}"))?;
-    }
-    Ok(())
-}
-
-pub(in super::super) fn validate_attribute_permission_names(
-    attributes: &RoleAttributes,
-    known_permissions: &BTreeSet<String>,
-    context: &str,
-) -> Result<(), ManagementError> {
-    if let Some(permission) = attributes
-        .permissions
-        .keys()
-        .find(|permission| !known_permissions.contains(*permission))
-    {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "{context} に未知の権限 {permission} が指定されています"
-        )));
-    }
-    Ok(())
-}
-
-pub(in super::super) fn compare_attributes(
-    logical_id: &RoleLogicalId,
-    discord_id: &RoleId,
-    actual: &RoleSnapshot,
-    desired: &RoleAttributes,
-    default_permissions: &BTreeMap<String, bool>,
-    grantable_permissions: &BTreeSet<String>,
-    changes: &mut Vec<AttributeChange>,
-) -> Result<(), ManagementError> {
-    if let Some(value) = &desired.name {
-        let desired = resolve(value, "new role".to_owned());
-        push_change(changes, logical_id, discord_id, "name", &actual.name, &desired);
-    }
-    if let Some(value) = &desired.color {
-        let desired = resolve(value, Color::default());
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "color",
-            &actual.color.get().to_string(),
-            &desired.get().to_string(),
-        );
-    }
-    if let Some(value) = &desired.hoist {
-        let desired = resolve(value, false);
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "hoist",
-            &actual.hoist.to_string(),
-            &desired.to_string(),
-        );
-    }
-    if let Some(value) = &desired.mentionable {
-        let desired = resolve(value, false);
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "mentionable",
-            &actual.mentionable.to_string(),
-            &desired.to_string(),
-        );
-    }
-    for (permission, value) in &desired.permissions {
-        let Some(current) = actual.permissions.get(permission) else {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Role {logical_id} に未知の権限 {permission} が指定されています"
-            )));
-        };
-        let default = *default_permissions
-            .get(permission)
-            .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
-        let desired = resolve(value, default);
-        if !*current && desired && !grantable_permissions.contains(permission) {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
-            )));
-        }
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            &format!("permissions.{permission}"),
-            &current.to_string(),
-            &desired.to_string(),
-        );
-    }
-    Ok(())
-}
-
-pub(in super::super) fn resolve<T: Clone>(value: &ManagedValue<T>, default: T) -> T {
-    match value {
-        ManagedValue::Value(value) => value.clone(),
-        ManagedValue::Default => default,
-    }
-}
-
-pub(in super::super) fn push_change(
-    changes: &mut Vec<AttributeChange>,
-    logical_id: &RoleLogicalId,
-    discord_id: &RoleId,
-    attribute: &str,
-    current: &str,
-    desired: &str,
-) {
-    if current != desired {
-        changes.push(AttributeChange {
-            logical_id: logical_id.clone(),
-            discord_id: *discord_id,
-            attribute: attribute.to_owned(),
-            current: current.to_owned(),
-            desired: desired.to_owned(),
-        });
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct RawRoleDefinition {
+pub(crate) struct RawRoleDefinition {
     #[serde(default, skip_serializing_if = "RoleEnsure::is_present")]
-    pub(in super::super) ensure: RoleEnsure,
+    pub(crate) ensure: RoleEnsure,
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
-    pub(in super::super) mode: RoleMode,
+    pub(crate) mode: RoleMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in super::super) settings_sets: Vec<RoleSettingsSetId>,
+    pub(crate) settings_sets: Vec<RoleSettingsSetId>,
     #[validate(nested)]
     #[serde(flatten)]
-    pub(in super::super) attributes: RoleAttributes,
+    pub(crate) attributes: RoleAttributes,
 }
 
 #[derive(Debug)]
-pub(in super::super) enum RoleDefinition {
+pub(crate) enum RoleDefinition {
     Managed {
         settings_sets: Vec<RoleSettingsSetId>,
         attributes: RoleAttributes,
@@ -235,26 +91,26 @@ impl RoleDefinition {
         }
     }
 
-    pub(in super::super) fn is_absent(&self) -> bool {
+    pub(crate) fn is_absent(&self) -> bool {
         matches!(self, Self::Absent)
     }
 
-    pub(in super::super) fn is_reference(&self) -> bool {
+    pub(crate) fn is_reference(&self) -> bool {
         matches!(self, Self::Reference)
     }
 
-    pub(in super::super) fn is_managed(&self) -> bool {
+    pub(crate) fn is_managed(&self) -> bool {
         matches!(self, Self::Managed { .. })
     }
 
-    pub(in super::super) fn settings_sets(&self) -> &[RoleSettingsSetId] {
+    pub(crate) fn settings_sets(&self) -> &[RoleSettingsSetId] {
         match self {
             Self::Managed { settings_sets, .. } => settings_sets,
             Self::Reference | Self::Absent => &[],
         }
     }
 
-    pub(in super::super) fn attributes(&self) -> &RoleAttributes {
+    pub(crate) fn attributes(&self) -> &RoleAttributes {
         static EMPTY: std::sync::OnceLock<RoleAttributes> = std::sync::OnceLock::new();
         match self {
             Self::Managed { attributes, .. } => attributes,
@@ -265,7 +121,7 @@ impl RoleDefinition {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(in super::super) enum RoleEnsure {
+pub(crate) enum RoleEnsure {
     #[default]
     Present,
     Absent,
@@ -279,7 +135,7 @@ impl RoleEnsure {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(in super::super) enum RoleMode {
+pub(crate) enum RoleMode {
     #[default]
     Managed,
     Reference,
@@ -293,22 +149,22 @@ impl RoleMode {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct RoleAttributes {
+pub(crate) struct RoleAttributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) name: Option<ManagedValue<String>>,
+    pub(crate) name: Option<ManagedValue<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) color: Option<ManagedValue<Color>>,
+    pub(crate) color: Option<ManagedValue<Color>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) hoist: Option<ManagedValue<bool>>,
+    pub(crate) hoist: Option<ManagedValue<bool>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) mentionable: Option<ManagedValue<bool>>,
+    pub(crate) mentionable: Option<ManagedValue<bool>>,
 
     #[validate(custom(function = "validate_permissions"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) permissions: BTreeMap<String, ManagedValue<bool>>,
+    pub(crate) permissions: BTreeMap<String, ManagedValue<bool>>,
 }
 
 impl RoleAttributes {
@@ -320,11 +176,11 @@ impl RoleAttributes {
             && self.permissions.is_empty()
     }
 
-    pub(in super::super) fn has_non_permission_attributes(&self) -> bool {
+    pub(crate) fn has_non_permission_attributes(&self) -> bool {
         self.name.is_some() || self.color.is_some() || self.hoist.is_some() || self.mentionable.is_some()
     }
 
-    fn merge(&mut self, later: &Self) {
+    pub(crate) fn merge(&mut self, later: &Self) {
         if later.name.is_some() {
             self.name.clone_from(&later.name);
         }
@@ -342,7 +198,7 @@ impl RoleAttributes {
 }
 
 #[derive(Clone, Debug)]
-pub(in super::super) enum ManagedValue<T> {
+pub(crate) enum ManagedValue<T> {
     Value(T),
     Default,
 }
@@ -391,11 +247,11 @@ where
     }
 }
 
-pub(in super::super) fn everyone_logical_id() -> RoleLogicalId {
+pub(crate) fn everyone_logical_id() -> RoleLogicalId {
     RoleLogicalId::parse("everyone").expect("予約済み論理 ID は常に有効です")
 }
 
-pub(in super::super) fn resolve_role_id(logical_id: &RoleLogicalId, state: &StateFile) -> Result<RoleId, ManagementError> {
+pub(crate) fn resolve_role_id(logical_id: &RoleLogicalId, state: &StateFile) -> Result<RoleId, ManagementError> {
     if *logical_id == everyone_logical_id() {
         return Ok(state
             .guild_id
@@ -410,8 +266,6 @@ pub(in super::super) fn resolve_role_id(logical_id: &RoleLogicalId, state: &Stat
         .copied()
         .ok_or_else(|| ManagementError::InvalidState(format!("Role {logical_id} の対応がありません")))
 }
-
-
 
 use super::*;
 

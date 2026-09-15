@@ -1,52 +1,52 @@
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[validate(schema(function = "validate_definition"))]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct RawDefinitionFile {
+pub(crate) struct RawDefinitionFile {
     #[validate(range(
         min = "SCHEMA_VERSION",
         max = "SCHEMA_VERSION",
         message = "対応していない schema_version です"
     ))]
-    pub(in super::super) schema_version: u32,
+    pub(crate) schema_version: u32,
 
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "SettingsSets::is_empty")]
-    pub(in super::super) settings_sets: SettingsSets,
+    pub(crate) settings_sets: SettingsSets,
 
     #[validate(nested)]
     #[serde(default)]
-    pub(in super::super) roles: BTreeMap<RoleLogicalId, RawRoleDefinition>,
+    pub(crate) roles: BTreeMap<RoleLogicalId, RawRoleDefinition>,
 
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) channels: BTreeMap<ChannelLogicalId, RawChannelDefinition>,
+    pub(crate) channels: BTreeMap<ChannelLogicalId, RawChannelDefinition>,
 
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) members: BTreeMap<MemberLogicalId, MemberDefinition>,
+    pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) message_sets: BTreeMap<String, toml::Value>,
+    pub(crate) message_sets: BTreeMap<String, toml::Value>,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) threads: BTreeMap<String, toml::Value>,
+    pub(crate) threads: BTreeMap<String, toml::Value>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) order: Option<toml::Value>,
+    pub(crate) order: Option<toml::Value>,
 }
 
 #[derive(Debug)]
-pub(in super::super) struct DefinitionFile {
-    pub(in super::super) settings_sets: SettingsSets,
-    pub(in super::super) roles: BTreeMap<RoleLogicalId, RoleDefinition>,
-    pub(in super::super) channels: BTreeMap<ChannelLogicalId, ChannelDefinition>,
-    pub(in super::super) members: BTreeMap<MemberLogicalId, MemberDefinition>,
-    pub(in super::super) message_sets: BTreeMap<String, toml::Value>,
-    pub(in super::super) threads: BTreeMap<String, toml::Value>,
+pub(crate) struct DefinitionFile {
+    pub(crate) settings_sets: SettingsSets,
+    pub(crate) roles: BTreeMap<RoleLogicalId, RoleDefinition>,
+    pub(crate) channels: BTreeMap<ChannelLogicalId, ChannelDefinition>,
+    pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
+    pub(crate) message_sets: BTreeMap<String, toml::Value>,
+    pub(crate) threads: BTreeMap<String, toml::Value>,
 }
 
 impl DefinitionFile {
-    pub(in super::super) fn parse(contents: &str) -> Result<Self, ManagementError> {
+    pub(crate) fn parse(contents: &str) -> Result<Self, ManagementError> {
         let raw: RawDefinitionFile =
             toml::from_str(contents).map_err(|error| ManagementError::InvalidDefinition(error.to_string()))?;
         raw.validate()
@@ -80,13 +80,13 @@ impl DefinitionFile {
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct SettingsSets {
+pub(crate) struct SettingsSets {
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) role: BTreeMap<RoleSettingsSetId, RoleAttributes>,
+    pub(crate) role: BTreeMap<RoleSettingsSetId, RoleAttributes>,
     #[validate(nested)]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) channel: BTreeMap<ChannelSettingsSetId, ChannelSettingsSet>,
+    pub(crate) channel: BTreeMap<ChannelSettingsSetId, ChannelSettingsSet>,
 }
 
 impl SettingsSets {
@@ -95,7 +95,4 @@ impl SettingsSets {
     }
 }
 
-
-
 use super::*;
-

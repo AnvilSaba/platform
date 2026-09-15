@@ -1,19 +1,20 @@
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[validate(schema(function = "validate_channel_definition"))]
-pub(in super::super) struct RawChannelDefinition {
+pub(crate) struct RawChannelDefinition {
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
-    pub(in super::super) mode: RoleMode,
+    pub(crate) mode: RoleMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) ensure: Option<Ensure>,
+    pub(crate) ensure: Option<Ensure>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in super::super) settings_sets: Vec<ChannelSettingsSetId>,
+    pub(crate) settings_sets: Vec<ChannelSettingsSetId>,
     #[serde(flatten)]
-    pub(in super::super) attributes: BTreeMap<String, toml::Value>,
+    pub(crate) attributes: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug)]
-pub(in super::super) enum ChannelDefinition {
+pub(crate) enum ChannelDefinition {
     Managed {
+        #[cfg_attr(not(test), allow(dead_code))]
         settings_sets: Vec<ChannelSettingsSetId>,
         // TODO(#7, #10-#13): Parse channel attributes into channel-type-specific
         // domain models and validate the composed settings.
@@ -63,11 +64,11 @@ impl ChannelDefinition {
         }
     }
 
-    pub(in super::super) fn is_absent(&self) -> bool {
+    pub(crate) fn is_absent(&self) -> bool {
         matches!(self, Self::Absent)
     }
 
-    pub(in super::super) fn attributes(&self) -> &BTreeMap<String, toml::Value> {
+    pub(crate) fn attributes(&self) -> &BTreeMap<String, toml::Value> {
         static EMPTY: std::sync::OnceLock<BTreeMap<String, toml::Value>> = std::sync::OnceLock::new();
         match self {
             Self::Managed { attributes, .. } => attributes,
@@ -75,7 +76,8 @@ impl ChannelDefinition {
         }
     }
 
-    pub(in super::super) fn settings_sets(&self) -> &[ChannelSettingsSetId] {
+    #[cfg(test)]
+    pub(crate) fn settings_sets(&self) -> &[ChannelSettingsSetId] {
         match self {
             Self::Managed { settings_sets, .. } => settings_sets,
             Self::Reference | Self::Absent => &[],
@@ -85,23 +87,23 @@ impl ChannelDefinition {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(in super::super) enum Ensure {
+pub(crate) enum Ensure {
     Present,
     Absent,
 }
 
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct MemberDefinition {
+pub(crate) struct MemberDefinition {
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
-    pub(in super::super) mode: RoleMode,
+    pub(crate) mode: RoleMode,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
 #[validate(schema(function = "validate_channel_settings_set"))]
-pub(in super::super) struct ChannelSettingsSet {
+pub(crate) struct ChannelSettingsSet {
     #[serde(flatten)]
-    pub(in super::super) attributes: BTreeMap<String, toml::Value>,
+    pub(crate) attributes: BTreeMap<String, toml::Value>,
 }
 
 const CHANNEL_ATTRIBUTE_NAMES: &[&str] = &[
@@ -147,7 +149,5 @@ fn validate_channel_attributes(attributes: &BTreeMap<String, toml::Value>) -> Re
     }
     Ok(())
 }
-
-
 
 use super::*;

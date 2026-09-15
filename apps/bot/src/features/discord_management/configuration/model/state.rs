@@ -1,67 +1,67 @@
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[validate(schema(function = "validate_state"))]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct RawStateFile {
+pub(crate) struct RawStateFile {
     #[validate(range(
         min = "SCHEMA_VERSION",
         max = "SCHEMA_VERSION",
         message = "対応していない schema_version です"
     ))]
-    pub(in super::super) schema_version: u32,
+    pub(crate) schema_version: u32,
 
-    pub(in super::super) guild_id: GuildId,
+    pub(crate) guild_id: GuildId,
 
     #[validate(custom(function = "validate_role_mappings"))]
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_unique_role_mappings")]
-    pub(in super::super) roles: BTreeMap<RoleLogicalId, RoleId>,
+    pub(crate) roles: BTreeMap<RoleLogicalId, RoleId>,
 
     #[validate(custom(function = "validate_channel_mappings"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "deserialize_unique_channel_mappings")]
-    pub(in super::super) channels: BTreeMap<ChannelLogicalId, ChannelId>,
+    pub(crate) channels: BTreeMap<ChannelLogicalId, ChannelId>,
 
     #[validate(custom(function = "validate_member_mappings"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "deserialize_unique_member_mappings")]
-    pub(in super::super) members: BTreeMap<MemberLogicalId, MemberId>,
+    pub(crate) members: BTreeMap<MemberLogicalId, MemberId>,
 
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) deleted_roles: BTreeSet<RoleLogicalId>,
+    pub(crate) deleted_roles: BTreeSet<RoleLogicalId>,
 
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) pending_creations: BTreeSet<RoleLogicalId>,
+    pub(crate) pending_creations: BTreeSet<RoleLogicalId>,
 
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) pending_deletions: BTreeSet<RoleLogicalId>,
+    pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
 }
 
 #[derive(Debug, Serialize)]
-pub(in super::super) struct StateFile {
-    pub(in super::super) schema_version: u32,
+pub(crate) struct StateFile {
+    pub(crate) schema_version: u32,
 
-    pub(in super::super) guild_id: GuildId,
+    pub(crate) guild_id: GuildId,
 
-    pub(in super::super) roles: BTreeMap<RoleLogicalId, RoleId>,
-
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) channels: BTreeMap<ChannelLogicalId, ChannelId>,
+    pub(crate) roles: BTreeMap<RoleLogicalId, RoleId>,
 
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in super::super) members: BTreeMap<MemberLogicalId, MemberId>,
+    pub(crate) channels: BTreeMap<ChannelLogicalId, ChannelId>,
+
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) members: BTreeMap<MemberLogicalId, MemberId>,
 
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) deleted_roles: BTreeSet<RoleLogicalId>,
+    pub(crate) deleted_roles: BTreeSet<RoleLogicalId>,
 
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) pending_creations: BTreeSet<RoleLogicalId>,
+    pub(crate) pending_creations: BTreeSet<RoleLogicalId>,
 
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(in super::super) pending_deletions: BTreeSet<RoleLogicalId>,
+    pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
 }
 
 impl StateFile {
-    pub(in super::super) fn parse_for_guild(contents: &str, guild_id: GuildId) -> Result<Self, ManagementError> {
+    pub(crate) fn parse_for_guild(contents: &str, guild_id: GuildId) -> Result<Self, ManagementError> {
         let raw: RawStateFile =
             serde_json::from_str(contents).map_err(|error| ManagementError::InvalidState(error.to_string()))?;
         raw.validate()
@@ -91,7 +91,7 @@ impl StateFile {
         })
     }
 
-    pub(in super::super) fn into_role_mappings(self) -> BTreeMap<RoleLogicalId, RoleId> {
+    pub(crate) fn into_role_mappings(self) -> BTreeMap<RoleLogicalId, RoleId> {
         self.roles
     }
 }
@@ -148,7 +148,7 @@ where
     })
 }
 
-pub(in super::super) fn deserialize_unique_role_mappings<'de, D>(
+pub(crate) fn deserialize_unique_role_mappings<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<RoleLogicalId, RoleId>, D::Error>
 where
@@ -157,7 +157,7 @@ where
     deserialize_unique_mappings(deserializer, "Role")
 }
 
-pub(in super::super) fn deserialize_unique_channel_mappings<'de, D>(
+pub(crate) fn deserialize_unique_channel_mappings<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<ChannelLogicalId, ChannelId>, D::Error>
 where
@@ -166,7 +166,7 @@ where
     deserialize_unique_mappings(deserializer, "Channel")
 }
 
-pub(in super::super) fn deserialize_unique_member_mappings<'de, D>(
+pub(crate) fn deserialize_unique_member_mappings<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<MemberLogicalId, MemberId>, D::Error>
 where
@@ -175,17 +175,17 @@ where
     deserialize_unique_mappings(deserializer, "Member")
 }
 
-pub(in super::super) fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
+pub(crate) fn serialize_state(state: &StateFile) -> Result<String, ManagementError> {
     serde_json::to_string_pretty(state)
         .map(|json| format!("{json}\n"))
         .map_err(|error| ManagementError::SerializeState(error.to_string()))
 }
 
-pub(in super::super) fn validation_error(code: &'static str, message: impl Into<String>) -> ValidationError {
+pub(crate) fn validation_error(code: &'static str, message: impl Into<String>) -> ValidationError {
     ValidationError::new(code).with_message(message.into().into())
 }
 
-pub(in super::super) fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) -> Result<(), ValidationError> {
+pub(crate) fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, RoleId>) -> Result<(), ValidationError> {
     if roles.contains_key(&everyone_logical_id()) {
         return Err(validation_error(
             "reserved_everyone_logical_id",
@@ -196,13 +196,13 @@ pub(in super::super) fn validate_role_mappings(roles: &BTreeMap<RoleLogicalId, R
     validate_unique_mappings(roles, "Role")
 }
 
-pub(in super::super) fn validate_channel_mappings(
+pub(crate) fn validate_channel_mappings(
     channels: &BTreeMap<ChannelLogicalId, ChannelId>,
 ) -> Result<(), ValidationError> {
     validate_unique_mappings(channels, "Channel")
 }
 
-pub(in super::super) fn validate_member_mappings(members: &BTreeMap<MemberLogicalId, MemberId>) -> Result<(), ValidationError> {
+pub(crate) fn validate_member_mappings(members: &BTreeMap<MemberLogicalId, MemberId>) -> Result<(), ValidationError> {
     validate_unique_mappings(members, "Member")
 }
 
@@ -229,7 +229,7 @@ where
     Ok(())
 }
 
-pub(in super::super) fn validate_state(state: &RawStateFile) -> Result<(), ValidationError> {
+pub(crate) fn validate_state(state: &RawStateFile) -> Result<(), ValidationError> {
     for logical_id in &state.deleted_roles {
         if !state.roles.contains_key(logical_id) {
             return Err(validation_error(
@@ -263,7 +263,4 @@ pub(in super::super) fn validate_state(state: &RawStateFile) -> Result<(), Valid
     Ok(())
 }
 
-
-
 use super::*;
-
