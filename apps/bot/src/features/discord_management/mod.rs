@@ -12,7 +12,7 @@ mod port;
 mod resource;
 
 pub(crate) use apply::GuildApplyLock;
-pub use command::{bind, role_apply, role_export, role_plan};
+pub use command::{bind, channel_apply, channel_export, channel_plan, role_apply, role_export, role_plan};
 
 #[cfg(test)]
 mod confirmation_tests {

@@ -19,7 +19,7 @@ pub(crate) fn permission_vocabulary() -> PermissionVocabulary {
         .expect("Serenity の権限名は字句的に妥当です")
 }
 
-fn serenity_permission(permission: &KnownPermission) -> Permissions {
+pub(super) fn serenity_permission(permission: &KnownPermission) -> Permissions {
     Permissions::all()
         .iter_names()
         .find_map(|(known_name, permission_value)| (known_name == permission.as_str()).then_some(permission_value))

@@ -34,6 +34,41 @@ pub(crate) struct RawStateFile {
 
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
+
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) pending_role_updates: BTreeMap<RoleLogicalId, PendingRoleUpdate>,
+
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) deleted_channels: BTreeSet<ChannelLogicalId>,
+
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) pending_channel_creations: BTreeSet<ChannelLogicalId>,
+
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) pending_channel_deletions: BTreeSet<ChannelLogicalId>,
+
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) pending_channel_updates: BTreeMap<ChannelLogicalId, PendingChannelUpdate>,
+}
+
+/// API の更新要求を送信したが結果を確定できない状態です。
+///
+/// `discord_id` と `fingerprint` を state に残すことで、次回の同じ定義の
+///投入時に別のリソースへ誤適用せず、同じ意図を再取得・再投入できます。
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingRoleUpdate {
+    pub(crate) discord_id: RoleId,
+    pub(crate) intent: String,
+    pub(crate) fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingChannelUpdate {
+    pub(crate) discord_id: ChannelId,
+    pub(crate) intent: String,
+    pub(crate) fingerprint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,6 +93,21 @@ pub(crate) struct StateFile {
 
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
+
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) pending_role_updates: BTreeMap<RoleLogicalId, PendingRoleUpdate>,
+
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) deleted_channels: BTreeSet<ChannelLogicalId>,
+
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) pending_channel_creations: BTreeSet<ChannelLogicalId>,
+
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) pending_channel_deletions: BTreeSet<ChannelLogicalId>,
+
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) pending_channel_updates: BTreeMap<ChannelLogicalId, PendingChannelUpdate>,
 }
 
 impl StateFile {
@@ -88,11 +138,20 @@ impl StateFile {
             deleted_roles: raw.deleted_roles,
             pending_creations: raw.pending_creations,
             pending_deletions: raw.pending_deletions,
+            pending_role_updates: raw.pending_role_updates,
+            deleted_channels: raw.deleted_channels,
+            pending_channel_creations: raw.pending_channel_creations,
+            pending_channel_deletions: raw.pending_channel_deletions,
+            pending_channel_updates: raw.pending_channel_updates,
         })
     }
 
     pub(crate) fn into_role_mappings(self) -> BTreeMap<RoleLogicalId, RoleId> {
         self.roles
+    }
+
+    pub(crate) fn into_channel_mappings(self) -> BTreeMap<ChannelLogicalId, ChannelId> {
+        self.channels
     }
 }
 
@@ -257,6 +316,99 @@ pub(crate) fn validate_state(state: &RawStateFile) -> Result<(), ValidationError
             return Err(validation_error(
                 "invalid_pending_creation",
                 format!("作成結果不明の Role {logical_id} に Snowflake が設定されています"),
+            ));
+        }
+    }
+    for (logical_id, pending) in &state.pending_role_updates {
+        let discord_id = if *logical_id == everyone_logical_id() {
+            RoleId::new(state.guild_id.get())
+        } else {
+            let Some(discord_id) = state.roles.get(logical_id) else {
+                return Err(validation_error(
+                    "invalid_pending_role_update",
+                    format!("Role {logical_id} の更新意図に対応する Snowflake がありません"),
+                ));
+            };
+            *discord_id
+        };
+        if discord_id != pending.discord_id {
+            return Err(validation_error(
+                "pending_role_update_mapping_mismatch",
+                format!("Role {logical_id} の更新意図と state の Snowflake が一致しません"),
+            ));
+        }
+        if pending.intent != "update" || pending.fingerprint.is_empty() {
+            return Err(validation_error(
+                "invalid_pending_role_update",
+                format!("Role {logical_id} の更新意図または fingerprint が不正です"),
+            ));
+        }
+        if state.deleted_roles.contains(logical_id)
+            || state.pending_creations.contains(logical_id)
+            || state.pending_deletions.contains(logical_id)
+        {
+            return Err(validation_error(
+                "conflicting_role_operation",
+                format!("Role {logical_id} に競合する未完了状態があります"),
+            ));
+        }
+    }
+    for logical_id in &state.deleted_channels {
+        if !state.channels.contains_key(logical_id) {
+            return Err(validation_error(
+                "deleted_channel_without_mapping",
+                format!("削除済み Channel {logical_id} に対応する Snowflake がありません"),
+            ));
+        }
+        if state.pending_channel_deletions.contains(logical_id) {
+            return Err(validation_error(
+                "conflicting_channel_operation",
+                format!("Channel {logical_id} に競合する未完了状態があります"),
+            ));
+        }
+    }
+    for logical_id in &state.pending_channel_deletions {
+        if !state.channels.contains_key(logical_id) || state.deleted_channels.contains(logical_id) {
+            return Err(validation_error(
+                "invalid_pending_channel_deletion",
+                format!("Channel {logical_id} の削除意図に対応する active state がありません"),
+            ));
+        }
+    }
+    for logical_id in &state.pending_channel_creations {
+        if state.channels.contains_key(logical_id) && !state.deleted_channels.contains(logical_id) {
+            return Err(validation_error(
+                "invalid_pending_channel_creation",
+                format!("作成結果不明の Channel {logical_id} に Snowflake が設定されています"),
+            ));
+        }
+    }
+    for (logical_id, pending) in &state.pending_channel_updates {
+        let Some(discord_id) = state.channels.get(logical_id) else {
+            return Err(validation_error(
+                "invalid_pending_channel_update",
+                format!("Channel {logical_id} の更新意図に対応する Snowflake がありません"),
+            ));
+        };
+        if *discord_id != pending.discord_id {
+            return Err(validation_error(
+                "pending_channel_update_mapping_mismatch",
+                format!("Channel {logical_id} の更新意図と state の Snowflake が一致しません"),
+            ));
+        }
+        if pending.intent != "update" || pending.fingerprint.is_empty() {
+            return Err(validation_error(
+                "invalid_pending_channel_update",
+                format!("Channel {logical_id} の更新意図または fingerprint が不正です"),
+            ));
+        }
+        if state.deleted_channels.contains(logical_id)
+            || state.pending_channel_creations.contains(logical_id)
+            || state.pending_channel_deletions.contains(logical_id)
+        {
+            return Err(validation_error(
+                "conflicting_channel_operation",
+                format!("Channel {logical_id} に競合する未完了状態があります"),
             ));
         }
     }

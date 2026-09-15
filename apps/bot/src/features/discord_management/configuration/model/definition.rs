@@ -73,7 +73,7 @@ impl DefinitionFile {
         let channels = raw_channels
             .into_iter()
             .map(|(logical_id, channel)| {
-                ChannelDefinition::parse(logical_id.clone(), channel, &settings_sets.channel)
+                ChannelDefinition::parse(logical_id.clone(), channel, &settings_sets.channel, vocabulary)
                     .map(|channel| (logical_id, channel))
             })
             .collect::<Result<_, _>>()?;
