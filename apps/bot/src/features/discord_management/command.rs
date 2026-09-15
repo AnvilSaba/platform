@@ -22,7 +22,7 @@ use super::{
     export::export_roles,
     ids::GuildId,
     plan::plan_roles,
-    resource::role::{RoleLifecycleChange, RolePlan},
+    resource::role::RolePlan,
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -81,11 +81,9 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
         }
     };
     format!(
-        "{summary}\n成功した属性: {} / Role 操作: {}\n未完了の属性: {} / Role 操作: {}",
+        "{summary}\n成功した Role: {}\n未完了の Role: {}",
         result.applied.len(),
-        result.applied_lifecycle.len(),
         result.pending.len(),
-        result.pending_lifecycle.len(),
     )
 }
 
@@ -269,10 +267,7 @@ pub async fn role_apply(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let rendered_plan = plan.render();
-    let deletion_in_plan = plan
-        .lifecycle
-        .iter()
-        .any(|change| matches!(change, RoleLifecycleChange::Delete { .. }));
+    let deletion_in_plan = plan.contains_deletions();
 
     let confirmations = ConfirmationStore::default();
     let pending = PendingRoleApply {
