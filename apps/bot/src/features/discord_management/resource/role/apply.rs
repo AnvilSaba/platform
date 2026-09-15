@@ -6,7 +6,8 @@ use std::{
 
 use super::{AttributeChange, RoleLifecycleChange, RolePlan, build_plan, compose_attributes, resolve};
 use crate::features::discord_management::configuration::{
-    Color, DefinitionFile, PlanInput, RoleAttributes, StateFile, resolve_role_id, serialize_state,
+    Color, DefinitionFile, KnownPermission, PermissionVocabulary, PlanInput, RoleAttributes, StateFile,
+    resolve_role_id, serialize_state,
 };
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
@@ -108,6 +109,7 @@ impl ApplySession {
 
 pub(crate) async fn apply_role_updates<S: RoleUpdater>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -116,6 +118,7 @@ pub(crate) async fn apply_role_updates<S: RoleUpdater>(
 ) -> Result<RoleApplyResult, ManagementError> {
     let preparation = prepare_apply(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
@@ -154,13 +157,14 @@ pub(crate) async fn apply_role_updates<S: RoleUpdater>(
 
 async fn prepare_apply<S: RoleUpdater>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
     confirmed_plan: &RolePlan,
     processing_deadline: Instant,
 ) -> Result<ApplyPreparation, ManagementError> {
-    let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id)?;
+    let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id, vocabulary)?;
     let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
         return Ok(ApplyPreparation::Finished(result(
             &state,
@@ -272,7 +276,7 @@ async fn apply_attribute_changes<S: RoleUpdater>(
                     "Role {logical_id} の Snowflake {role_id} が Guild に存在しません"
                 ))
             })?;
-        build_role_update(actual, desired, &session.catalog.default_permissions, logical_id)?
+        build_role_update(actual, desired, &session.catalog.default_permissions)?
     };
     if update.is_empty() {
         return Ok(None);
@@ -333,6 +337,7 @@ async fn apply_attribute_changes<S: RoleUpdater>(
 
 pub(crate) async fn apply_roles<S: RoleLifecycleTarget>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -341,6 +346,7 @@ pub(crate) async fn apply_roles<S: RoleLifecycleTarget>(
 ) -> Result<RoleApplyResult, ManagementError> {
     apply_roles_with_options(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
@@ -351,8 +357,10 @@ pub(crate) async fn apply_roles<S: RoleLifecycleTarget>(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_roles_with_options<S: RoleLifecycleTarget>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -363,6 +371,7 @@ pub(crate) async fn apply_roles_with_options<S: RoleLifecycleTarget>(
     if confirmed_plan.lifecycle.is_empty() {
         return apply_role_updates(
             source,
+            vocabulary,
             guild_id,
             definition_toml,
             state_json,
@@ -374,6 +383,7 @@ pub(crate) async fn apply_roles_with_options<S: RoleLifecycleTarget>(
 
     let preparation = prepare_apply(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
@@ -622,8 +632,8 @@ fn desired_role_attributes(definition: &DefinitionFile) -> Vec<(RoleLogicalId, R
 
 fn build_role_create(
     desired: &RoleAttributes,
-    permission_names: &BTreeSet<String>,
-    default_permissions: &BTreeMap<String, bool>,
+    permission_names: &BTreeSet<KnownPermission>,
+    default_permissions: &BTreeMap<KnownPermission, bool>,
     logical_id: &RoleLogicalId,
 ) -> Result<RoleCreate, ManagementError> {
     let name = desired
@@ -653,7 +663,7 @@ fn build_role_create(
     for (permission, value) in &desired.permissions {
         let default = *default_permissions
             .get(permission)
-            .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
+            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
         permissions.insert(permission.clone(), resolve(value, default));
     }
     Ok(RoleCreate {
@@ -668,8 +678,7 @@ fn build_role_create(
 fn build_role_update(
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
-    default_permissions: &BTreeMap<String, bool>,
-    logical_id: &RoleLogicalId,
+    default_permissions: &BTreeMap<KnownPermission, bool>,
 ) -> Result<RoleUpdate, ManagementError> {
     let mut update = RoleUpdate::default();
     if let Some(value) = &desired.name {
@@ -699,16 +708,15 @@ fn build_role_update(
     if !desired.permissions.is_empty() {
         let mut permissions = actual.permissions.clone();
         for (permission, value) in &desired.permissions {
-            let current = actual.permissions.get(permission).ok_or_else(|| {
-                ManagementError::InvalidDefinition(format!(
-                    "Role {logical_id} に未知の権限 {permission} が指定されています"
-                ))
-            })?;
-            let default = *default_permissions.get(permission).ok_or_else(|| {
-                ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません"))
-            })?;
+            let current = *actual
+                .permissions
+                .get(permission)
+                .expect("RoleCatalog は既知の権限をすべての Role に保持します");
+            let default = *default_permissions
+                .get(permission)
+                .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
             let value = resolve(value, default);
-            if value != *current {
+            if value != current {
                 permissions.insert(permission.clone(), value);
             }
         }

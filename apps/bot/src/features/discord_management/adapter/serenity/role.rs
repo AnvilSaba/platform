@@ -4,7 +4,7 @@ use serenity::{
     http::{HttpError, StatusCode},
 };
 
-use crate::features::discord_management::configuration::Color;
+use crate::features::discord_management::configuration::{Color, KnownPermission, PermissionVocabulary};
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId};
 use crate::features::discord_management::port::{
@@ -13,6 +13,18 @@ use crate::features::discord_management::port::{
 };
 
 use super::resource::SerenityRoleSource;
+
+pub(crate) fn permission_vocabulary() -> PermissionVocabulary {
+    PermissionVocabulary::from_names(Permissions::all().iter_names().map(|(name, _)| name.to_owned()))
+        .expect("Serenity の権限名は字句的に妥当です")
+}
+
+fn serenity_permission(permission: &KnownPermission) -> Permissions {
+    Permissions::all()
+        .iter_names()
+        .find_map(|(known_name, permission_value)| (known_name == permission.as_str()).then_some(permission_value))
+        .expect("PermissionVocabulary と Serenity の権限語彙が一致しています")
+}
 
 impl From<SerenityRoleId> for RoleId {
     fn from(id: SerenityRoleId) -> Self {
@@ -63,6 +75,7 @@ impl RoleSource for SerenityRoleSource<'_> {
         } else {
             bot_permissions
         };
+        let known_permissions = permission_vocabulary().known_permissions().collect::<Vec<_>>();
 
         let mut snapshots = roles
             .into_iter()
@@ -75,27 +88,32 @@ impl RoleSource for SerenityRoleSource<'_> {
                 color: Color::new(role.colour.0).expect("Discord Role の color は常に24-bit範囲です"),
                 hoist: role.hoist(),
                 mentionable: role.mentionable(),
-                permissions: Permissions::all()
-                    .iter_names()
-                    .map(|(name, permission)| (name.to_owned(), role.permissions.contains(permission)))
+                permissions: known_permissions
+                    .iter()
+                    .cloned()
+                    .map(|permission| {
+                        let serenity_permission = serenity_permission(&permission);
+                        (permission, role.permissions.contains(serenity_permission))
+                    })
                     .collect(),
             })
             .collect::<Vec<_>>();
         snapshots.sort_by_key(|role| role.id);
         Ok(RoleCatalog {
             roles: snapshots,
-            permission_names: Permissions::all()
-                .iter_names()
-                .map(|(name, _)| name.to_owned())
+            permission_names: known_permissions.iter().cloned().collect(),
+            grantable_permissions: known_permissions
+                .iter()
+                .filter(|permission| grantable_permissions.contains(serenity_permission(permission)))
+                .cloned()
                 .collect(),
-            grantable_permissions: Permissions::all()
-                .iter_names()
-                .filter(|&(_, permission)| grantable_permissions.contains(permission))
-                .map(|(name, _)| name.to_owned())
-                .collect(),
-            default_permissions: Permissions::all()
-                .iter_names()
-                .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
+            default_permissions: known_permissions
+                .iter()
+                .cloned()
+                .map(|permission| {
+                    let serenity_permission = serenity_permission(&permission);
+                    (permission, everyone_permissions.contains(serenity_permission))
+                })
                 .collect(),
         })
     }
@@ -133,12 +151,7 @@ impl RoleUpdater for SerenityRoleSource<'_> {
         if let Some(permission_values) = update.permissions {
             let mut permissions = Permissions::empty();
             for (name, enabled) in permission_values {
-                let permission = Permissions::all()
-                    .iter_names()
-                    .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
-                    .ok_or_else(|| {
-                        ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています"))
-                    })?;
+                let permission = serenity_permission(&name);
                 if enabled {
                     permissions |= permission;
                 }
@@ -168,10 +181,7 @@ impl RoleLifecycleTarget for SerenityRoleSource<'_> {
             .mentionable(create.mentionable);
         let mut permissions = Permissions::empty();
         for (name, enabled) in create.permissions {
-            let permission = Permissions::all()
-                .iter_names()
-                .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
-                .ok_or_else(|| ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています")))?;
+            let permission = serenity_permission(&name);
             if enabled {
                 permissions |= permission;
             }

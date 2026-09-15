@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     configuration::{
-        ManagedValue, RawDefinitionFile, RawRoleDefinition, RawStateFile, RoleAttributes, RoleEnsure, RoleMode,
-        SettingsSets, StateFile, everyone_logical_id,
+        ManagedValue, PermissionName, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets,
+        RawStateFile, RoleEnsure, RoleMode, StateFile, everyone_logical_id,
     },
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{GuildId, RoleLogicalId},
@@ -74,16 +74,21 @@ pub(super) async fn export_roles<S: RoleSource>(
                 mode: RoleMode::Managed,
                 settings_sets: Vec::new(),
                 attributes: if is_everyone {
-                    RoleAttributes {
+                    RawRoleAttributes {
                         permissions: role
                             .permissions
                             .into_iter()
-                            .map(|(name, value)| (name, ManagedValue::Value(value)))
+                            .map(|(name, value)| {
+                                (
+                                    PermissionName::parse(name.as_str()).expect("Serenity の権限名は字句的に妥当です"),
+                                    ManagedValue::Value(value),
+                                )
+                            })
                             .collect(),
-                        ..RoleAttributes::default()
+                        ..RawRoleAttributes::default()
                     }
                 } else {
-                    RoleAttributes {
+                    RawRoleAttributes {
                         name: Some(ManagedValue::Value(role.name)),
                         color: Some(ManagedValue::Value(role.color)),
                         hoist: Some(ManagedValue::Value(role.hoist)),
@@ -92,7 +97,12 @@ pub(super) async fn export_roles<S: RoleSource>(
                             .permissions
                             .into_iter()
                             .filter(|(_, value)| *value)
-                            .map(|(name, value)| (name, ManagedValue::Value(value)))
+                            .map(|(name, value)| {
+                                (
+                                    PermissionName::parse(name.as_str()).expect("Serenity の権限名は字句的に妥当です"),
+                                    ManagedValue::Value(value),
+                                )
+                            })
                             .collect(),
                     }
                 },
@@ -102,7 +112,7 @@ pub(super) async fn export_roles<S: RoleSource>(
 
     let definition_toml = toml::to_string_pretty(&RawDefinitionFile {
         schema_version: SCHEMA_VERSION,
-        settings_sets: SettingsSets::default(),
+        settings_sets: RawSettingsSets::default(),
         roles: definitions,
         channels: BTreeMap::new(),
         members: BTreeMap::new(),
