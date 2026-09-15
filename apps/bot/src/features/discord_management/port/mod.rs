@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    configuration::Color,
+    configuration::{Color, KnownPermission},
     domain::{ManagementError, ResourceType},
     ids::{GuildId, RoleId},
 };
@@ -20,16 +20,16 @@ pub(super) struct RoleSnapshot {
     pub color: Color,
     pub hoist: bool,
     pub mentionable: bool,
-    pub permissions: BTreeMap<String, bool>,
+    pub permissions: BTreeMap<KnownPermission, bool>,
 }
 
 /// Role の現在値と Discord 側で利用可能な権限をまとめた Port DTO です。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RoleCatalog {
     pub roles: Vec<RoleSnapshot>,
-    pub permission_names: BTreeSet<String>,
-    pub grantable_permissions: BTreeSet<String>,
-    pub default_permissions: BTreeMap<String, bool>,
+    pub permission_names: BTreeSet<KnownPermission>,
+    pub grantable_permissions: BTreeSet<KnownPermission>,
+    pub default_permissions: BTreeMap<KnownPermission, bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,7 +38,7 @@ pub(super) struct RoleCreate {
     pub color: Color,
     pub hoist: bool,
     pub mentionable: bool,
-    pub permissions: BTreeMap<String, bool>,
+    pub permissions: BTreeMap<KnownPermission, bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub(super) struct RoleUpdate {
     pub color: Option<Color>,
     pub hoist: Option<bool>,
     pub mentionable: Option<bool>,
-    pub permissions: Option<BTreeMap<String, bool>>,
+    pub permissions: Option<BTreeMap<KnownPermission, bool>>,
 }
 
 impl RoleUpdate {

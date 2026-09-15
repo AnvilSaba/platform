@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{
     configuration::{
-        Color, DefinitionFile, ManagedValue, RoleAttributes, RoleDefinition, StateFile, everyone_logical_id,
-        resolve_role_id,
+        Color, DefinitionFile, KnownPermission, ManagedValue, RoleAttributes, RoleDefinition, StateFile,
+        everyone_logical_id, resolve_role_id,
     },
     domain::ManagementError,
     port::{RoleCatalog, RoleSnapshot},
@@ -96,43 +96,13 @@ pub(crate) fn compose_attributes(
     composed
 }
 
-fn validate_permission_names(
-    definition: &DefinitionFile,
-    known_permissions: &BTreeSet<String>,
-) -> Result<(), ManagementError> {
-    for (name, attributes) in &definition.settings_sets.role {
-        validate_attribute_permission_names(attributes, known_permissions, &format!("Role 設定セット {name}"))?;
-    }
-    for (logical_id, role) in &definition.roles {
-        validate_attribute_permission_names(role.attributes(), known_permissions, &format!("Role {logical_id}"))?;
-    }
-    Ok(())
-}
-
-fn validate_attribute_permission_names(
-    attributes: &RoleAttributes,
-    known_permissions: &BTreeSet<String>,
-    context: &str,
-) -> Result<(), ManagementError> {
-    if let Some(permission) = attributes
-        .permissions
-        .keys()
-        .find(|permission| !known_permissions.contains(*permission))
-    {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "{context} に未知の権限 {permission} が指定されています"
-        )));
-    }
-    Ok(())
-}
-
 fn compare_attributes(
     logical_id: &RoleLogicalId,
     discord_id: &RoleId,
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
-    default_permissions: &BTreeMap<String, bool>,
-    grantable_permissions: &BTreeSet<String>,
+    default_permissions: &BTreeMap<KnownPermission, bool>,
+    grantable_permissions: &BTreeSet<KnownPermission>,
     changes: &mut Vec<AttributeChange>,
 ) -> Result<(), ManagementError> {
     if let Some(value) = &desired.name {
@@ -173,16 +143,15 @@ fn compare_attributes(
         );
     }
     for (permission, value) in &desired.permissions {
-        let Some(current) = actual.permissions.get(permission) else {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Role {logical_id} に未知の権限 {permission} が指定されています"
-            )));
-        };
+        let current = *actual
+            .permissions
+            .get(permission)
+            .expect("RoleCatalog は既知の権限をすべての Role に保持します");
         let default = *default_permissions
             .get(permission)
-            .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
+            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
         let desired = resolve(value, default);
-        if !*current && desired && !grantable_permissions.contains(permission) {
+        if !current && desired && !grantable_permissions.contains(permission) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
             )));
@@ -234,7 +203,6 @@ pub(crate) fn build_plan(
     state: &StateFile,
     catalog: &RoleCatalog,
 ) -> Result<RolePlan, ManagementError> {
-    validate_permission_names(definition, &catalog.permission_names)?;
     let actual_roles = catalog
         .roles
         .iter()
@@ -414,7 +382,7 @@ fn validate_role_creation(
         let default = *catalog
             .default_permissions
             .get(permission)
-            .ok_or_else(|| ManagementError::RoleSource(format!("権限 {permission} の Guild 既定値を取得できません")))?;
+            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
         let resolved = resolve(value, default);
         if resolved && !catalog.grantable_permissions.contains(permission) {
             return Err(ManagementError::InvalidDefinition(format!(

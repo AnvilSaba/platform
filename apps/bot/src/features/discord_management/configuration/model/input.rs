@@ -6,8 +6,13 @@ pub(crate) struct PlanInput {
 }
 
 impl PlanInput {
-    pub(crate) fn parse(definition_toml: &str, state_json: &str, guild_id: GuildId) -> Result<Self, ManagementError> {
-        let definition = DefinitionFile::parse(definition_toml)?;
+    pub(crate) fn parse(
+        definition_toml: &str,
+        state_json: &str,
+        guild_id: GuildId,
+        vocabulary: &PermissionVocabulary,
+    ) -> Result<Self, ManagementError> {
+        let definition = DefinitionFile::parse(definition_toml, vocabulary)?;
         let state = StateFile::parse_for_guild(state_json, guild_id)?;
         validate_references(&definition, &state)?;
         Ok(Self { definition, state })
