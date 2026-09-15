@@ -15,12 +15,14 @@ use crate::app::{AppContext, AppError};
 
 use super::{
     adapter::SerenityRoleSource,
+    apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, apply_roles, apply_roles_with_options},
+    bind::bind_resource,
     confirmation::{ConfirmationError, ConfirmationStore},
+    domain::{ManagementError, ResourceType},
+    export::export_roles,
     ids::GuildId,
-    service::{
-        ManagementError, ResourceType, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleLifecycleChange,
-        RoleManagementService, RolePlan,
-    },
+    plan::plan_roles,
+    resource::role::{RoleLifecycleChange, RolePlan},
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -130,18 +132,17 @@ pub async fn bind(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
 
-    match service
-        .bind_resource(
-            guild_id,
-            &definition_text,
-            &state_text,
-            resource_type,
-            &logical_id,
-            &discord_id,
-        )
-        .await
+    match bind_resource(
+        &source,
+        guild_id,
+        &definition_text,
+        &state_text,
+        resource_type,
+        &logical_id,
+        &discord_id,
+    )
+    .await
     {
         Ok(result) => {
             ctx.send(
@@ -180,9 +181,8 @@ pub async fn role_export(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
 
-    match service.export_roles(guild_id, state_text.as_deref()).await {
+    match export_roles(&source, guild_id, state_text.as_deref()).await {
         Ok(files) => {
             ctx.send(
                 CreateReply::default()
@@ -221,9 +221,8 @@ pub async fn role_plan(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
 
-    match service.plan_roles(guild_id, &definition_text, &state_text).await {
+    match plan_roles(&source, guild_id, &definition_text, &state_text).await {
         Ok(plan) => {
             ctx.send(
                 CreateReply::default()
@@ -261,8 +260,7 @@ pub async fn role_apply(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
-    let plan = match service.plan_roles(guild_id, &definition_text, &state_text).await {
+    let plan = match plan_roles(&source, guild_id, &definition_text, &state_text).await {
         Ok(plan) => plan,
         Err(error) => return send_input_error(ctx, error).await,
     };
@@ -355,28 +353,27 @@ pub async fn role_apply(
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-                let service = RoleManagementService::new(source);
                 let result = if allow_deletions {
-                    service
-                        .apply_roles_with_options(
-                            payload.guild_id,
-                            &payload.definition,
-                            &payload.state,
-                            &payload.plan,
-                            RoleApplyOptions { allow_deletions: true },
-                            deadlines.processing,
-                        )
-                        .await
+                    apply_roles_with_options(
+                        &source,
+                        payload.guild_id,
+                        &payload.definition,
+                        &payload.state,
+                        &payload.plan,
+                        RoleApplyOptions { allow_deletions: true },
+                        deadlines.processing,
+                    )
+                    .await
                 } else {
-                    service
-                        .apply_roles(
-                            payload.guild_id,
-                            &payload.definition,
-                            &payload.state,
-                            &payload.plan,
-                            deadlines.processing,
-                        )
-                        .await
+                    apply_roles(
+                        &source,
+                        payload.guild_id,
+                        &payload.definition,
+                        &payload.state,
+                        &payload.plan,
+                        deadlines.processing,
+                    )
+                    .await
                 };
                 let needs_deletion_confirmation = matches!(
                     &result,
