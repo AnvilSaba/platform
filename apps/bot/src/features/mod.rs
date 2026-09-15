@@ -1,6 +1,6 @@
 mod admin;
 mod auth;
-mod discord_management;
+pub(crate) mod discord_management;
 mod honeypot;
 mod message_cache_handler;
 mod message_logging;
