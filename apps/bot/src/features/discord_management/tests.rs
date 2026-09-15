@@ -10,7 +10,7 @@ use super::{
     ids::*,
     plan::plan_roles as plan_roles_workflow,
     port::*,
-    resource::role::{AttributeChange, RoleLifecycleChange, RolePlan},
+    resource::role::{Change, RolePlan},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -565,7 +565,7 @@ async fn plan_resolves_bound_reference_resources_without_managing_attributes() {
 
     let plan = plan_roles(&source, guild_id(100), definition, state).await.unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
 }
 
 /// Channel の親として使う論理 ID の宣言が不足していれば plan で診断することを保証する。
@@ -777,7 +777,7 @@ async fn bound_state_can_be_passed_to_the_next_plan() {
         .await
         .unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
 }
 
 /// Role・Channel・Member・管理メッセージを含む定義サンプルを resource 定義として読み取れることを保証する。
@@ -842,7 +842,7 @@ async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
     let plan = plan_roles(&source, guild_id(100), &files.definition_toml, &files.state_json)
         .await
         .unwrap();
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
 }
 
 /// @everyoneへ名前など権限以外の管理属性を指定した定義を拒否し、Discord固有の制約を守る。
@@ -907,7 +907,33 @@ async fn exported_definition_has_no_plan_changes() {
         .await
         .unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
+}
+
+/// 実構成と希望構成が一致する場合、空の Update を作らず変更なしとして扱うことを保証する。
+#[tokio::test]
+async fn identical_role_attributes_do_not_create_an_empty_update() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "運営")],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        name = "運営"
+    "#;
+
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.is_empty());
+    assert!(plan.iter().all(|(_, change)| !change.is_update()));
 }
 
 /// 空の対応表から明示した managed Role を新規構築する計画を作り、Discord ID を推測しないことを保証する。
@@ -927,13 +953,10 @@ async fn empty_state_plans_managed_role_creation_without_discord_id() {
         .await
         .unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert_eq!(plan.len(), 1);
     assert_eq!(
-        plan.lifecycle,
-        vec![RoleLifecycleChange::Create {
-            logical_id: logical_id("moderator"),
-            recreated: false,
-        }]
+        plan.get(&logical_id("moderator")).and_then(Change::recreated),
+        Some(false)
     );
     assert!(plan.render().contains("moderator"));
     assert!(plan.render().contains("作成"));
@@ -964,7 +987,7 @@ async fn reference_role_may_target_an_unmanageable_guild_role() {
     .await
     .unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
 }
 
 /// stateに対応を持たない@everyoneも、予約論理IDによって参照専用Roleとして解決できることを保証する。
@@ -986,7 +1009,7 @@ async fn everyone_role_may_be_used_as_a_reference() {
         .await
         .unwrap();
 
-    assert!(plan.changes.is_empty());
+    assert!(plan.is_empty());
 }
 
 /// 権限のdefault指定が固定値ではなく、Guildの@everyoneに設定された基底権限を参照することを保証する。
@@ -1015,9 +1038,16 @@ async fn permission_default_uses_everyone_role_value() {
     .await
     .unwrap();
 
-    assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
-    assert_eq!(plan.changes[0].current, "false");
-    assert_eq!(plan.changes[0].desired, "true");
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("権限変更は対象 Role の一つの Update にまとまります");
+    let permission = attributes
+        .permissions()
+        .get(&known_permission("VIEW_CHANNEL"))
+        .expect("VIEW_CHANNEL の変更が計画されます");
+    assert_eq!(permission.current(), &false);
+    assert_eq!(permission.desired(), &true);
 }
 
 /// export対象をBotが管理可能なRoleに限定し、管理不能なRoleを編集用定義へ混入させない。
@@ -1061,15 +1091,54 @@ async fn role_settings_set_attributes_are_planned() {
 
     let plan = plan_roles(&source, guild_id(100), definition, state).await.unwrap();
 
-    assert_eq!(
-        plan.changes,
-        vec![AttributeChange {
-            logical_id: logical_id("moderator"),
-            discord_id: role_id("200"),
-            attribute: "hoist".to_owned(),
-            current: "false".to_owned(),
-            desired: "true".to_owned(),
-        }]
+    assert_eq!(plan.len(), 1);
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("設定セットによる変更は一つの Update にまとまります");
+    let hoist = attributes.hoist().expect("hoist の変更が計画されます");
+    assert_eq!(hoist.current(), &false);
+    assert_eq!(hoist.desired(), &true);
+}
+
+/// 一つの Role に複数属性の差分がある場合、Role 単位の一つの Update に集約することを保証する。
+#[tokio::test]
+async fn multiple_role_attributes_are_grouped_in_one_change() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "運営")],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        name = "モデレーター"
+        hoist = true
+        mentionable = true
+        [roles.moderator.permissions]
+        SEND_MESSAGES = true
+    "#;
+
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(plan.len(), 1);
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("複数属性の差分は一つの Update に集約されます");
+    assert_eq!(attributes.name().expect("name の変更").desired(), "モデレーター");
+    assert_eq!(attributes.hoist().expect("hoist の変更").desired(), &true);
+    assert_eq!(attributes.mentionable().expect("mentionable の変更").desired(), &true);
+    assert!(
+        attributes
+            .permissions()
+            .contains_key(&known_permission("SEND_MESSAGES"))
     );
 }
 
@@ -1188,10 +1257,14 @@ async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_a
     .await
     .unwrap();
 
-    assert_eq!(plan.changes.len(), 2);
-    assert!(plan.changes.iter().any(|change| change.attribute == "hoist"));
-    assert!(plan.changes.iter().any(|change| change.attribute == "mentionable"));
-    assert!(!plan.changes.iter().any(|change| change.attribute == "name"));
+    assert_eq!(plan.len(), 1);
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("複数属性の変更は一つの Update にまとまります");
+    assert!(attributes.hoist().is_some());
+    assert!(attributes.mentionable().is_some());
+    assert!(attributes.name().is_none());
 }
 
 /// 各属性のdefault指定がschemaで定めた既定値へ解決され、必要な差分だけがplanされることを保証する。
@@ -1219,16 +1292,16 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
     .await
     .unwrap();
 
-    assert!(
-        plan.changes
-            .iter()
-            .any(|change| { change.attribute == "name" && change.current == "運営" && change.desired == "new role" })
-    );
-    assert!(
-        plan.changes
-            .iter()
-            .any(|change| { change.attribute == "color" && change.current == "1193046" && change.desired == "0" })
-    );
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("default 指定による変更が計画されます");
+    let name = attributes.name().expect("name の変更が計画されます");
+    assert_eq!(name.current(), "運営");
+    assert_eq!(name.desired(), "new role");
+    let color = attributes.color().expect("color の変更が計画されます");
+    assert_eq!(color.current().get(), 0x12_34_56);
+    assert_eq!(color.desired().get(), 0);
 }
 
 /// stateのGuildが要求先と異なる場合、Discordへ問い合わせる前に誤投入として拒否することを保証する。
