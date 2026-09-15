@@ -1,7 +1,7 @@
 use super::{
     GuildApplyLock,
     apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
-    bind::{BindResult, bind_resource as bind_resource_workflow},
+    bind::{BindResult, BindWorkflow},
     configuration::*,
     domain::*,
     export::export_roles,
@@ -146,17 +146,16 @@ async fn bind_resource<S: ResourceSource>(
     discord_id: &str,
 ) -> Result<BindResult, ManagementError> {
     let vocabulary = test_permission_vocabulary();
-    bind_resource_workflow(
-        source,
-        &vocabulary,
-        guild_id,
-        definition_toml,
-        state_json,
-        resource_type,
-        logical_id,
-        discord_id,
-    )
-    .await
+    BindWorkflow::new(source, &vocabulary)
+        .bind_resource(
+            guild_id,
+            definition_toml,
+            state_json,
+            resource_type,
+            logical_id,
+            discord_id,
+        )
+        .await
 }
 
 async fn apply_role_updates<S: RoleUpdater>(
