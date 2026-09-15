@@ -16,7 +16,7 @@ use crate::app::{AppContext, AppError, BotDataExt};
 use super::{
     adapter::SerenityRoleSource,
     apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
-    bind::bind_resource,
+    bind::BindWorkflow,
     confirmation::{ConfirmationError, ConfirmationStore},
     domain::{ManagementError, ResourceType},
     export::export_roles,
@@ -132,17 +132,16 @@ pub async fn bind(
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
 
-    match bind_resource(
-        &source,
-        &vocabulary,
-        guild_id,
-        &definition_text,
-        &state_text,
-        resource_type,
-        &logical_id,
-        &discord_id,
-    )
-    .await
+    match BindWorkflow::new(&source, &vocabulary)
+        .bind_resource(
+            guild_id,
+            &definition_text,
+            &state_text,
+            resource_type,
+            &logical_id,
+            &discord_id,
+        )
+        .await
     {
         Ok(result) => {
             ctx.send(

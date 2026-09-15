@@ -12,41 +12,53 @@ pub(super) struct BindResult {
     pub state_json: String,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn bind_resource<S: ResourceSource>(
-    source: &S,
-    vocabulary: &PermissionVocabulary,
-    guild_id: GuildId,
-    definition_toml: &str,
-    state_json: &str,
-    resource_type: ResourceType,
-    logical_id: &str,
-    discord_id: &str,
-) -> Result<BindResult, ManagementError> {
-    let definition = DefinitionFile::parse(definition_toml, vocabulary)?;
-    let mut state = StateFile::parse_for_guild(state_json, guild_id)?;
-    let discord_id = parse_discord_id(resource_type, discord_id)?;
-    if resource_type == ResourceType::Role && discord_id == guild_id.get() {
-        return Err(ManagementError::InvalidDefinition(
-            "予約参照 everyone の Role ID は別の論理 ID へ bind できません".to_owned(),
-        ));
+pub(super) struct BindWorkflow<'a, S> {
+    source: &'a S,
+    vocabulary: &'a PermissionVocabulary,
+}
+
+impl<'a, S> BindWorkflow<'a, S> {
+    pub(super) fn new(source: &'a S, vocabulary: &'a PermissionVocabulary) -> Self {
+        Self { source, vocabulary }
     }
+}
 
-    let logical_id = declared_logical_id(&definition, resource_type, logical_id)?;
-    validate_binding_conflicts(&state, &logical_id, discord_id)?;
-    let lookup = source
-        .lookup_resource(&guild_id, discord_id)
-        .await?
-        .ok_or(ManagementError::ResourceNotFound {
-            resource_type,
-            discord_id,
-        })?;
-    validate_lookup(resource_type, discord_id, guild_id, lookup)?;
-    logical_id.insert_into(&mut state, discord_id);
+impl<S: ResourceSource> BindWorkflow<'_, S> {
+    pub(super) async fn bind_resource(
+        &self,
+        guild_id: GuildId,
+        definition_toml: &str,
+        state_json: &str,
+        resource_type: ResourceType,
+        logical_id: &str,
+        discord_id: &str,
+    ) -> Result<BindResult, ManagementError> {
+        let definition = DefinitionFile::parse(definition_toml, self.vocabulary)?;
+        let mut state = StateFile::parse_for_guild(state_json, guild_id)?;
+        let discord_id = parse_discord_id(resource_type, discord_id)?;
+        if resource_type == ResourceType::Role && discord_id == guild_id.get() {
+            return Err(ManagementError::InvalidDefinition(
+                "予約参照 everyone の Role ID は別の論理 ID へ bind できません".to_owned(),
+            ));
+        }
 
-    Ok(BindResult {
-        state_json: serialize_state(&state)?,
-    })
+        let logical_id = declared_logical_id(&definition, resource_type, logical_id)?;
+        validate_binding_conflicts(&state, &logical_id, discord_id)?;
+        let lookup =
+            self.source
+                .lookup_resource(&guild_id, discord_id)
+                .await?
+                .ok_or(ManagementError::ResourceNotFound {
+                    resource_type,
+                    discord_id,
+                })?;
+        validate_lookup(resource_type, discord_id, guild_id, lookup)?;
+        logical_id.insert_into(&mut state, discord_id);
+
+        Ok(BindResult {
+            state_json: serialize_state(&state)?,
+        })
+    }
 }
 
 fn parse_discord_id(resource_type: ResourceType, discord_id: &str) -> Result<u64, ManagementError> {
