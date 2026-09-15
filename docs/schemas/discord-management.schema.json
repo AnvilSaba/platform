@@ -536,7 +536,8 @@
         "topic": {
           "oneOf": [
             {
-              "type": "string"
+              "type": "string",
+              "maxLength": 1024
             },
             {
               "$ref": "#/definitions/default"
@@ -768,7 +769,8 @@
             "topic": {
               "oneOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 1024
                 },
                 {
                   "$ref": "#/definitions/default"

@@ -7,12 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     configuration::{
-        ManagedValue, PermissionName, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets,
-        RawStateFile, RoleEnsure, RoleMode, StateFile, everyone_logical_id,
+        ChannelKind, ManagedValue, OverwriteValue, PermissionName, RawChannelDefinition, RawDefinitionFile,
+        RawRoleAttributes, RawRoleDefinition, RawSettingsSets, RawStateFile, RoleEnsure, RoleMode, StateFile,
+        everyone_logical_id,
     },
     domain::{ManagementError, SCHEMA_VERSION},
-    ids::{GuildId, RoleLogicalId},
-    port::RoleSource,
+    ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
+    port::{ChannelOverwriteTarget, ChannelSource, RoleSource},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,23 +28,43 @@ pub(super) async fn export_roles<S: RoleSource>(
     guild_id: GuildId,
     previous_state_json: Option<&str>,
 ) -> Result<ExportFiles, ManagementError> {
-    let previous_state = previous_state_json
+    let mut previous_state = previous_state_json
         .map(|contents| StateFile::parse_for_guild(contents, guild_id))
         .transpose()?;
 
-    let previous_mappings = previous_state.map(StateFile::into_role_mappings).unwrap_or_default();
+    let previous_mappings = previous_state
+        .as_ref()
+        .map(|state| state.roles.clone())
+        .unwrap_or_default();
     let previous_logical_ids = previous_mappings
         .iter()
         .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let roles = source
-        .role_catalog(&guild_id)
-        .await?
-        .roles
-        .into_iter()
-        .filter(|role| role.manageable);
+    let catalog = source.role_catalog(&guild_id).await?;
+    let catalog_ids = catalog.roles.iter().map(|role| role.id).collect::<BTreeSet<_>>();
+    if let Some(previous_state) = previous_state.as_mut() {
+        previous_state
+            .pending_role_updates
+            .retain(|_, pending| !catalog_ids.contains(&pending.discord_id));
+    }
+    if let Some(previous_state) = previous_state.as_ref() {
+        for (logical_id, discord_id) in &previous_mappings {
+            if catalog_ids.contains(discord_id) {
+                continue;
+            }
+            let pending = previous_state.deleted_roles.contains(logical_id)
+                || previous_state.pending_creations.contains(logical_id)
+                || previous_state.pending_deletions.contains(logical_id);
+            if !pending {
+                return Err(ManagementError::InvalidState(format!(
+                    "論理 ID {logical_id} に対応する Role の Snowflake {discord_id} が Guild から予期せず消失しています"
+                )));
+            }
+        }
+    }
+    let roles = catalog.roles.into_iter().filter(|role| role.manageable);
     let mut definitions = BTreeMap::new();
-    let mut mappings = BTreeMap::new();
+    let mut mappings = previous_mappings.clone();
 
     for role in roles {
         let is_everyone = role.id.get() == guild_id.get();
@@ -62,10 +83,12 @@ pub(super) async fn export_roles<S: RoleSource>(
             generated
         };
         if !is_everyone && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
-            return Err(ManagementError::InvalidState(format!(
-                "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
-                role.id
-            )));
+            if existing_id != role.id {
+                return Err(ManagementError::InvalidState(format!(
+                    "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
+                    role.id
+                )));
+            }
         }
         definitions.insert(
             logical_id.clone(),
@@ -125,11 +148,46 @@ pub(super) async fn export_roles<S: RoleSource>(
         schema_version: SCHEMA_VERSION,
         guild_id,
         roles: mappings,
-        channels: BTreeMap::new(),
-        members: BTreeMap::new(),
-        deleted_roles: BTreeSet::new(),
-        pending_creations: BTreeSet::new(),
-        pending_deletions: BTreeSet::new(),
+        channels: previous_state
+            .as_ref()
+            .map(|state| state.channels.clone())
+            .unwrap_or_default(),
+        members: previous_state
+            .as_ref()
+            .map(|state| state.members.clone())
+            .unwrap_or_default(),
+        deleted_roles: previous_state
+            .as_ref()
+            .map(|state| state.deleted_roles.clone())
+            .unwrap_or_default(),
+        pending_creations: previous_state
+            .as_ref()
+            .map(|state| state.pending_creations.clone())
+            .unwrap_or_default(),
+        pending_deletions: previous_state
+            .as_ref()
+            .map(|state| state.pending_deletions.clone())
+            .unwrap_or_default(),
+        pending_role_updates: previous_state
+            .as_ref()
+            .map(|state| state.pending_role_updates.clone())
+            .unwrap_or_default(),
+        deleted_channels: previous_state
+            .as_ref()
+            .map(|state| state.deleted_channels.clone())
+            .unwrap_or_default(),
+        pending_channel_creations: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_creations.clone())
+            .unwrap_or_default(),
+        pending_channel_deletions: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_deletions.clone())
+            .unwrap_or_default(),
+        pending_channel_updates: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_updates.clone())
+            .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
 
@@ -137,4 +195,351 @@ pub(super) async fn export_roles<S: RoleSource>(
         definition_toml,
         state_json: format!("{state_json}\n"),
     })
+}
+
+/// 管理可能な Category/Text Channel の希望構成と対応 state を出力します。
+pub(super) async fn export_channels<S: ChannelSource>(
+    source: &S,
+    guild_id: GuildId,
+    previous_state_json: Option<&str>,
+) -> Result<ExportFiles, ManagementError> {
+    let mut previous_state = previous_state_json
+        .map(|contents| StateFile::parse_for_guild(contents, guild_id))
+        .transpose()?;
+    let previous_mappings = previous_state
+        .as_ref()
+        .map(|state| state.channels.clone())
+        .unwrap_or_default();
+    let previous_logical_ids = previous_mappings
+        .iter()
+        .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let catalog = source.channel_catalog(&guild_id).await?;
+    let catalog_ids = catalog
+        .channels
+        .iter()
+        .map(|channel| channel.id)
+        .collect::<BTreeSet<_>>();
+    if let Some(previous_state) = previous_state.as_mut() {
+        previous_state
+            .pending_channel_updates
+            .retain(|_, pending| !catalog_ids.contains(&pending.discord_id));
+    }
+    if let Some(previous_state) = previous_state.as_ref() {
+        for (logical_id, discord_id) in &previous_mappings {
+            if catalog_ids.contains(discord_id) {
+                continue;
+            }
+            let pending = previous_state.deleted_channels.contains(logical_id)
+                || previous_state.pending_channel_creations.contains(logical_id)
+                || previous_state.pending_channel_deletions.contains(logical_id);
+            if !pending {
+                return Err(ManagementError::InvalidState(format!(
+                    "論理 ID {logical_id} に対応する Channel の Snowflake {discord_id} が Guild から予期せず消失しています"
+                )));
+            }
+        }
+    }
+    let channels = catalog
+        .channels
+        .iter()
+        .filter(|channel| channel.manageable)
+        .filter(|channel| matches!(channel.kind, ChannelKind::Category | ChannelKind::Text))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut logical_ids = BTreeMap::<ChannelId, ChannelLogicalId>::new();
+    let mut mappings = previous_mappings.clone();
+    for channel in &channels {
+        let logical_id = if let Some(logical_id) = previous_logical_ids.get(&channel.id) {
+            logical_id.clone()
+        } else {
+            let generated = ChannelLogicalId::parse(format!("channel_{}", channel.id))
+                .expect("Channel Snowflake から生成した論理 ID は常に有効です");
+            if let Some(reserved_for) = previous_mappings.get(&generated) {
+                return Err(ManagementError::InvalidState(format!(
+                    "生成する論理 ID {generated} は state で Snowflake {reserved_for} に使用されています"
+                )));
+            }
+            generated
+        };
+        if let Some(existing_id) = mappings.insert(logical_id.clone(), channel.id) {
+            if existing_id != channel.id {
+                return Err(ManagementError::InvalidState(format!(
+                    "論理 ID {logical_id} が Channel {existing_id} と {} で衝突しています",
+                    channel.id
+                )));
+            }
+        }
+        logical_ids.insert(channel.id, logical_id);
+    }
+
+    let previous_role_mappings = previous_state
+        .as_ref()
+        .map(|state| state.roles.clone())
+        .unwrap_or_default();
+    let mut role_ids = previous_role_mappings
+        .iter()
+        .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let previous_member_mappings = previous_state
+        .as_ref()
+        .map(|state| state.members.clone())
+        .unwrap_or_default();
+    let mut member_ids = previous_member_mappings
+        .iter()
+        .map(|(logical_id, discord_id)| (*discord_id, logical_id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for channel in &channels {
+        for target in channel.overwrites.keys() {
+            match target {
+                ChannelOverwriteTarget::Role(role_id) => {
+                    register_role_overwrite_target(*role_id, &mut role_ids, &previous_role_mappings)?;
+                }
+                ChannelOverwriteTarget::Member(member_id) => {
+                    register_member_overwrite_target(*member_id, &mut member_ids, &previous_member_mappings)?;
+                }
+                ChannelOverwriteTarget::Everyone => {}
+            }
+        }
+    }
+
+    let mut definitions = BTreeMap::new();
+    let mut role_definitions = BTreeMap::new();
+    for logical_id in role_ids.values() {
+        role_definitions.insert(
+            logical_id.clone(),
+            super::configuration::RawRoleDefinition {
+                ensure: super::configuration::RoleEnsure::Present,
+                mode: super::configuration::RoleMode::Reference,
+                settings_sets: Vec::new(),
+                attributes: super::configuration::RawRoleAttributes::default(),
+            },
+        );
+    }
+    let mut member_definitions = BTreeMap::new();
+    for logical_id in member_ids.values() {
+        member_definitions.insert(
+            logical_id.clone(),
+            super::configuration::MemberDefinition {
+                mode: super::configuration::RoleMode::Reference,
+            },
+        );
+    }
+
+    for channel in channels {
+        let logical_id = logical_ids
+            .get(&channel.id)
+            .expect("論理 ID は先行する対応付けで生成されています")
+            .clone();
+        let mut attributes = BTreeMap::new();
+        attributes.insert("type".to_owned(), toml::Value::String(channel.kind.as_str().to_owned()));
+        attributes.insert("name".to_owned(), toml::Value::String(channel.name));
+        match channel.parent_id {
+            Some(parent_id) => {
+                let parent = logical_ids.get(&parent_id).ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel {logical_id} の親 Channel {parent_id} が export 対象に含まれていません"
+                    ))
+                })?;
+                attributes.insert("parent".to_owned(), toml::Value::String(parent.to_string()));
+            }
+            None if channel.kind == ChannelKind::Text => {
+                attributes.insert("parent".to_owned(), marker_value("clear"));
+            }
+            None => {}
+        }
+        if channel.kind == ChannelKind::Text {
+            match channel.topic {
+                Some(topic) => {
+                    attributes.insert("topic".to_owned(), toml::Value::String(topic));
+                }
+                None => {
+                    attributes.insert("topic".to_owned(), marker_value("clear"));
+                }
+            }
+            attributes.insert("nsfw".to_owned(), toml::Value::Boolean(channel.nsfw));
+            attributes.insert(
+                "slowmode_seconds".to_owned(),
+                toml::Value::Integer(i64::from(channel.slowmode_seconds)),
+            );
+            if let Some(minutes) = channel.default_auto_archive_minutes {
+                attributes.insert(
+                    "default_auto_archive_minutes".to_owned(),
+                    toml::Value::Integer(i64::from(minutes)),
+                );
+            }
+            if let Some(seconds) = channel.default_thread_slowmode_seconds {
+                attributes.insert(
+                    "default_thread_slowmode_seconds".to_owned(),
+                    toml::Value::Integer(i64::from(seconds)),
+                );
+            }
+        }
+        if channel.kind == ChannelKind::Category {
+            attributes.insert("nsfw".to_owned(), toml::Value::Boolean(channel.nsfw));
+        }
+        let overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
+        if !overwrites.is_empty() {
+            attributes.insert("overwrites".to_owned(), toml::Value::Table(overwrites));
+        }
+        definitions.insert(
+            logical_id,
+            RawChannelDefinition {
+                mode: RoleMode::Managed,
+                ensure: None,
+                settings_sets: Vec::new(),
+                attributes,
+            },
+        );
+    }
+
+    let definition_toml = toml::to_string_pretty(&RawDefinitionFile {
+        schema_version: SCHEMA_VERSION,
+        settings_sets: RawSettingsSets::default(),
+        roles: role_definitions,
+        channels: definitions,
+        members: member_definitions,
+        message_sets: BTreeMap::new(),
+        threads: BTreeMap::new(),
+        order: None,
+    })
+    .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    let mut exported_roles = previous_role_mappings;
+    for (discord_id, logical_id) in &role_ids {
+        exported_roles.entry(logical_id.clone()).or_insert(*discord_id);
+    }
+    let mut exported_members = previous_member_mappings;
+    for (discord_id, logical_id) in &member_ids {
+        exported_members.entry(logical_id.clone()).or_insert(*discord_id);
+    }
+    let state_json = serde_json::to_string_pretty(&RawStateFile {
+        schema_version: SCHEMA_VERSION,
+        guild_id,
+        roles: exported_roles,
+        channels: mappings,
+        members: exported_members,
+        deleted_roles: previous_state
+            .as_ref()
+            .map(|state| state.deleted_roles.clone())
+            .unwrap_or_default(),
+        pending_creations: previous_state
+            .as_ref()
+            .map(|state| state.pending_creations.clone())
+            .unwrap_or_default(),
+        pending_deletions: previous_state
+            .as_ref()
+            .map(|state| state.pending_deletions.clone())
+            .unwrap_or_default(),
+        pending_role_updates: previous_state
+            .as_ref()
+            .map(|state| state.pending_role_updates.clone())
+            .unwrap_or_default(),
+        deleted_channels: previous_state
+            .as_ref()
+            .map(|state| state.deleted_channels.clone())
+            .unwrap_or_default(),
+        pending_channel_creations: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_creations.clone())
+            .unwrap_or_default(),
+        pending_channel_deletions: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_deletions.clone())
+            .unwrap_or_default(),
+        pending_channel_updates: previous_state
+            .as_ref()
+            .map(|state| state.pending_channel_updates.clone())
+            .unwrap_or_default(),
+    })
+    .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
+
+    Ok(ExportFiles {
+        definition_toml,
+        state_json: format!("{state_json}\n"),
+    })
+}
+
+fn marker_value(name: &str) -> toml::Value {
+    let mut marker = toml::map::Map::new();
+    marker.insert(name.to_owned(), toml::Value::Boolean(true));
+    toml::Value::Table(marker)
+}
+
+fn register_role_overwrite_target(
+    discord_id: RoleId,
+    role_ids: &mut BTreeMap<RoleId, RoleLogicalId>,
+    previous_mappings: &BTreeMap<RoleLogicalId, RoleId>,
+) -> Result<(), ManagementError> {
+    if role_ids.contains_key(&discord_id) {
+        return Ok(());
+    }
+    let logical_id =
+        RoleLogicalId::parse(format!("role_{discord_id}")).expect("Role Snowflake から生成した論理 ID は常に有効です");
+    if let Some(reserved_for) = previous_mappings.get(&logical_id) {
+        return Err(ManagementError::InvalidState(format!(
+            "生成する論理 ID {logical_id} は state で Snowflake {reserved_for} に使用されています"
+        )));
+    }
+    role_ids.insert(discord_id, logical_id);
+    Ok(())
+}
+
+fn register_member_overwrite_target(
+    discord_id: MemberId,
+    member_ids: &mut BTreeMap<MemberId, super::ids::MemberLogicalId>,
+    previous_mappings: &BTreeMap<super::ids::MemberLogicalId, MemberId>,
+) -> Result<(), ManagementError> {
+    if member_ids.contains_key(&discord_id) {
+        return Ok(());
+    }
+    let logical_id = super::ids::MemberLogicalId::parse(format!("member_{discord_id}"))
+        .expect("Member Snowflake から生成した論理 ID は常に有効です");
+    if let Some(reserved_for) = previous_mappings.get(&logical_id) {
+        return Err(ManagementError::InvalidState(format!(
+            "生成する論理 ID {logical_id} は state で Snowflake {reserved_for} に使用されています"
+        )));
+    }
+    member_ids.insert(discord_id, logical_id);
+    Ok(())
+}
+
+fn export_overwrites(
+    overwrites: &BTreeMap<ChannelOverwriteTarget, BTreeMap<super::configuration::KnownPermission, OverwriteValue>>,
+    role_ids: &BTreeMap<RoleId, RoleLogicalId>,
+    member_ids: &BTreeMap<MemberId, super::ids::MemberLogicalId>,
+) -> Result<toml::map::Map<String, toml::Value>, ManagementError> {
+    let mut result = toml::map::Map::new();
+    for (target, permissions) in overwrites {
+        let subject = match target {
+            ChannelOverwriteTarget::Everyone => "everyone".to_owned(),
+            ChannelOverwriteTarget::Role(id) => {
+                let logical_id = role_ids.get(id).ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel overwrite の Role {id} に対応する論理 ID が state にありません"
+                    ))
+                })?;
+                format!("role:{logical_id}")
+            }
+            ChannelOverwriteTarget::Member(id) => {
+                let logical_id = member_ids.get(id).ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel overwrite の Member {id} に対応する論理 ID が state にありません"
+                    ))
+                })?;
+                format!("member:{logical_id}")
+            }
+        };
+        let mut values = toml::map::Map::new();
+        for (permission, value) in permissions {
+            let value = match value {
+                OverwriteValue::Allow => "allow",
+                OverwriteValue::Deny => "deny",
+                OverwriteValue::Clear => "clear",
+            };
+            values.insert(permission.as_str().to_owned(), toml::Value::String(value.to_owned()));
+        }
+        result.insert(subject, toml::Value::Table(values));
+    }
+    Ok(result)
 }

@@ -184,7 +184,7 @@ impl RawRoleAttributes {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RoleAttributes {
     pub(crate) name: Option<ManagedValue<String>>,
     pub(crate) color: Option<ManagedValue<Color>>,
@@ -223,7 +223,7 @@ impl RoleAttributes {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ManagedValue<T> {
     Value(T),
     Default,

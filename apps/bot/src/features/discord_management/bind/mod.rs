@@ -160,13 +160,17 @@ impl BoundLogicalId {
     fn insert_into(self, state: &mut StateFile, discord_id: u64) {
         match self {
             Self::Role(logical_id) => {
-                state.roles.insert(logical_id, RoleId::new(discord_id));
+                state.roles.insert(logical_id.clone(), RoleId::new(discord_id));
+                state.pending_creations.remove(&logical_id);
+                state.deleted_roles.remove(&logical_id);
             }
             Self::Channel(logical_id) => {
-                state.channels.insert(logical_id, ChannelId::new(discord_id));
+                state.channels.insert(logical_id.clone(), ChannelId::new(discord_id));
+                state.pending_channel_creations.remove(&logical_id);
+                state.deleted_channels.remove(&logical_id);
             }
             Self::Member(logical_id) => {
-                state.members.insert(logical_id, MemberId::new(discord_id));
+                state.members.insert(logical_id.clone(), MemberId::new(discord_id));
             }
         }
     }
@@ -178,14 +182,24 @@ fn validate_binding_conflicts(
     discord_id: u64,
 ) -> Result<(), ManagementError> {
     match logical_id {
-        BoundLogicalId::Role(logical_id) => {
-            validate_mapping_conflict(&state.roles, logical_id, discord_id, "Role", RoleId::get)
-        }
-        BoundLogicalId::Channel(logical_id) => {
-            validate_mapping_conflict(&state.channels, logical_id, discord_id, "Channel", ChannelId::get)
-        }
+        BoundLogicalId::Role(logical_id) => validate_mapping_conflict(
+            &state.roles,
+            logical_id,
+            discord_id,
+            "Role",
+            RoleId::get,
+            state.pending_creations.contains(logical_id) && state.deleted_roles.contains(logical_id),
+        ),
+        BoundLogicalId::Channel(logical_id) => validate_mapping_conflict(
+            &state.channels,
+            logical_id,
+            discord_id,
+            "Channel",
+            ChannelId::get,
+            state.pending_channel_creations.contains(logical_id) && state.deleted_channels.contains(logical_id),
+        ),
         BoundLogicalId::Member(logical_id) => {
-            validate_mapping_conflict(&state.members, logical_id, discord_id, "Member", MemberId::get)
+            validate_mapping_conflict(&state.members, logical_id, discord_id, "Member", MemberId::get, false)
         }
     }
 }
@@ -196,6 +210,7 @@ fn validate_mapping_conflict<LogicalId, DiscordId, GetId>(
     discord_id: u64,
     resource_type: &str,
     get_id: GetId,
+    allow_retarget: bool,
 ) -> Result<(), ManagementError>
 where
     LogicalId: Eq + Ord + fmt::Display,
@@ -204,6 +219,7 @@ where
 {
     if let Some(existing) = mappings.get(logical_id)
         && get_id(*existing) != discord_id
+        && !allow_retarget
     {
         return Err(ManagementError::InvalidState(format!(
             "{resource_type} {logical_id} はすでに Snowflake {existing} に対応しており、{discord_id} へ暗黙に付け替えられません"

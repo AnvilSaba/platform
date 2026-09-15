@@ -4,10 +4,14 @@ use super::{
     bind::{BindResult, BindWorkflow},
     configuration::*,
     domain::*,
-    export::export_roles,
+    export::{export_channels, export_roles},
     ids::*,
-    plan::plan_roles as plan_roles_workflow,
+    plan::{plan_channels, plan_roles as plan_roles_workflow},
     port::*,
+    resource::channel::{
+        ChannelChange, ChannelPlan,
+        apply::{ChannelApplyOptions, ChannelApplyResult, ChannelApplyStatus, ChannelApplyWorkflow},
+    },
     resource::role::{Change, RolePlan},
 };
 use std::{
@@ -213,6 +217,50 @@ async fn apply_roles_with_options<S: RoleLifecycleTarget>(
     let vocabulary = test_permission_vocabulary();
     RoleApplyWorkflow::new(&apply_lock, source, &vocabulary)
         .apply_roles_with_options(
+            guild_id,
+            definition_toml,
+            state_json,
+            confirmed_plan,
+            options,
+            processing_deadline,
+        )
+        .await
+}
+
+async fn apply_channels<S: ChannelLifecycleTarget>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    confirmed_plan: &ChannelPlan,
+    processing_deadline: Instant,
+) -> Result<ChannelApplyResult, ManagementError> {
+    let apply_lock = GuildApplyLock::default();
+    let vocabulary = test_permission_vocabulary();
+    ChannelApplyWorkflow::new(&apply_lock, source, &vocabulary)
+        .apply_channels(
+            guild_id,
+            definition_toml,
+            state_json,
+            confirmed_plan,
+            processing_deadline,
+        )
+        .await
+}
+
+async fn apply_channels_with_options<S: ChannelLifecycleTarget>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    confirmed_plan: &ChannelPlan,
+    options: ChannelApplyOptions,
+    processing_deadline: Instant,
+) -> Result<ChannelApplyResult, ManagementError> {
+    let apply_lock = GuildApplyLock::default();
+    let vocabulary = test_permission_vocabulary();
+    ChannelApplyWorkflow::new(&apply_lock, source, &vocabulary)
+        .apply_channels_with_options(
             guild_id,
             definition_toml,
             state_json,
@@ -1195,6 +1243,67 @@ async fn plan_rejects_an_undeclared_role_overwrite_target() {
     );
 }
 
+/// 削除宣言した Role を Channel overwrite の対象にできないことを plan の入力検証で保証する。
+#[tokio::test]
+async fn plan_rejects_an_absent_role_overwrite_target() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: Vec::new(),
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.admin]
+        ensure = "absent"
+        [channels.rules]
+        type = "text"
+        [channels.rules.overwrites."role:admin"]
+        VIEW_CHANNEL = "allow"
+    "#;
+    let state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"admin": "200"},
+        "channels": {"rules": "300"}
+    }"#;
+
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Role admin") && message.contains("削除宣言"))
+    );
+}
+
+/// state の削除済み Role を Channel overwrite の対象にできないことを plan の入力検証で保証する。
+#[tokio::test]
+async fn plan_rejects_a_deleted_role_overwrite_target() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: Vec::new(),
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.admin]
+        name = "管理"
+        [channels.rules]
+        type = "text"
+        [channels.rules.overwrites."role:admin"]
+        VIEW_CHANNEL = "allow"
+    "#;
+    let state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"admin": "200"},
+        "deleted_roles": ["admin"],
+        "channels": {"rules": "300"}
+    }"#;
+
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidState(message) if message.contains("Role admin") && message.contains("削除済み"))
+    );
+}
+
 /// Channel の Member overwrite が未宣言の Member を参照していれば plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_an_undeclared_member_overwrite_target() {
@@ -1299,6 +1408,37 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
     let color = attributes.color().expect("color の変更が計画されます");
     assert_eq!(color.current().get(), 0x12_34_56);
     assert_eq!(color.desired().get(), 0);
+}
+
+/// 新規 Role の plan も apply と同じ Discord API の具体的な default 値を表示する。
+#[tokio::test]
+async fn role_create_plan_resolves_default_values() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("100", "@everyone")],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        name = { default = true }
+        color = { default = true }
+        hoist = { default = true }
+        mentionable = { default = true }
+        [roles.moderator.permissions]
+        VIEW_CHANNEL = { default = true }
+    "#;
+
+    let plan = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap();
+    let rendered = plan.render();
+
+    assert!(rendered.contains("name: \"new role\""));
+    assert!(rendered.contains("color: 0"));
+    assert!(rendered.contains("hoist: false"));
+    assert!(rendered.contains("mentionable: false"));
+    assert!(rendered.contains("VIEW_CHANNEL: true"));
+    assert!(!rendered.contains("Default"));
 }
 
 /// stateのGuildが要求先と異なる場合、Discordへ問い合わせる前に誤投入として拒否することを保証する。
@@ -1676,3 +1816,7 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
 #[cfg(test)]
 #[path = "tests/apply_tests.rs"]
 mod apply_tests;
+
+#[cfg(test)]
+#[path = "tests/channel_tests.rs"]
+mod channel_tests;

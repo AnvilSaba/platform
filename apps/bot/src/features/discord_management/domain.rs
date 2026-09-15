@@ -52,6 +52,12 @@ pub enum ManagementError {
     RoleCatalogPermissionDenied(String),
     #[error("Role の操作権限が不足しています: {0}")]
     RolePermissionDenied(String),
+    #[error("Discord から Channel を取得できません: {0}")]
+    ChannelSource(String),
+    #[error("Discord から Channel を取得する権限が不足しています: {0}")]
+    ChannelCatalogPermissionDenied(String),
+    #[error("Channel の操作権限が不足しています: {0}")]
+    ChannelPermissionDenied(String),
     #[error("Discord から bind 対象を取得できません: {0}")]
     ResourceSource(String),
     #[error("定義ファイルを生成できません: {0}")]
