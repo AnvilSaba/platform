@@ -1,13 +1,16 @@
 use super::{
-    apply::{RoleApplyOptions, RoleApplyStatus, apply_role_updates, apply_roles, apply_roles_with_options},
-    bind::bind_resource,
+    apply::{
+        RoleApplyOptions, RoleApplyResult, RoleApplyStatus, apply_role_updates as apply_role_updates_workflow,
+        apply_roles as apply_roles_workflow, apply_roles_with_options as apply_roles_with_options_workflow,
+    },
+    bind::{BindResult, bind_resource as bind_resource_workflow},
     configuration::*,
     domain::*,
     export::export_roles,
     ids::*,
-    plan::plan_roles,
+    plan::plan_roles as plan_roles_workflow,
     port::*,
-    resource::role::{AttributeChange, RoleLifecycleChange},
+    resource::role::{AttributeChange, RoleLifecycleChange, RolePlan},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -57,7 +60,7 @@ fn role(id: &str, name: &str) -> RoleSnapshot {
         color: Color::default(),
         hoist: false,
         mentionable: false,
-        permissions: BTreeMap::from([("SEND_MESSAGES".to_owned(), false), ("VIEW_CHANNEL".to_owned(), true)]),
+        permissions: known_permission_values([("SEND_MESSAGES", false), ("VIEW_CHANNEL", true)]),
     }
 }
 
@@ -89,6 +92,138 @@ fn role_id(value: &str) -> RoleId {
 
 fn guild_id(value: u64) -> GuildId {
     GuildId::new(value)
+}
+
+fn test_permission_vocabulary() -> PermissionVocabulary {
+    PermissionVocabulary::from_names(["MANAGE_MESSAGES", "MANAGE_ROLES", "SEND_MESSAGES", "VIEW_CHANNEL"])
+        .expect("テスト用の権限語彙は字句的に妥当です")
+}
+
+fn known_permission(name: &str) -> KnownPermission {
+    let vocabulary = test_permission_vocabulary();
+    let name = PermissionName::parse(name).expect("テスト用の権限名は字句的に妥当です");
+    vocabulary.resolve(&name).expect("テスト用の権限名は語彙に含まれます")
+}
+
+fn known_permissions<I, S>(names: I) -> BTreeSet<KnownPermission>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    names.into_iter().map(|name| known_permission(name.as_ref())).collect()
+}
+
+fn known_permission_values<I, S>(values: I) -> BTreeMap<KnownPermission, bool>
+where
+    I: IntoIterator<Item = (S, bool)>,
+    S: AsRef<str>,
+{
+    values
+        .into_iter()
+        .map(|(name, value)| (known_permission(name.as_ref()), value))
+        .collect()
+}
+
+fn parse_definition(contents: &str) -> Result<DefinitionFile, ManagementError> {
+    DefinitionFile::parse(contents, &test_permission_vocabulary())
+}
+
+async fn plan_roles<S: RoleSource>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+) -> Result<RolePlan, ManagementError> {
+    let vocabulary = test_permission_vocabulary();
+    plan_roles_workflow(source, &vocabulary, guild_id, definition_toml, state_json).await
+}
+
+async fn bind_resource<S: ResourceSource>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    resource_type: ResourceType,
+    logical_id: &str,
+    discord_id: &str,
+) -> Result<BindResult, ManagementError> {
+    let vocabulary = test_permission_vocabulary();
+    bind_resource_workflow(
+        source,
+        &vocabulary,
+        guild_id,
+        definition_toml,
+        state_json,
+        resource_type,
+        logical_id,
+        discord_id,
+    )
+    .await
+}
+
+async fn apply_role_updates<S: RoleUpdater>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    confirmed_plan: &RolePlan,
+    processing_deadline: Instant,
+) -> Result<RoleApplyResult, ManagementError> {
+    let vocabulary = test_permission_vocabulary();
+    apply_role_updates_workflow(
+        source,
+        &vocabulary,
+        guild_id,
+        definition_toml,
+        state_json,
+        confirmed_plan,
+        processing_deadline,
+    )
+    .await
+}
+
+async fn apply_roles<S: RoleLifecycleTarget>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    confirmed_plan: &RolePlan,
+    processing_deadline: Instant,
+) -> Result<RoleApplyResult, ManagementError> {
+    let vocabulary = test_permission_vocabulary();
+    apply_roles_workflow(
+        source,
+        &vocabulary,
+        guild_id,
+        definition_toml,
+        state_json,
+        confirmed_plan,
+        processing_deadline,
+    )
+    .await
+}
+
+async fn apply_roles_with_options<S: RoleLifecycleTarget>(
+    source: &S,
+    guild_id: GuildId,
+    definition_toml: &str,
+    state_json: &str,
+    confirmed_plan: &RolePlan,
+    options: RoleApplyOptions,
+    processing_deadline: Instant,
+) -> Result<RoleApplyResult, ManagementError> {
+    let vocabulary = test_permission_vocabulary();
+    apply_roles_with_options_workflow(
+        source,
+        &vocabulary,
+        guild_id,
+        definition_toml,
+        state_json,
+        confirmed_plan,
+        options,
+        processing_deadline,
+    )
+    .await
 }
 
 #[derive(Clone)]
@@ -126,6 +261,14 @@ impl ResourceSource for MissingResourceSource {
         _discord_id: u64,
     ) -> Result<Option<ResourceLookup>, ManagementError> {
         Ok(None)
+    }
+}
+
+struct CatalogMustNotBeRead;
+
+impl RoleSource for CatalogMustNotBeRead {
+    async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+        panic!("未知権限の解決に失敗した定義は Role catalog へ進めてはいけません");
     }
 }
 
@@ -641,7 +784,7 @@ async fn bound_state_can_be_passed_to_the_next_plan() {
 #[test]
 fn management_sample_accepts_resource_declarations() {
     let sample = include_str!("../../../../../docs/examples/discord-management.base.toml");
-    DefinitionFile::parse(sample).unwrap();
+    parse_definition(sample).unwrap();
 }
 
 /// 同名Roleが複数あっても、名前ではなくSnowflake由来の論理IDで一意にexportできることを保証する。
@@ -653,7 +796,7 @@ async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
     };
 
     let files = export_roles(&source, guild_id(100), None).await.unwrap();
-    let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
 
     assert_eq!(
@@ -684,7 +827,7 @@ async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
     };
 
     let files = export_roles(&source, guild_id(100), None).await.unwrap();
-    let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
     let everyone = definition.roles[&logical_id("everyone")].attributes();
 
@@ -740,7 +883,7 @@ async fn re_export_preserves_logical_ids_from_input_state() {
     let files = export_roles(&source, guild_id(100), Some(previous_state))
         .await
         .unwrap();
-    let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
 
     assert_eq!(
@@ -852,7 +995,7 @@ async fn permission_default_uses_everyone_role_value() {
     let mut everyone = role("100", "@everyone");
     everyone.manageable = false;
     let mut moderator = role("200", "運営");
-    moderator.permissions.insert("VIEW_CHANNEL".to_owned(), false);
+    moderator.permissions.insert(known_permission("VIEW_CHANNEL"), false);
     let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![everyone, moderator],
@@ -888,7 +1031,7 @@ async fn export_omits_unmanageable_roles_but_keeps_manageable_roles() {
     };
 
     let files = export_roles(&source, guild_id(100), None).await.unwrap();
-    let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
 
     assert!(!definition.roles.contains_key(&logical_id("role_200")));
     assert!(definition.roles.contains_key(&logical_id("role_201")));
@@ -1304,6 +1447,22 @@ async fn unknown_permission_in_unreferenced_settings_set_is_reported() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の権限")));
 }
 
+/// 未知権限はconfigurationのresolve段階で拒否し、Role catalogやbuild_planへ到達させないことを保証する。
+#[tokio::test]
+async fn unknown_permission_is_rejected_before_catalog_and_build_plan() {
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator.permissions]
+        NOT_A_DISCORD_PERMISSION = true
+    "#;
+
+    let error = plan_roles(&CatalogMustNotBeRead, guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未知の権限")));
+}
+
 /// 対応外schema_versionのdefinitionを拒否し、異なる解釈でRoleを更新しないことを保証する。
 #[tokio::test]
 async fn unsupported_definition_version_is_reported() {
@@ -1323,7 +1482,7 @@ async fn unsupported_definition_version_is_reported() {
 #[test]
 fn editor_sample_matches_the_supported_definition_shape() {
     let sample = include_str!("../../../../../docs/examples/discord-role-management.toml");
-    DefinitionFile::parse(sample).unwrap();
+    parse_definition(sample).unwrap();
 }
 
 /// Roleが存在しない設定セットを参照した場合、合成処理へ進む前に定義エラーとして報告する。
@@ -1377,7 +1536,7 @@ fn channel_rejects_an_unknown_settings_set_while_parsing() {
         settings_sets = ["missing"]
     "#;
 
-    let error = DefinitionFile::parse(definition).unwrap_err();
+    let error = parse_definition(definition).unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Channel rules") && message.contains("未知の設定セット missing"))
@@ -1396,7 +1555,7 @@ fn channel_rejects_duplicate_settings_sets_while_parsing() {
         settings_sets = ["readonly", "readonly"]
     "#;
 
-    let error = DefinitionFile::parse(definition).unwrap_err();
+    let error = parse_definition(definition).unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Channel rules") && message.contains("重複"))
@@ -1417,7 +1576,7 @@ fn channel_parses_ordered_settings_sets() {
         settings_sets = ["readonly", "writable"]
     "#;
 
-    let definition = DefinitionFile::parse(definition).unwrap();
+    let definition = parse_definition(definition).unwrap();
     let settings_sets = definition.channels[&ChannelLogicalId::parse("rules").unwrap()]
         .settings_sets()
         .iter()
@@ -1439,7 +1598,7 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
         settings_sets = ["readonly"]
     "#;
 
-    let error = DefinitionFile::parse(definition).unwrap_err();
+    let error = parse_definition(definition).unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("参照専用 Channel rules")));
 }

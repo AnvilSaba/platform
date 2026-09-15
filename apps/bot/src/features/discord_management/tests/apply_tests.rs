@@ -134,9 +134,9 @@ fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
 async fn apply_creates_managed_role_and_returns_new_mapping() {
     let source = lifecycle_source(RoleCatalog {
         roles: vec![role("100", "@everyone")],
-        permission_names: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
-        grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
-        default_permissions: BTreeMap::from([("VIEW_CHANNEL".to_owned(), true)]),
+        permission_names: known_permissions(["VIEW_CHANNEL"]),
+        grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+        default_permissions: known_permission_values([("VIEW_CHANNEL", true)]),
     });
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let plan = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
@@ -672,12 +672,9 @@ async fn plan_rejects_granting_a_permission_the_bot_does_not_have() {
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
-            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
-            grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
-            default_permissions: BTreeMap::from([
-                ("SEND_MESSAGES".to_owned(), false),
-                ("VIEW_CHANNEL".to_owned(), true),
-            ]),
+            permission_names: known_permissions(["SEND_MESSAGES", "VIEW_CHANNEL"]),
+            grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+            default_permissions: known_permission_values([("SEND_MESSAGES", false), ("VIEW_CHANNEL", true)]),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
         outcome: RoleUpdateOutcome::Applied,
@@ -705,12 +702,9 @@ async fn plan_allows_removing_a_permission_the_bot_does_not_have() {
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
-            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
+            permission_names: known_permissions(["SEND_MESSAGES", "VIEW_CHANNEL"]),
             grantable_permissions: BTreeSet::new(),
-            default_permissions: BTreeMap::from([
-                ("SEND_MESSAGES".to_owned(), false),
-                ("VIEW_CHANNEL".to_owned(), true),
-            ]),
+            default_permissions: known_permission_values([("SEND_MESSAGES", false), ("VIEW_CHANNEL", true)]),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
         outcome: RoleUpdateOutcome::Applied,
@@ -737,12 +731,9 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("100", "@everyone")],
-            permission_names: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
-            grantable_permissions: BTreeSet::from(["SEND_MESSAGES".to_owned(), "VIEW_CHANNEL".to_owned()]),
-            default_permissions: BTreeMap::from([
-                ("SEND_MESSAGES".to_owned(), false),
-                ("VIEW_CHANNEL".to_owned(), true),
-            ]),
+            permission_names: known_permissions(["SEND_MESSAGES", "VIEW_CHANNEL"]),
+            grantable_permissions: known_permissions(["SEND_MESSAGES", "VIEW_CHANNEL"]),
+            default_permissions: known_permission_values([("SEND_MESSAGES", false), ("VIEW_CHANNEL", true)]),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
         outcome: RoleUpdateOutcome::Applied,
@@ -773,16 +764,13 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
 #[tokio::test]
 async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
     let mut moderator = role("200", "運営");
-    moderator.permissions = BTreeMap::from([("VIEW_CHANNEL".to_owned(), false), ("MANAGE_MESSAGES".to_owned(), true)]);
+    moderator.permissions = known_permission_values([("VIEW_CHANNEL", false), ("MANAGE_MESSAGES", true)]);
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![moderator],
-            permission_names: BTreeSet::from(["VIEW_CHANNEL".to_owned(), "MANAGE_MESSAGES".to_owned()]),
-            grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned(), "MANAGE_MESSAGES".to_owned()]),
-            default_permissions: BTreeMap::from([
-                ("VIEW_CHANNEL".to_owned(), false),
-                ("MANAGE_MESSAGES".to_owned(), false),
-            ]),
+            permission_names: known_permissions(["VIEW_CHANNEL", "MANAGE_MESSAGES"]),
+            grantable_permissions: known_permissions(["VIEW_CHANNEL", "MANAGE_MESSAGES"]),
+            default_permissions: known_permission_values([("VIEW_CHANNEL", false), ("MANAGE_MESSAGES", false)]),
         })),
         updates: Arc::new(Mutex::new(Vec::new())),
         outcome: RoleUpdateOutcome::Applied,
@@ -825,9 +813,9 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
     assert_eq!(updates[0].name.as_deref(), Some("モデレーター"));
     assert_eq!(
         updates[0].permissions,
-        Some(BTreeMap::from([
-            ("MANAGE_MESSAGES".to_owned(), true),
-            ("VIEW_CHANNEL".to_owned(), true),
+        Some(known_permission_values([
+            ("MANAGE_MESSAGES", true),
+            ("VIEW_CHANNEL", true),
         ]))
     );
 }

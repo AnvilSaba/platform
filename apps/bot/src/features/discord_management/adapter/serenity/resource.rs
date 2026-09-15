@@ -4,6 +4,7 @@ use serenity::{
     http::StatusCode,
 };
 
+use crate::features::discord_management::configuration::PermissionVocabulary;
 use crate::features::discord_management::domain::{ManagementError, ResourceType};
 use crate::features::discord_management::ids::GuildId;
 use crate::features::discord_management::port::{ResourceLookup, ResourceSource};
@@ -28,6 +29,10 @@ pub(crate) struct SerenityRoleSource<'a> {
 impl<'a> SerenityRoleSource<'a> {
     pub(crate) fn new(http: &'a Http, bot_user_id: UserId) -> Self {
         Self { http, bot_user_id }
+    }
+
+    pub(crate) fn permission_vocabulary(&self) -> PermissionVocabulary {
+        super::role::permission_vocabulary()
     }
 }
 

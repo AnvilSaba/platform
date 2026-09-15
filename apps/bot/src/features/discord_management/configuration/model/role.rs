@@ -10,24 +10,6 @@ pub(crate) fn validate_definition(definition: &RawDefinitionFile) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn validate_permissions(permissions: &BTreeMap<String, ManagedValue<bool>>) -> Result<(), ValidationError> {
-    for permission in permissions.keys() {
-        if permission.is_empty()
-            || !permission.bytes().enumerate().all(|(index, byte)| {
-                (index == 0 && byte.is_ascii_uppercase())
-                    || (index > 0 && (byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'))
-            })
-        {
-            return Err(validation_error(
-                "invalid_permission_name",
-                format!("不正な権限名 {permission} が指定されています"),
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawRoleDefinition {
@@ -39,7 +21,7 @@ pub(crate) struct RawRoleDefinition {
     pub(crate) settings_sets: Vec<RoleSettingsSetId>,
     #[validate(nested)]
     #[serde(flatten)]
-    pub(crate) attributes: RoleAttributes,
+    pub(crate) attributes: RawRoleAttributes,
 }
 
 #[derive(Debug)]
@@ -57,7 +39,9 @@ impl RoleDefinition {
         logical_id: RoleLogicalId,
         raw: RawRoleDefinition,
         settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
+        vocabulary: &PermissionVocabulary,
     ) -> Result<Self, ManagementError> {
+        let attributes = raw.attributes.resolve(vocabulary, &format!("Role {logical_id}"))?;
         let mut seen = BTreeSet::new();
         for settings_set in &raw.settings_sets {
             if !seen.insert(settings_set) {
@@ -72,13 +56,13 @@ impl RoleDefinition {
             }
         }
         match (raw.ensure, raw.mode) {
-            (RoleEnsure::Absent, RoleMode::Managed) if raw.settings_sets.is_empty() && raw.attributes.is_empty() => {
+            (RoleEnsure::Absent, RoleMode::Managed) if raw.settings_sets.is_empty() && attributes.is_empty() => {
                 Ok(Self::Absent)
             }
             (RoleEnsure::Absent, _) => Err(ManagementError::InvalidDefinition(format!(
                 "削除する Role {logical_id} には mode、設定セット、管理属性を指定できません"
             ))),
-            (RoleEnsure::Present, RoleMode::Reference) if raw.settings_sets.is_empty() && raw.attributes.is_empty() => {
+            (RoleEnsure::Present, RoleMode::Reference) if raw.settings_sets.is_empty() && attributes.is_empty() => {
                 Ok(Self::Reference)
             }
             (RoleEnsure::Present, RoleMode::Reference) => Err(ManagementError::InvalidDefinition(format!(
@@ -86,7 +70,7 @@ impl RoleDefinition {
             ))),
             (RoleEnsure::Present, RoleMode::Managed) => Ok(Self::Managed {
                 settings_sets: raw.settings_sets,
-                attributes: raw.attributes,
+                attributes,
             }),
         }
     }
@@ -149,7 +133,7 @@ impl RoleMode {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RoleAttributes {
+pub(crate) struct RawRoleAttributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<ManagedValue<String>>,
 
@@ -162,9 +146,51 @@ pub(crate) struct RoleAttributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mentionable: Option<ManagedValue<bool>>,
 
-    #[validate(custom(function = "validate_permissions"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) permissions: BTreeMap<String, ManagedValue<bool>>,
+    pub(crate) permissions: BTreeMap<PermissionName, ManagedValue<bool>>,
+}
+
+impl RawRoleAttributes {
+    pub(super) fn resolve(
+        self,
+        vocabulary: &PermissionVocabulary,
+        context: &str,
+    ) -> Result<RoleAttributes, ManagementError> {
+        let Self {
+            name,
+            color,
+            hoist,
+            mentionable,
+            permissions,
+        } = self;
+        let permissions = permissions
+            .into_iter()
+            .map(|(permission, value)| {
+                let known = vocabulary.resolve(&permission).ok_or_else(|| {
+                    ManagementError::InvalidDefinition(format!(
+                        "{context} に未知の権限 {permission} が指定されています"
+                    ))
+                })?;
+                Ok((known, value))
+            })
+            .collect::<Result<_, ManagementError>>()?;
+        Ok(RoleAttributes {
+            name,
+            color,
+            hoist,
+            mentionable,
+            permissions,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RoleAttributes {
+    pub(crate) name: Option<ManagedValue<String>>,
+    pub(crate) color: Option<ManagedValue<Color>>,
+    pub(crate) hoist: Option<ManagedValue<bool>>,
+    pub(crate) mentionable: Option<ManagedValue<bool>>,
+    pub(crate) permissions: BTreeMap<KnownPermission, ManagedValue<bool>>,
 }
 
 impl RoleAttributes {

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use super::{
-    configuration::{DefinitionFile, StateFile, everyone_logical_id, serialize_state},
+    configuration::{DefinitionFile, PermissionVocabulary, StateFile, everyone_logical_id, serialize_state},
     domain::{ManagementError, ResourceType},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, MemberLogicalId, RoleId, RoleLogicalId},
     port::{ResourceLookup, ResourceSource},
@@ -12,8 +12,10 @@ pub(super) struct BindResult {
     pub state_json: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn bind_resource<S: ResourceSource>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -21,7 +23,7 @@ pub(super) async fn bind_resource<S: ResourceSource>(
     logical_id: &str,
     discord_id: &str,
 ) -> Result<BindResult, ManagementError> {
-    let definition = DefinitionFile::parse(definition_toml)?;
+    let definition = DefinitionFile::parse(definition_toml, vocabulary)?;
     let mut state = StateFile::parse_for_guild(state_json, guild_id)?;
     let discord_id = parse_discord_id(resource_type, discord_id)?;
     if resource_type == ResourceType::Role && discord_id == guild_id.get() {

@@ -132,9 +132,11 @@ pub async fn bind(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
 
     match bind_resource(
         &source,
+        &vocabulary,
         guild_id,
         &definition_text,
         &state_text,
@@ -221,8 +223,9 @@ pub async fn role_plan(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
 
-    match plan_roles(&source, guild_id, &definition_text, &state_text).await {
+    match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => {
             ctx.send(
                 CreateReply::default()
@@ -260,7 +263,8 @@ pub async fn role_apply(
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
     let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let plan = match plan_roles(&source, guild_id, &definition_text, &state_text).await {
+    let vocabulary = source.permission_vocabulary();
+    let plan = match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => plan,
         Err(error) => return send_input_error(ctx, error).await,
     };
@@ -356,6 +360,7 @@ pub async fn role_apply(
                 let result = if allow_deletions {
                     apply_roles_with_options(
                         &source,
+                        &vocabulary,
                         payload.guild_id,
                         &payload.definition,
                         &payload.state,
@@ -367,6 +372,7 @@ pub async fn role_apply(
                 } else {
                     apply_roles(
                         &source,
+                        &vocabulary,
                         payload.guild_id,
                         &payload.definition,
                         &payload.state,

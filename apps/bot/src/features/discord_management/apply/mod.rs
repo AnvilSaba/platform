@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use super::{
+    configuration::PermissionVocabulary,
     domain::ManagementError,
     port::{RoleLifecycleTarget, RoleUpdater},
     resource::role::{RolePlan, apply as role_apply},
@@ -18,6 +19,7 @@ pub(crate) use role_apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus};
 #[allow(dead_code)]
 pub(crate) async fn apply_role_updates<S: RoleUpdater>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -26,6 +28,7 @@ pub(crate) async fn apply_role_updates<S: RoleUpdater>(
 ) -> Result<RoleApplyResult, ManagementError> {
     role_apply::apply_role_updates(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
@@ -37,6 +40,7 @@ pub(crate) async fn apply_role_updates<S: RoleUpdater>(
 
 pub(super) async fn apply_roles<S: RoleLifecycleTarget>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -45,6 +49,7 @@ pub(super) async fn apply_roles<S: RoleLifecycleTarget>(
 ) -> Result<RoleApplyResult, ManagementError> {
     role_apply::apply_roles(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
@@ -54,8 +59,10 @@ pub(super) async fn apply_roles<S: RoleLifecycleTarget>(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn apply_roles_with_options<S: RoleLifecycleTarget>(
     source: &S,
+    vocabulary: &PermissionVocabulary,
     guild_id: GuildId,
     definition_toml: &str,
     state_json: &str,
@@ -65,6 +72,7 @@ pub(super) async fn apply_roles_with_options<S: RoleLifecycleTarget>(
 ) -> Result<RoleApplyResult, ManagementError> {
     role_apply::apply_roles_with_options(
         source,
+        vocabulary,
         guild_id,
         definition_toml,
         state_json,
