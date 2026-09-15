@@ -1,5 +1,16 @@
-use super::*;
+use super::{
+    apply::{RoleApplyOptions, RoleApplyStatus, apply_role_updates, apply_roles, apply_roles_with_options},
+    bind::bind_resource,
+    configuration::*,
+    domain::*,
+    export::export_roles,
+    ids::*,
+    plan::plan_roles,
+    port::*,
+    resource::role::{AttributeChange, RoleLifecycleChange},
+};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -121,19 +132,26 @@ impl ResourceSource for MissingResourceSource {
 /// 明示した Role 宣言と Discord ID の bind が返却 state に保存されることを保証する。
 #[tokio::test]
 async fn bind_adopts_an_existing_role_into_state() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let result = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "200")
-        .await
-        .unwrap();
+    let result = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "200",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap(),
@@ -148,19 +166,26 @@ async fn bind_adopts_an_existing_role_into_state() {
 /// 明示した Channel 宣言を Role と分離した state 対応表へ保存できることを保証する。
 #[tokio::test]
 async fn bind_adopts_an_existing_channel_into_state() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Channel,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[channels.rules]\ntype = \"text\"\nname = \"ルール\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let result = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Channel, "rules", "300")
-        .await
-        .unwrap();
+    let result = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Channel,
+        "rules",
+        "300",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["channels"]["rules"],
@@ -171,19 +196,26 @@ async fn bind_adopts_an_existing_channel_into_state() {
 /// Guild 所属の Member 参照を宣言と対応付け、Member 用 state へ保存できることを保証する。
 #[tokio::test]
 async fn bind_adopts_an_existing_member_into_state() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Member,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[members.owner]\nmode = \"reference\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let result = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Member, "owner", "400")
-        .await
-        .unwrap();
+    let result = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Member,
+        "owner",
+        "400",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["members"]["owner"],
@@ -194,19 +226,26 @@ async fn bind_adopts_an_existing_member_into_state() {
 /// 指定した Discord ID の実体と要求した Role/Channel/Member の型が違えば bind しないことを保証する。
 #[tokio::test]
 async fn bind_rejects_a_resource_type_mismatch() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Channel,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "300")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "300",
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(
         error,
@@ -221,19 +260,26 @@ async fn bind_rejects_a_resource_type_mismatch() {
 /// 実体が別 Guild に属している場合は、対象 Guild の state へ bind しないことを保証する。
 #[tokio::test]
 async fn bind_rejects_a_resource_from_another_guild() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(999),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "200")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "200",
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(
         error,
@@ -249,19 +295,26 @@ async fn bind_rejects_a_resource_from_another_guild() {
 /// 既存 state が採用済みの Discord ID を別の論理 ID へ重複 bind できないことを保証する。
 #[tokio::test]
 async fn bind_rejects_duplicate_resource_adoption() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{"existing":"200"}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "200")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "200",
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("existing") && message.contains("200"))
@@ -271,19 +324,26 @@ async fn bind_rejects_duplicate_resource_adoption() {
 /// 既存の論理 ID に別の Discord ID を指定した暗黙の付け替えを拒否することを保証する。
 #[tokio::test]
 async fn bind_rejects_retargeting_an_existing_logical_id() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{"moderator":"201"}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "200")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "200",
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("moderator") && message.contains("201") && message.contains("200"))
@@ -293,19 +353,26 @@ async fn bind_rejects_retargeting_an_existing_logical_id() {
 /// definition にない論理 ID は、Discord への照会前に bind を拒否することを保証する。
 #[tokio::test]
 async fn bind_rejects_an_undeclared_logical_id() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "missing", "200")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "missing",
+        "200",
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("missing") && message.contains("宣言"))
@@ -315,14 +382,14 @@ async fn bind_rejects_an_undeclared_logical_id() {
 /// 参照専用 Channel の宣言があっても対応がなければ plan を開始しないことを保証する。
 #[tokio::test]
 async fn plan_rejects_a_reference_channel_without_a_binding() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = "schema_version = 1\n[channels.information]\nmode = \"reference\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("Channel information") && message.contains("対応がありません"))
@@ -332,10 +399,10 @@ async fn plan_rejects_a_reference_channel_without_a_binding() {
 /// Role・Channel・Member の参照専用宣言は対応だけを解決し、実属性を変更差分にしないことを保証する。
 #[tokio::test]
 async fn plan_resolves_bound_reference_resources_without_managing_attributes() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "外部管理")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.external]
@@ -353,7 +420,7 @@ async fn plan_resolves_bound_reference_resources_without_managing_attributes() {
         "members": {"owner": "400"}
     }"#;
 
-    let plan = service.plan_roles(guild_id(100), definition, state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, state).await.unwrap();
 
     assert!(plan.changes.is_empty());
 }
@@ -361,10 +428,10 @@ async fn plan_resolves_bound_reference_resources_without_managing_attributes() {
 /// Channel の親として使う論理 ID の宣言が不足していれば plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_a_channel_reference_without_a_declaration() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [channels.rules]
@@ -378,7 +445,7 @@ async fn plan_rejects_a_channel_reference_without_a_declaration() {
         "channels": {"rules": "300"}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("information") && message.contains("宣言がありません"))
@@ -388,10 +455,10 @@ async fn plan_rejects_a_channel_reference_without_a_declaration() {
 /// 管理メッセージ群の投稿先 Channel が未宣言なら plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_a_message_set_channel_reference_without_a_declaration() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [message_sets.guidelines]
@@ -403,7 +470,7 @@ async fn plan_rejects_a_message_set_channel_reference_without_a_declaration() {
         "roles": {}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("information") && message.contains("宣言がありません"))
@@ -413,10 +480,10 @@ async fn plan_rejects_a_message_set_channel_reference_without_a_declaration() {
 /// 独立した管理スレッドの投稿先 Channel に対応がなければ plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_a_thread_channel_reference_without_a_binding() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [channels.information]
@@ -431,7 +498,7 @@ async fn plan_rejects_a_thread_channel_reference_without_a_binding() {
         "roles": {}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("information") && message.contains("対応がありません"))
@@ -441,19 +508,26 @@ async fn plan_rejects_a_thread_channel_reference_without_a_binding() {
 /// 予約論理 ID everyone は state へ bind せず、Guild ID へ解決する契約を保証する。
 #[tokio::test]
 async fn bind_rejects_the_reserved_everyone_role() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.everyone]\nmode = \"reference\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "everyone", "100")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "everyone",
+        "100",
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("everyone") && message.contains("bind"))
@@ -463,26 +537,26 @@ async fn bind_rejects_the_reserved_everyone_role() {
 /// @everyone の実 ID を別の論理 ID に bind できないことを保証する。
 #[tokio::test]
 async fn bind_rejects_an_alias_for_reserved_everyone_role() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Role,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[roles.default_role]\nmode = \"reference\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(
-            guild_id(100),
-            definition,
-            state,
-            ResourceType::Role,
-            "default_role",
-            "100",
-        )
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "default_role",
+        "100",
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("everyone") && message.contains("別の論理 ID"))
@@ -492,10 +566,10 @@ async fn bind_rejects_an_alias_for_reserved_everyone_role() {
 /// Channel の state 対応表で一つの実体を複数の論理 ID が採用する状態を拒否することを保証する。
 #[tokio::test]
 async fn plan_rejects_duplicate_channel_snowflakes() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = "schema_version = 1\n";
     let state = r#"{
         "schema_version": 1,
@@ -504,7 +578,7 @@ async fn plan_rejects_duplicate_channel_snowflakes() {
         "channels": {"first": "300", "second": "300"}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("Channel") && message.contains("同じ Snowflake 300"))
@@ -514,10 +588,10 @@ async fn plan_rejects_duplicate_channel_snowflakes() {
 /// Member の state 対応表で一つの実体を複数の論理 ID が採用する状態を拒否することを保証する。
 #[tokio::test]
 async fn plan_rejects_duplicate_member_snowflakes() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = "schema_version = 1\n";
     let state = r#"{
         "schema_version": 1,
@@ -526,7 +600,7 @@ async fn plan_rejects_duplicate_member_snowflakes() {
         "members": {"first": "400", "second": "400"}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("Member") && message.contains("同じ Snowflake 400"))
@@ -536,28 +610,27 @@ async fn plan_rejects_duplicate_member_snowflakes() {
 /// bind の返却 state をそのまま次の plan へ渡せば参照専用 Channel を解決できることを保証する。
 #[tokio::test]
 async fn bound_state_can_be_passed_to_the_next_plan() {
-    let service = RoleManagementService::new(BindFakeResourceSource {
+    let source = BindFakeResourceSource {
         resource: ResourceLookup {
             resource_type: ResourceType::Channel,
             guild_id: guild_id(100),
         },
-    });
+    };
     let definition = "schema_version = 1\n[channels.information]\nmode = \"reference\"\n";
     let initial_state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
-    let bound = service
-        .bind_resource(
-            guild_id(100),
-            definition,
-            initial_state,
-            ResourceType::Channel,
-            "information",
-            "300",
-        )
-        .await
-        .unwrap();
+    let bound = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        initial_state,
+        ResourceType::Channel,
+        "information",
+        "300",
+    )
+    .await
+    .unwrap();
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &bound.state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &bound.state_json)
         .await
         .unwrap();
 
@@ -567,19 +640,19 @@ async fn bound_state_can_be_passed_to_the_next_plan() {
 /// Role・Channel・Member・管理メッセージを含む定義サンプルを resource 定義として読み取れることを保証する。
 #[test]
 fn management_sample_accepts_resource_declarations() {
-    let sample = include_str!("../../../../../../docs/examples/discord-management.base.toml");
+    let sample = include_str!("../../../../../docs/examples/discord-management.base.toml");
     DefinitionFile::parse(sample).unwrap();
 }
 
 /// 同名Roleが複数あっても、名前ではなくSnowflake由来の論理IDで一意にexportできることを保証する。
 #[tokio::test]
 async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営"), role("201", "運営")],
-    });
+    };
 
-    let files = service.export_roles(guild_id(100), None).await.unwrap();
+    let files = export_roles(&source, guild_id(100), None).await.unwrap();
     let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
 
@@ -605,12 +678,12 @@ async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
 /// @everyoneを予約論理IDでexportし、stateから除外しつつ、権限のtrue/falseをすべて保持できることを保証する。
 #[tokio::test]
 async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
+    };
 
-    let files = service.export_roles(guild_id(100), None).await.unwrap();
+    let files = export_roles(&source, guild_id(100), None).await.unwrap();
     let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
     let everyone = definition.roles[&logical_id("everyone")].attributes();
@@ -623,8 +696,7 @@ async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
     assert_eq!(literal_bool(everyone.permissions.get("SEND_MESSAGES")), Some(false));
     assert!(!state.roles.contains_key(&logical_id("everyone")));
 
-    let plan = service
-        .plan_roles(guild_id(100), &files.definition_toml, &files.state_json)
+    let plan = plan_roles(&source, guild_id(100), &files.definition_toml, &files.state_json)
         .await
         .unwrap();
     assert!(plan.changes.is_empty());
@@ -633,18 +705,17 @@ async fn everyone_export_contains_only_permissions_and_keeps_false_values() {
 /// @everyoneへ名前など権限以外の管理属性を指定した定義を拒否し、Discord固有の制約を守る。
 #[tokio::test]
 async fn everyone_rejects_non_permission_managed_attributes() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.everyone]
         name = "renamed"
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -656,17 +727,19 @@ async fn everyone_rejects_non_permission_managed_attributes() {
 /// 再export時に既存stateの論理IDを引き継ぎ、Role名の変更で対応関係が変わらないことを保証する。
 #[tokio::test]
 async fn re_export_preserves_logical_ids_from_input_state() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "名称変更後")],
-    });
+    };
     let previous_state = r#"{
         "schema_version": 1,
         "guild_id": "100",
         "roles": { "moderator": "200" }
     }"#;
 
-    let files = service.export_roles(guild_id(100), Some(previous_state)).await.unwrap();
+    let files = export_roles(&source, guild_id(100), Some(previous_state))
+        .await
+        .unwrap();
     let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
     let state = StateFile::parse_for_guild(&files.state_json, guild_id(100)).unwrap();
 
@@ -685,11 +758,9 @@ async fn exported_definition_has_no_plan_changes() {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
     };
-    let service = RoleManagementService::new(source);
-    let files = service.export_roles(guild_id(100), None).await.unwrap();
+    let files = export_roles(&source, guild_id(100), None).await.unwrap();
 
-    let plan = service
-        .plan_roles(guild_id(100), &files.definition_toml, &files.state_json)
+    let plan = plan_roles(&source, guild_id(100), &files.definition_toml, &files.state_json)
         .await
         .unwrap();
 
@@ -699,18 +770,17 @@ async fn exported_definition_has_no_plan_changes() {
 /// 空の対応表から明示した managed Role を新規構築する計画を作り、Discord ID を推測しないことを保証する。
 #[tokio::test]
 async fn empty_state_plans_managed_role_creation_without_discord_id() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.moderator]
         name = "運営"
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let plan = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap();
 
@@ -732,20 +802,24 @@ async fn empty_state_plans_managed_role_creation_without_discord_id() {
 async fn reference_role_may_target_an_unmanageable_guild_role() {
     let mut external_role = role("200", "外部 Bot");
     external_role.manageable = false;
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![external_role],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.external_bot]
         mode = "reference"
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"external_bot":"200"}"#))
-        .await
-        .unwrap();
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"external_bot":"200"}"#),
+    )
+    .await
+    .unwrap();
 
     assert!(plan.changes.is_empty());
 }
@@ -755,18 +829,17 @@ async fn reference_role_may_target_an_unmanageable_guild_role() {
 async fn everyone_role_may_be_used_as_a_reference() {
     let mut everyone = role("100", "@everyone");
     everyone.manageable = false;
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![everyone],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.everyone]
         mode = "reference"
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let plan = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap();
 
@@ -780,20 +853,24 @@ async fn permission_default_uses_everyone_role_value() {
     everyone.manageable = false;
     let mut moderator = role("200", "運営");
     moderator.permissions.insert("VIEW_CHANNEL".to_owned(), false);
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![everyone, moderator],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.moderator.permissions]
         VIEW_CHANNEL = { default = true }
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap();
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
     assert_eq!(plan.changes[0].current, "false");
@@ -805,12 +882,12 @@ async fn permission_default_uses_everyone_role_value() {
 async fn export_omits_unmanageable_roles_but_keeps_manageable_roles() {
     let mut external_role = role("200", "外部 Bot");
     external_role.manageable = false;
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![external_role, role("201", "運営")],
-    });
+    };
 
-    let files = service.export_roles(guild_id(100), None).await.unwrap();
+    let files = export_roles(&source, guild_id(100), None).await.unwrap();
     let definition = DefinitionFile::parse(&files.definition_toml).unwrap();
 
     assert!(!definition.roles.contains_key(&logical_id("role_200")));
@@ -820,10 +897,10 @@ async fn export_omits_unmanageable_roles_but_keeps_manageable_roles() {
 /// Role設定セットで指定した属性が合成され、実際のRoleとの差分としてplanされることを保証する。
 #[tokio::test]
 async fn role_settings_set_attributes_are_planned() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
 
@@ -839,7 +916,7 @@ async fn role_settings_set_attributes_are_planned() {
         "roles": { "moderator": "200" }
     }"#;
 
-    let plan = service.plan_roles(guild_id(100), definition, state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, state).await.unwrap();
 
     assert_eq!(
         plan.changes,
@@ -856,14 +933,21 @@ async fn role_settings_set_attributes_are_planned() {
 /// Guild 内に対象が存在しなければ、対応 state を変更せずに bind を拒否することを保証する。
 #[tokio::test]
 async fn bind_rejects_a_missing_resource() {
-    let service = RoleManagementService::new(MissingResourceSource);
+    let source = MissingResourceSource;
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
 
-    let error = service
-        .bind_resource(guild_id(100), definition, state, ResourceType::Role, "moderator", "200")
-        .await
-        .unwrap_err();
+    let error = bind_resource(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        ResourceType::Role,
+        "moderator",
+        "200",
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(
         error,
@@ -877,10 +961,10 @@ async fn bind_rejects_a_missing_resource() {
 /// Channel の Role overwrite が未宣言の Role を参照していれば plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_an_undeclared_role_overwrite_target() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [channels.rules]
@@ -895,7 +979,7 @@ async fn plan_rejects_an_undeclared_role_overwrite_target() {
         "channels": {"rules": "300"}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Role admin") && message.contains("宣言がありません"))
@@ -905,10 +989,10 @@ async fn plan_rejects_an_undeclared_role_overwrite_target() {
 /// Channel の Member overwrite が未宣言の Member を参照していれば plan で診断することを保証する。
 #[tokio::test]
 async fn plan_rejects_an_undeclared_member_overwrite_target() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [channels.rules]
@@ -923,7 +1007,7 @@ async fn plan_rejects_an_undeclared_member_overwrite_target() {
         "channels": {"rules": "300"}
     }"#;
 
-    let error = service.plan_roles(guild_id(100), definition, state).await.unwrap_err();
+    let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Member moderator") && message.contains("宣言がありません"))
@@ -933,10 +1017,10 @@ async fn plan_rejects_an_undeclared_member_overwrite_target() {
 /// 複数設定セットの後勝ちと直接指定の最優先を確認し、省略属性を変更しない合成規則を保証する。
 #[tokio::test]
 async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_are_retained() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
 
@@ -952,10 +1036,14 @@ async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_a
         mentionable = true
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap();
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(plan.changes.len(), 2);
     assert!(plan.changes.iter().any(|change| change.attribute == "hoist"));
@@ -968,10 +1056,10 @@ async fn direct_attributes_override_later_settings_sets_and_omitted_attributes_a
 async fn default_specifiers_are_resolved_to_schema_version_values() {
     let mut actual = role("200", "運営");
     actual.color = Color::new(0x12_34_56).unwrap();
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![actual],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.moderator]
@@ -979,10 +1067,14 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
         color = { default = true }
     "#;
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap();
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
 
     assert!(
         plan.changes
@@ -999,12 +1091,11 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
 /// stateのGuildが要求先と異なる場合、Discordへ問い合わせる前に誤投入として拒否することを保証する。
 #[tokio::test]
 async fn guild_mismatch_is_reported_before_reading_discord() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
-    let error = service
-        .plan_roles(guild_id(100), "schema_version = 1", &state("999", "{}"))
+    };
+    let error = plan_roles(&source, guild_id(100), "schema_version = 1", &state("999", "{}"))
         .await
         .unwrap_err();
 
@@ -1020,14 +1111,18 @@ async fn guild_mismatch_is_reported_before_reading_discord() {
 /// Snowflake形式でないGuild IDをデシリアライズ時に拒否し、不正なstateを後段へ渡さない。
 #[tokio::test]
 async fn non_numeric_state_guild_id_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
-    let error = service
-        .plan_roles(guild_id(100), "schema_version = 1", &state("not-a-snowflake", "{}"))
-        .await
-        .unwrap_err();
+    };
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        "schema_version = 1",
+        &state("not-a-snowflake", "{}"),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("Guild ID")));
 }
@@ -1035,18 +1130,18 @@ async fn non_numeric_state_guild_id_is_reported() {
 /// 予約論理ID everyoneをstateに保存する旧・不正形式を、stateモデルの検証で拒否することを保証する。
 #[tokio::test]
 async fn everyone_mapping_in_state_is_rejected() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
-    let error = service
-        .plan_roles(
-            guild_id(100),
-            "schema_version = 1\n[roles.everyone]",
-            &state("100", r#"{"everyone":"100"}"#),
-        )
-        .await
-        .unwrap_err();
+    };
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        "schema_version = 1\n[roles.everyone]",
+        &state("100", r#"{"everyone":"100"}"#),
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("everyone") && message.contains("state に含めず"))
@@ -1056,18 +1151,18 @@ async fn everyone_mapping_in_state_is_rejected() {
 /// @everyone の実 ID を別の論理 ID に保存した state も拒否することを保証する。
 #[tokio::test]
 async fn everyone_role_id_under_another_logical_id_is_rejected() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
-    let error = service
-        .plan_roles(
-            guild_id(100),
-            "schema_version = 1\n[roles.default_role]\nmode = \"reference\"",
-            &state("100", r#"{"default_role":"100"}"#),
-        )
-        .await
-        .unwrap_err();
+    };
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        "schema_version = 1\n[roles.default_role]\nmode = \"reference\"",
+        &state("100", r#"{"default_role":"100"}"#),
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidState(message) if message.contains("everyone") && message.contains("別の論理 ID"))
@@ -1077,17 +1172,17 @@ async fn everyone_role_id_under_another_logical_id_is_rejected() {
 /// 複数の論理IDが同じRole Snowflakeを指す曖昧なstateを拒否することを保証する。
 #[tokio::test]
 async fn duplicate_snowflakes_in_state_are_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
-    let error = service
-        .export_roles(
-            guild_id(100),
-            Some(&state("100", r#"{"moderator":"200","staff":"200"}"#)),
-        )
-        .await
-        .unwrap_err();
+    };
+    let error = export_roles(
+        &source,
+        guild_id(100),
+        Some(&state("100", r#"{"moderator":"200","staff":"200"}"#)),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("同じ Snowflake 200")));
 }
@@ -1095,17 +1190,17 @@ async fn duplicate_snowflakes_in_state_are_reported() {
 /// JSONの重複キーがMap変換で黙って上書きされず、不正なstateとして報告されることを保証する。
 #[tokio::test]
 async fn duplicate_logical_id_keys_in_state_are_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let state = r#"{
         "schema_version": 1,
         "guild_id": "100",
         "roles": { "moderator": "200", "moderator": "201" }
     }"#;
 
-    let error = service.export_roles(guild_id(100), Some(state)).await.unwrap_err();
+    let error = export_roles(&source, guild_id(100), Some(state)).await.unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("論理 ID moderator が重複")));
 }
@@ -1113,12 +1208,11 @@ async fn duplicate_logical_id_keys_in_state_are_reported() {
 /// 新規Role用に生成する論理IDが古いstateの予約と衝突した場合、誤対応せず拒否することを保証する。
 #[tokio::test]
 async fn generated_logical_id_collision_with_stale_state_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
-    let error = service
-        .export_roles(guild_id(100), Some(&state("100", r#"{"role_200":"999"}"#)))
+    };
+    let error = export_roles(&source, guild_id(100), Some(&state("100", r#"{"role_200":"999"}"#)))
         .await
         .unwrap_err();
 
@@ -1128,20 +1222,24 @@ async fn generated_logical_id_collision_with_stale_state_is_reported() {
 /// タイプミスなどの未知フィールドを無視せず、definitionの入力エラーとして報告することを保証する。
 #[tokio::test]
 async fn unknown_definition_keys_are_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.moderator]
         unknown = true
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap_err();
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidDefinition(_)));
 }
@@ -1149,18 +1247,17 @@ async fn unknown_definition_keys_are_reported() {
 /// Roleから未参照の設定セットも検証し、潜在的な不正定義を見逃さないことを保証する。
 #[tokio::test]
 async fn invalid_unreferenced_settings_set_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [settings_sets.role.unused]
         color = 16777216
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1170,18 +1267,17 @@ async fn invalid_unreferenced_settings_set_is_reported() {
 /// 未参照設定セット内でも無効なdefault指定を拒否し、定義全体を一貫して検証する。
 #[tokio::test]
 async fn false_default_in_unreferenced_settings_set_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [settings_sets.role.unused]
         hoist = { default = false }
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1191,18 +1287,17 @@ async fn false_default_in_unreferenced_settings_set_is_reported() {
 /// 未参照設定セット内の未知権限も検出し、将来参照された際の遅延エラーを防ぐ。
 #[tokio::test]
 async fn unknown_permission_in_unreferenced_settings_set_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("200", "運営")],
-    });
+    };
     let definition = r#"
         schema_version = 1
         [settings_sets.role.unused.permissions]
         NOT_A_DISCORD_PERMISSION = true
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1212,13 +1307,12 @@ async fn unknown_permission_in_unreferenced_settings_set_is_reported() {
 /// 対応外schema_versionのdefinitionを拒否し、異なる解釈でRoleを更新しないことを保証する。
 #[tokio::test]
 async fn unsupported_definition_version_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
 
-    let error = service
-        .plan_roles(guild_id(100), "schema_version = 2", &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), "schema_version = 2", &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1228,25 +1322,24 @@ async fn unsupported_definition_version_is_reported() {
 /// 利用者向けサンプルTOMLが現在のDefinitionFileとして読み取れる状態を維持する。
 #[test]
 fn editor_sample_matches_the_supported_definition_shape() {
-    let sample = include_str!("../../../../../../docs/examples/discord-role-management.toml");
+    let sample = include_str!("../../../../../docs/examples/discord-role-management.toml");
     DefinitionFile::parse(sample).unwrap();
 }
 
 /// Roleが存在しない設定セットを参照した場合、合成処理へ進む前に定義エラーとして報告する。
 #[tokio::test]
 async fn unknown_settings_set_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.moderator]
         settings_sets = ["missing"]
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1256,10 +1349,10 @@ async fn unknown_settings_set_is_reported() {
 /// 参照専用Roleへの管理属性指定を拒否し、更新されない設定を利用者に誤認させない。
 #[tokio::test]
 async fn reference_role_with_managed_attributes_is_reported() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
-    });
+    };
     let definition = r#"
         schema_version = 1
         [roles.external]
@@ -1267,8 +1360,7 @@ async fn reference_role_with_managed_attributes_is_reported() {
         hoist = true
     "#;
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -1352,5 +1444,6 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("参照専用 Channel rules")));
 }
 
+#[cfg(test)]
 #[path = "tests/apply_tests.rs"]
 mod apply_tests;

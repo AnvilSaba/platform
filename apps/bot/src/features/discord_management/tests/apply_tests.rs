@@ -138,23 +138,21 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
         grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
         default_permissions: BTreeMap::from([("VIEW_CHANNEL".to_owned(), true)]),
     });
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let plan = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state("100", "{}"),
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", "{}"),
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert_eq!(result.applied_lifecycle, plan.lifecycle);
@@ -175,24 +173,22 @@ async fn create_failure_returns_successful_mappings_and_pending_creations() {
         default_permissions: BTreeMap::new(),
     });
     source.create_error_on_call = Some(2);
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.first]\nname = \"先行\"\n[roles.second]\nname = \"後続\"\n";
     let state_json = state("100", "{}");
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("作成後の処理")));
     assert_eq!(result.applied_lifecycle.len(), 1);
@@ -212,32 +208,29 @@ async fn unknown_create_response_is_recorded_without_retrying_creation() {
         default_permissions: BTreeMap::new(),
     });
     source.create_outcome = RoleCreateOutcome::ResponseUnknown;
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
     let state_json = state("100", "{}");
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
     assert_eq!(source.creates.lock().unwrap().len(), 1);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
     assert!(
-        RoleManagementService::new(source.clone())
-            .plan_roles(guild_id(100), definition, &result.state_json)
+        plan_roles(&source, guild_id(100), definition, &result.state_json)
             .await
             .is_err()
     );
@@ -253,7 +246,6 @@ async fn unknown_recreation_response_keeps_deleted_mapping_until_confirmation() 
         default_permissions: BTreeMap::new(),
     });
     source.create_outcome = RoleCreateOutcome::ResponseUnknown;
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"再作成\"\n";
     let state_json = r#"{
         "schema_version": 1,
@@ -261,26 +253,27 @@ async fn unknown_recreation_response_keeps_deleted_mapping_until_confirmation() 
         "roles": {"moderator": "200"},
         "deleted_roles": ["moderator"]
     }"#;
-    let plan = service.plan_roles(guild_id(100), definition, state_json).await.unwrap();
-
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
+    let plan = plan_roles(&source, guild_id(100), definition, state_json)
         .await
         .unwrap();
+
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(returned_state["roles"]["moderator"], "200");
     assert_eq!(returned_state["deleted_roles"], serde_json::json!(["moderator"]));
     assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
-    let error = service
-        .plan_roles(guild_id(100), definition, &result.state_json)
+    let error = plan_roles(&source, guild_id(100), definition, &result.state_json)
         .await
         .unwrap_err();
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("作成結果不明")));
@@ -295,11 +288,9 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
         grantable_permissions: BTreeSet::new(),
         default_permissions: BTreeMap::new(),
     });
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n";
     let state_json = state("100", r#"{"moderator":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
@@ -310,16 +301,16 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
             discord_id: role_id("200"),
         }]
     );
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert!(result.pending_lifecycle.is_empty());
@@ -331,8 +322,7 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
             .is_empty()
     );
     assert!(
-        service
-            .plan_roles(guild_id(100), definition, &result.state_json)
+        plan_roles(&source, guild_id(100), definition, &result.state_json)
             .await
             .unwrap()
             .lifecycle
@@ -350,11 +340,9 @@ async fn deletion_requires_explicit_permission_before_calling_discord() {
         grantable_permissions: BTreeSet::new(),
         default_permissions: BTreeMap::new(),
     });
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
@@ -364,16 +352,16 @@ async fn deletion_requires_explicit_permission_before_calling_discord() {
     ));
     assert!(plan.render().contains("削除"));
     assert!(plan.render().contains("影響"));
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::DeletionPermissionRequired);
     assert!(source.deletes.lock().unwrap().is_empty());
@@ -389,25 +377,23 @@ async fn deletion_permission_shortage_is_distinguished_from_confirmation_require
         default_permissions: BTreeMap::new(),
     });
     source.delete_permission_denied = true;
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         result.status,
@@ -427,31 +413,28 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
         grantable_permissions: BTreeSet::new(),
         default_permissions: BTreeMap::new(),
     });
-    let service = RoleManagementService::new(source.clone());
     let delete_definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let delete_plan = service
-        .plan_roles(guild_id(100), delete_definition, &state_json)
+    let delete_plan = plan_roles(&source, guild_id(100), delete_definition, &state_json)
         .await
         .unwrap();
-    let deleted = service
-        .apply_roles_with_options(
-            guild_id(100),
-            delete_definition,
-            &state_json,
-            &delete_plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let deleted = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        delete_definition,
+        &state_json,
+        &delete_plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(deleted.status, RoleApplyStatus::Complete);
     let deleted_state: serde_json::Value = serde_json::from_str(&deleted.state_json).unwrap();
     assert_eq!(deleted_state["deleted_roles"], serde_json::json!(["unused"]));
     assert!(
-        service
-            .plan_roles(guild_id(100), delete_definition, &deleted.state_json)
+        plan_roles(&source, guild_id(100), delete_definition, &deleted.state_json)
             .await
             .unwrap()
             .lifecycle
@@ -459,24 +442,23 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
     );
 
     let create_definition = "schema_version = 1\n[roles.unused]\nname = \"再作成\"\n";
-    let create_plan = service
-        .plan_roles(guild_id(100), create_definition, &deleted.state_json)
+    let create_plan = plan_roles(&source, guild_id(100), create_definition, &deleted.state_json)
         .await
         .unwrap();
     assert!(matches!(
         create_plan.lifecycle.as_slice(),
         [RoleLifecycleChange::Create { recreated: true, .. }]
     ));
-    let recreated = service
-        .apply_roles(
-            guild_id(100),
-            create_definition,
-            &deleted.state_json,
-            &create_plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let recreated = apply_roles(
+        &source,
+        guild_id(100),
+        create_definition,
+        &deleted.state_json,
+        &create_plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
     assert_eq!(recreated.status, RoleApplyStatus::Complete);
     let recreated_state: serde_json::Value = serde_json::from_str(&recreated.state_json).unwrap();
     assert_eq!(recreated_state["roles"]["unused"], "300");
@@ -493,25 +475,23 @@ async fn delete_refresh_failure_returns_deleted_state_without_rollback() {
         default_permissions: BTreeMap::new(),
     });
     source.catalog_error_on_call = Some(3);
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("取得に失敗")));
     assert_eq!(result.applied_lifecycle.len(), 1);
@@ -531,42 +511,40 @@ async fn unknown_delete_response_keeps_intent_until_existence_is_confirmed() {
     });
     source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
     source.apply_delete = false;
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let unknown = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let unknown = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
     assert_eq!(unknown.status, RoleApplyStatus::DeletionResponseUnknown);
     let unknown_state: serde_json::Value = serde_json::from_str(&unknown.state_json).unwrap();
     assert_eq!(unknown_state["roles"]["unused"], "200");
     assert_eq!(unknown_state["pending_deletions"], serde_json::json!(["unused"]));
 
     source.catalog.lock().unwrap().roles.clear();
-    let resolved = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &unknown.state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let resolved = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &unknown.state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
     assert_eq!(resolved.status, RoleApplyStatus::Complete);
     let resolved_state: serde_json::Value = serde_json::from_str(&resolved.state_json).unwrap();
     assert_eq!(resolved_state["deleted_roles"], serde_json::json!(["unused"]));
@@ -586,25 +564,23 @@ async fn unknown_delete_response_with_failed_verification_is_indeterminate() {
     source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
     source.apply_delete = false;
     source.catalog_error_on_call = Some(3);
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         result.status,
@@ -629,25 +605,23 @@ async fn unknown_delete_response_with_verification_permission_shortage_is_distin
     source.apply_delete = false;
     source.catalog_error_on_call = Some(3);
     source.catalog_permission_denied = true;
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
     let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state_json)
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
 
-    let result = service
-        .apply_roles_with_options(
-            guild_id(100),
-            definition,
-            &state_json,
-            &plan,
-            RoleApplyOptions { allow_deletions: true },
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        RoleApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         result.status,
@@ -658,15 +632,19 @@ async fn unknown_delete_response_with_verification_permission_shortage_is_distin
 /// active 対応先が予期せず消えた場合、自動再作成せず state エラーで停止することを保証する。
 #[tokio::test]
 async fn active_role_disappearance_is_not_treated_as_creation() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap_err();
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失")));
 }
@@ -674,13 +652,12 @@ async fn active_role_disappearance_is_not_treated_as_creation() {
 /// 新規 Role に必須の name がない場合、外部操作前に定義エラーにすることを保証する。
 #[tokio::test]
 async fn new_managed_role_requires_a_name() {
-    let service = RoleManagementService::new(StatefulFakeRoleSource {
+    let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: vec![role("100", "@everyone")],
-    });
+    };
     let definition = "schema_version = 1\n[roles.moderator]\nhoist = true\n";
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
         .await
         .unwrap_err();
 
@@ -706,13 +683,16 @@ async fn plan_rejects_granting_a_permission_the_bot_does_not_have() {
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source);
     let definition = "schema_version = 1\n[roles.moderator.permissions]\nSEND_MESSAGES = true\n";
 
-    let error = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap_err();
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         matches!(error, ManagementError::InvalidDefinition(message) if message.contains("SEND_MESSAGES") && message.contains("Bot 自身"))
@@ -736,13 +716,16 @@ async fn plan_allows_removing_a_permission_the_bot_does_not_have() {
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source);
     let definition = "schema_version = 1\n[roles.moderator.permissions]\nVIEW_CHANNEL = false\n";
 
-    let plan = service
-        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
-        .await
-        .unwrap();
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(plan.changes.len(), 1);
     assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
@@ -765,21 +748,20 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.everyone.permissions]\nSEND_MESSAGES = true\n";
     let state = state("100", "{}");
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert_eq!(result.applied, plan.changes);
@@ -806,7 +788,6 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source.clone());
     let definition = r#"
         schema_version = 1
         [roles.moderator]
@@ -815,18 +796,18 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
         VIEW_CHANNEL = true
     "#;
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            std::time::Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        std::time::Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert_eq!(result.applied, plan.changes);
@@ -860,21 +841,20 @@ async fn apply_roles_remains_the_entrypoint_for_attribute_updates() {
         grantable_permissions: BTreeSet::new(),
         default_permissions: BTreeMap::new(),
     });
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_roles(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert_eq!(result.applied, plan.changes);
@@ -895,22 +875,21 @@ async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirm
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let confirmed_plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let confirmed_plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
     source.catalog.lock().unwrap().roles[0].name = "外部変更".to_owned();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &confirmed_plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &confirmed_plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::ReplanRequired);
     assert!(result.applied.is_empty());
@@ -931,21 +910,20 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
         outcome: RoleUpdateOutcome::ResponseUnknown,
         apply_update: false,
     };
-    let service = RoleManagementService::new(source);
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::ResponseUnknown);
     assert!(result.applied.is_empty());
@@ -985,24 +963,23 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let timing_out_service = RoleManagementService::new(NeverCompletesRoleUpdate {
+    let timing_out_source = NeverCompletesRoleUpdate {
         catalog: catalog.clone(),
-    });
-    let plan = timing_out_service
-        .plan_roles(guild_id(100), definition, &state)
+    };
+    let plan = plan_roles(&timing_out_source, guild_id(100), definition, &state)
         .await
         .unwrap();
 
-    let timed_out = timing_out_service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_millis(10),
-        )
-        .await
-        .unwrap();
+    let timed_out = apply_role_updates(
+        &timing_out_source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_millis(10),
+    )
+    .await
+    .unwrap();
     assert_eq!(timed_out.status, RoleApplyStatus::ResponseUnknown);
     assert!(timed_out.applied.is_empty());
     assert_eq!(timed_out.pending, plan.changes);
@@ -1013,16 +990,16 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let resubmitted = RoleManagementService::new(resubmitted_source)
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &timed_out.state_json,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let resubmitted = apply_role_updates(
+        &resubmitted_source,
+        guild_id(100),
+        definition,
+        &timed_out.state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(resubmitted.status, RoleApplyStatus::Complete);
     assert_eq!(resubmitted.applied, plan.changes);
@@ -1043,13 +1020,11 @@ async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() 
         outcome: RoleUpdateOutcome::Applied,
         apply_update: true,
     };
-    let service = RoleManagementService::new(source.clone());
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(guild_id(100), definition, &state, &plan, Instant::now())
+    let result = apply_role_updates(&source, guild_id(100), definition, &state, &plan, Instant::now())
         .await
         .unwrap();
 
@@ -1103,21 +1078,20 @@ async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes
         })),
         calls: Arc::new(AtomicUsize::new(0)),
     };
-    let service = RoleManagementService::new(source);
     let definition = "schema_version = 1\n[roles.a]\nname = \"new A\"\n[roles.b]\nname = \"new B\"\n";
     let state = state("100", r#"{"a":"200","b":"201"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("injected failure")));
     assert_eq!(
@@ -1177,21 +1151,20 @@ async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
         },
         catalog_calls: Arc::new(AtomicUsize::new(0)),
     };
-    let service = RoleManagementService::new(source);
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = service.plan_roles(guild_id(100), definition, &state).await.unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
 
-    let result = service
-        .apply_role_updates(
-            guild_id(100),
-            definition,
-            &state,
-            &plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
+    let result = apply_role_updates(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("refetch failed")));
     assert_eq!(result.applied, plan.changes);
@@ -1242,23 +1215,20 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
     };
     let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
     let state = state("100", r#"{"moderator":"200"}"#);
-    let plan = RoleManagementService::new(source.clone())
-        .plan_roles(guild_id(100), definition, &state)
-        .await
-        .unwrap();
+    let plan = plan_roles(&source, guild_id(100), definition, &state).await.unwrap();
     let first_source = source.clone();
     let first_plan = plan.clone();
     let first_state = state.clone();
     let first = tokio::spawn(async move {
-        RoleManagementService::new(first_source)
-            .apply_role_updates(
-                guild_id(100),
-                definition,
-                &first_state,
-                &first_plan,
-                Instant::now() + Duration::from_secs(60),
-            )
-            .await
+        apply_role_updates(
+            &first_source,
+            guild_id(100),
+            definition,
+            &first_state,
+            &first_plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
     });
     tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
         .await
@@ -1267,7 +1237,8 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
 
     let second = tokio::time::timeout(
         Duration::from_secs(1),
-        RoleManagementService::new(source.clone()).apply_role_updates(
+        apply_role_updates(
+            &source,
             guild_id(100),
             definition,
             &state,
