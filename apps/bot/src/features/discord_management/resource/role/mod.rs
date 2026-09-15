@@ -6,76 +6,312 @@ use super::super::{
         everyone_logical_id, resolve_role_id,
     },
     domain::ManagementError,
-    port::{RoleCatalog, RoleSnapshot},
+    port::{RoleCatalog, RoleSnapshot, RoleUpdate},
 };
 use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettingsSetId};
 
 pub(crate) mod apply;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AttributeChange {
-    pub logical_id: RoleLogicalId,
-    pub discord_id: RoleId,
-    pub attribute: String,
-    pub current: String,
-    pub desired: String,
+pub(crate) struct ValueChange<T> {
+    current: T,
+    desired: T,
+}
+
+impl<T> ValueChange<T> {
+    fn between(current: T, desired: T) -> Option<Self>
+    where
+        T: PartialEq,
+    {
+        (current != desired).then_some(Self { current, desired })
+    }
+
+    pub(crate) fn current(&self) -> &T {
+        &self.current
+    }
+
+    pub(crate) fn desired(&self) -> &T {
+        &self.desired
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RoleLifecycleChange {
+pub(crate) struct AttributeChanges {
+    name: Option<ValueChange<String>>,
+    color: Option<ValueChange<Color>>,
+    hoist: Option<ValueChange<bool>>,
+    mentionable: Option<ValueChange<bool>>,
+    permissions: BTreeMap<KnownPermission, ValueChange<bool>>,
+}
+
+impl AttributeChanges {
+    fn between(
+        logical_id: &RoleLogicalId,
+        actual: &RoleSnapshot,
+        desired: &RoleAttributes,
+        default_permissions: &BTreeMap<KnownPermission, bool>,
+        grantable_permissions: &BTreeSet<KnownPermission>,
+    ) -> Result<Option<Self>, ManagementError> {
+        let name = desired
+            .name
+            .as_ref()
+            .and_then(|value| ValueChange::between(actual.name.clone(), resolve(value, "new role".to_owned())));
+        let color = desired
+            .color
+            .as_ref()
+            .and_then(|value| ValueChange::between(actual.color, resolve(value, Color::default())));
+        let hoist = desired
+            .hoist
+            .as_ref()
+            .and_then(|value| ValueChange::between(actual.hoist, resolve(value, false)));
+        let mentionable = desired
+            .mentionable
+            .as_ref()
+            .and_then(|value| ValueChange::between(actual.mentionable, resolve(value, false)));
+        let mut permissions = BTreeMap::new();
+        for (permission, value) in &desired.permissions {
+            let current = *actual
+                .permissions
+                .get(permission)
+                .expect("RoleCatalog は既知の権限をすべての Role に保持します");
+            let default = *default_permissions
+                .get(permission)
+                .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
+            let desired = resolve(value, default);
+            if !current && desired && !grantable_permissions.contains(permission) {
+                return Err(ManagementError::InvalidDefinition(format!(
+                    "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
+                )));
+            }
+            if let Some(change) = ValueChange::between(current, desired) {
+                permissions.insert(permission.clone(), change);
+            }
+        }
+
+        let changes = Self {
+            name,
+            color,
+            hoist,
+            mentionable,
+            permissions,
+        };
+        if changes.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(changes))
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.color.is_none()
+            && self.hoist.is_none()
+            && self.mentionable.is_none()
+            && self.permissions.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn name(&self) -> Option<&ValueChange<String>> {
+        self.name.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn color(&self) -> Option<&ValueChange<Color>> {
+        self.color.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hoist(&self) -> Option<&ValueChange<bool>> {
+        self.hoist.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mentionable(&self) -> Option<&ValueChange<bool>> {
+        self.mentionable.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn permissions(&self) -> &BTreeMap<KnownPermission, ValueChange<bool>> {
+        &self.permissions
+    }
+
+    fn to_update(&self, actual_permissions: &BTreeMap<KnownPermission, bool>) -> RoleUpdate {
+        let permissions = (!self.permissions.is_empty()).then(|| {
+            let mut permissions = actual_permissions.clone();
+            for (permission, change) in &self.permissions {
+                permissions.insert(permission.clone(), *change.desired());
+            }
+            permissions
+        });
+        RoleUpdate {
+            name: self.name.as_ref().map(|change| change.desired().clone()),
+            color: self.color.as_ref().map(|change| *change.desired()),
+            hoist: self.hoist.as_ref().map(|change| *change.desired()),
+            mentionable: self.mentionable.as_ref().map(|change| *change.desired()),
+            permissions,
+        }
+    }
+
+    fn render(&self, logical_id: &RoleLogicalId, discord_id: &RoleId, output: &mut String) {
+        if let Some(change) = &self.name {
+            render_value_change(output, logical_id, discord_id, "name", change);
+        }
+        if let Some(change) = &self.color {
+            output.push_str(&format!(
+                "- {} ({}) color: {} -> {}\n",
+                logical_id,
+                discord_id,
+                change.current().get(),
+                change.desired().get()
+            ));
+        }
+        if let Some(change) = &self.hoist {
+            render_value_change(output, logical_id, discord_id, "hoist", change);
+        }
+        if let Some(change) = &self.mentionable {
+            render_value_change(output, logical_id, discord_id, "mentionable", change);
+        }
+        for (permission, change) in &self.permissions {
+            render_value_change(
+                output,
+                logical_id,
+                discord_id,
+                &format!("permissions.{permission}"),
+                change,
+            );
+        }
+    }
+}
+
+fn render_value_change<T: std::fmt::Display>(
+    output: &mut String,
+    logical_id: &RoleLogicalId,
+    discord_id: &RoleId,
+    attribute: &str,
+    change: &ValueChange<T>,
+) {
+    output.push_str(&format!(
+        "- {} ({}) {}: {} -> {}\n",
+        logical_id,
+        discord_id,
+        attribute,
+        change.current(),
+        change.desired()
+    ));
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
     Create {
-        logical_id: RoleLogicalId,
         recreated: bool,
     },
+    Update {
+        discord_id: RoleId,
+        attributes: AttributeChanges,
+    },
     Release {
-        logical_id: RoleLogicalId,
         discord_id: RoleId,
     },
     Delete {
-        logical_id: RoleLogicalId,
         discord_id: RoleId,
     },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RolePlan {
-    pub changes: Vec<AttributeChange>,
-    pub lifecycle: Vec<RoleLifecycleChange>,
+impl Change {
+    pub(crate) fn is_update(&self) -> bool {
+        matches!(self, Self::Update { .. })
+    }
+
+    pub(crate) fn is_delete(&self) -> bool {
+        matches!(self, Self::Delete { .. })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recreated(&self) -> Option<bool> {
+        match self {
+            Self::Create { recreated } => Some(*recreated),
+            Self::Update { .. } | Self::Release { .. } | Self::Delete { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn discord_id(&self) -> Option<RoleId> {
+        match self {
+            Self::Create { .. } => None,
+            Self::Update { discord_id, .. } | Self::Release { discord_id } | Self::Delete { discord_id } => {
+                Some(*discord_id)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attributes(&self) -> Option<&AttributeChanges> {
+        match self {
+            Self::Update { attributes, .. } => Some(attributes),
+            Self::Create { .. } | Self::Release { .. } | Self::Delete { .. } => None,
+        }
+    }
 }
 
-impl RolePlan {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Plan {
+    changes: BTreeMap<RoleLogicalId, Change>,
+}
+
+pub(crate) type RolePlan = Plan;
+
+impl Plan {
+    pub(crate) fn len(&self) -> usize {
+        self.changes.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&RoleLogicalId, &Change)> {
+        self.changes.iter()
+    }
+
+    pub(crate) fn get(&self, logical_id: &RoleLogicalId) -> Option<&Change> {
+        self.changes.get(logical_id)
+    }
+
+    pub(crate) fn contains_deletions(&self) -> bool {
+        self.changes.values().any(Change::is_delete)
+    }
+
+    pub(super) fn insert(&mut self, logical_id: RoleLogicalId, change: Change) {
+        debug_assert!(self.changes.insert(logical_id, change).is_none());
+    }
+
+    pub(super) fn remove(&mut self, logical_id: &RoleLogicalId) -> Option<Change> {
+        self.changes.remove(logical_id)
+    }
+
     pub(crate) fn render(&self) -> String {
-        if self.changes.is_empty() && self.lifecycle.is_empty() {
+        if self.is_empty() {
             return "変更はありません。\n".to_owned();
         }
 
         let mut output = String::from("Role の変更計画\n\n");
-        for change in &self.lifecycle {
+        for (logical_id, change) in &self.changes {
             match change {
-                RoleLifecycleChange::Create {
-                    logical_id,
-                    recreated,
-                } => {
+                Change::Create { recreated } => {
                     let action = if *recreated { "再作成" } else { "新規作成" };
                     output.push_str(&format!("- {action}: {logical_id}\n"));
                 }
-                RoleLifecycleChange::Release {
-                    logical_id,
+                Change::Update {
                     discord_id,
-                } => output.push_str(&format!("- 管理解除: {logical_id} ({discord_id})\n")),
-                RoleLifecycleChange::Delete {
-                    logical_id,
-                    discord_id,
-                } => output.push_str(&format!(
+                    attributes,
+                } => attributes.render(logical_id, discord_id, &mut output),
+                Change::Release { discord_id } => {
+                    output.push_str(&format!("- 管理解除: {logical_id} ({discord_id})\n"));
+                }
+                Change::Delete { discord_id } => output.push_str(&format!(
                     "- 削除: {logical_id} ({discord_id})\n  影響: Guild から Role が削除され、付与済みの割り当ても失われます。\n"
                 )),
             }
-        }
-        for change in &self.changes {
-            output.push_str(&format!(
-                "- {} ({}) {}: {} -> {}\n",
-                change.logical_id, change.discord_id, change.attribute, change.current, change.desired
-            ));
         }
         output
     }
@@ -96,101 +332,10 @@ pub(crate) fn compose_attributes(
     composed
 }
 
-fn compare_attributes(
-    logical_id: &RoleLogicalId,
-    discord_id: &RoleId,
-    actual: &RoleSnapshot,
-    desired: &RoleAttributes,
-    default_permissions: &BTreeMap<KnownPermission, bool>,
-    grantable_permissions: &BTreeSet<KnownPermission>,
-    changes: &mut Vec<AttributeChange>,
-) -> Result<(), ManagementError> {
-    if let Some(value) = &desired.name {
-        let desired = resolve(value, "new role".to_owned());
-        push_change(changes, logical_id, discord_id, "name", &actual.name, &desired);
-    }
-    if let Some(value) = &desired.color {
-        let desired = resolve(value, Color::default());
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "color",
-            &actual.color.get().to_string(),
-            &desired.get().to_string(),
-        );
-    }
-    if let Some(value) = &desired.hoist {
-        let desired = resolve(value, false);
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "hoist",
-            &actual.hoist.to_string(),
-            &desired.to_string(),
-        );
-    }
-    if let Some(value) = &desired.mentionable {
-        let desired = resolve(value, false);
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            "mentionable",
-            &actual.mentionable.to_string(),
-            &desired.to_string(),
-        );
-    }
-    for (permission, value) in &desired.permissions {
-        let current = *actual
-            .permissions
-            .get(permission)
-            .expect("RoleCatalog は既知の権限をすべての Role に保持します");
-        let default = *default_permissions
-            .get(permission)
-            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-        let desired = resolve(value, default);
-        if !current && desired && !grantable_permissions.contains(permission) {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
-            )));
-        }
-        push_change(
-            changes,
-            logical_id,
-            discord_id,
-            &format!("permissions.{permission}"),
-            &current.to_string(),
-            &desired.to_string(),
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn resolve<T: Clone>(value: &ManagedValue<T>, default: T) -> T {
     match value {
         ManagedValue::Value(value) => value.clone(),
         ManagedValue::Default => default,
-    }
-}
-
-fn push_change(
-    changes: &mut Vec<AttributeChange>,
-    logical_id: &RoleLogicalId,
-    discord_id: &RoleId,
-    attribute: &str,
-    current: &str,
-    desired: &str,
-) {
-    if current != desired {
-        changes.push(AttributeChange {
-            logical_id: logical_id.clone(),
-            discord_id: *discord_id,
-            attribute: attribute.to_owned(),
-            current: current.to_owned(),
-            desired: desired.to_owned(),
-        });
     }
 }
 
@@ -202,14 +347,13 @@ pub(crate) fn build_plan(
     definition: &DefinitionFile,
     state: &StateFile,
     catalog: &RoleCatalog,
-) -> Result<RolePlan, ManagementError> {
+) -> Result<Plan, ManagementError> {
     let actual_roles = catalog
         .roles
         .iter()
         .map(|role| (role.id, role))
         .collect::<BTreeMap<_, _>>();
-    let mut changes = Vec::new();
-    let mut lifecycle = Vec::new();
+    let mut plan = Plan::default();
 
     if let Some(logical_id) = state.pending_creations.iter().next() {
         return Err(ManagementError::InvalidState(format!(
@@ -254,10 +398,7 @@ pub(crate) fn build_plan(
                     "Role {logical_id} の Snowflake {discord_id} は Bot が管理できないため削除できません"
                 )));
             }
-            lifecycle.push(RoleLifecycleChange::Delete {
-                logical_id: logical_id.clone(),
-                discord_id,
-            });
+            plan.insert(logical_id.clone(), Change::Delete { discord_id });
             continue;
         }
 
@@ -279,15 +420,7 @@ pub(crate) fn build_plan(
                     "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
                 )));
             }
-            compare_attributes(
-                logical_id,
-                &discord_id,
-                actual,
-                &desired_attributes,
-                &catalog.default_permissions,
-                &catalog.grantable_permissions,
-                &mut changes,
-            )?;
+            add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
             continue;
         }
 
@@ -298,10 +431,7 @@ pub(crate) fn build_plan(
                 )));
             }
             validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
-            lifecycle.push(RoleLifecycleChange::Create {
-                logical_id: logical_id.clone(),
-                recreated: true,
-            });
+            plan.insert(logical_id.clone(), Change::Create { recreated: true });
             continue;
         }
 
@@ -312,10 +442,7 @@ pub(crate) fn build_plan(
                 )));
             }
             validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
-            lifecycle.push(RoleLifecycleChange::Create {
-                logical_id: logical_id.clone(),
-                recreated: false,
-            });
+            plan.insert(logical_id.clone(), Change::Create { recreated: false });
             continue;
         };
 
@@ -336,28 +463,42 @@ pub(crate) fn build_plan(
                 "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
         }
-        compare_attributes(
-            logical_id,
-            &discord_id,
-            actual,
-            &desired_attributes,
-            &catalog.default_permissions,
-            &catalog.grantable_permissions,
-            &mut changes,
-        )?;
+        add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
     }
 
     for (logical_id, discord_id) in &state.roles {
         if *logical_id == everyone_logical_id() || definition.roles.contains_key(logical_id) {
             continue;
         }
-        lifecycle.push(RoleLifecycleChange::Release {
-            logical_id: logical_id.clone(),
-            discord_id: *discord_id,
-        });
+        plan.insert(
+            logical_id.clone(),
+            Change::Release {
+                discord_id: *discord_id,
+            },
+        );
     }
 
-    Ok(RolePlan { changes, lifecycle })
+    Ok(plan)
+}
+
+fn add_update(
+    plan: &mut Plan,
+    logical_id: &RoleLogicalId,
+    discord_id: RoleId,
+    actual: &RoleSnapshot,
+    desired: &RoleAttributes,
+    catalog: &RoleCatalog,
+) -> Result<(), ManagementError> {
+    if let Some(attributes) = AttributeChanges::between(
+        logical_id,
+        actual,
+        desired,
+        &catalog.default_permissions,
+        &catalog.grantable_permissions,
+    )? {
+        plan.insert(logical_id.clone(), Change::Update { discord_id, attributes });
+    }
+    Ok(())
 }
 
 fn validate_role_creation(

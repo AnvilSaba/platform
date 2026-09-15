@@ -155,8 +155,8 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
     .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
-    assert_eq!(result.applied_lifecycle, plan.lifecycle);
-    assert!(result.pending_lifecycle.is_empty());
+    assert_eq!(result.applied, plan);
+    assert!(result.pending.is_empty());
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(returned_state["roles"]["moderator"], "300");
     assert_eq!(source.creates.lock().unwrap().len(), 1);
@@ -191,8 +191,8 @@ async fn create_failure_returns_successful_mappings_and_pending_creations() {
     .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("作成後の処理")));
-    assert_eq!(result.applied_lifecycle.len(), 1);
-    assert_eq!(result.pending_lifecycle.len(), 1);
+    assert_eq!(result.applied.len(), 1);
+    assert_eq!(result.pending.len(), 1);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(returned_state["roles"]["first"], "300");
     assert!(returned_state["roles"].get("second").is_none());
@@ -294,13 +294,12 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
         .await
         .unwrap();
 
-    assert_eq!(
-        plan.lifecycle,
-        vec![RoleLifecycleChange::Release {
-            logical_id: logical_id("moderator"),
-            discord_id: role_id("200"),
-        }]
-    );
+    let release = plan
+        .get(&logical_id("moderator"))
+        .expect("管理対象から外す変更が計画されます");
+    assert_eq!(release.discord_id(), Some(role_id("200")));
+    assert!(!release.is_update());
+    assert!(!release.is_delete());
     let result = apply_roles(
         &source,
         guild_id(100),
@@ -313,7 +312,7 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
     .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
-    assert!(result.pending_lifecycle.is_empty());
+    assert!(result.pending.is_empty());
     assert_eq!(source.deletes.lock().unwrap().len(), 0);
     assert!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["roles"]
@@ -325,7 +324,6 @@ async fn omitted_role_is_released_without_deleting_the_discord_role() {
         plan_roles(&source, guild_id(100), definition, &result.state_json)
             .await
             .unwrap()
-            .lifecycle
             .is_empty()
     );
     assert_eq!(source.catalog.lock().unwrap().roles.len(), 1);
@@ -346,10 +344,7 @@ async fn deletion_requires_explicit_permission_before_calling_discord() {
         .await
         .unwrap();
 
-    assert!(matches!(
-        plan.lifecycle.as_slice(),
-        [RoleLifecycleChange::Delete { .. }]
-    ));
+    assert!(plan.get(&logical_id("unused")).is_some_and(Change::is_delete));
     assert!(plan.render().contains("削除"));
     assert!(plan.render().contains("影響"));
     let result = apply_roles(
@@ -437,7 +432,6 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
         plan_roles(&source, guild_id(100), delete_definition, &deleted.state_json)
             .await
             .unwrap()
-            .lifecycle
             .is_empty()
     );
 
@@ -445,10 +439,10 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
     let create_plan = plan_roles(&source, guild_id(100), create_definition, &deleted.state_json)
         .await
         .unwrap();
-    assert!(matches!(
-        create_plan.lifecycle.as_slice(),
-        [RoleLifecycleChange::Create { recreated: true, .. }]
-    ));
+    assert_eq!(
+        create_plan.get(&logical_id("unused")).and_then(Change::recreated),
+        Some(true)
+    );
     let recreated = apply_roles(
         &source,
         guild_id(100),
@@ -494,7 +488,7 @@ async fn delete_refresh_failure_returns_deleted_state_without_rollback() {
     .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("取得に失敗")));
-    assert_eq!(result.applied_lifecycle.len(), 1);
+    assert_eq!(result.applied.len(), 1);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(returned_state["deleted_roles"], serde_json::json!(["unused"]));
     assert!(source.catalog.lock().unwrap().roles.is_empty());
@@ -721,8 +715,12 @@ async fn plan_allows_removing_a_permission_the_bot_does_not_have() {
     .await
     .unwrap();
 
-    assert_eq!(plan.changes.len(), 1);
-    assert_eq!(plan.changes[0].attribute, "permissions.VIEW_CHANNEL");
+    assert_eq!(plan.len(), 1);
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("権限削除は対象 Role の一つの Update にまとまります");
+    assert!(attributes.permissions().contains_key(&known_permission("VIEW_CHANNEL")));
 }
 
 /// stateに対応を持たないeveryoneもGuild IDへ解決され、planどおりにapplyされることを保証する。
@@ -755,7 +753,7 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
     .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
-    assert_eq!(result.applied, plan.changes);
+    assert_eq!(result.applied, plan);
     assert!(result.pending.is_empty());
     assert_eq!(source.updates.lock().unwrap().len(), 1);
 }
@@ -798,7 +796,7 @@ async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permission
     .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
-    assert_eq!(result.applied, plan.changes);
+    assert_eq!(result.applied, plan);
     assert!(result.pending.is_empty());
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap(),
@@ -845,7 +843,7 @@ async fn apply_roles_remains_the_entrypoint_for_attribute_updates() {
     .unwrap();
 
     assert_eq!(result.status, RoleApplyStatus::Complete);
-    assert_eq!(result.applied, plan.changes);
+    assert_eq!(result.applied, plan);
     assert_eq!(source.catalog.lock().unwrap().roles[0].name, "モデレーター");
 }
 
@@ -915,7 +913,7 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
 
     assert_eq!(result.status, RoleApplyStatus::ResponseUnknown);
     assert!(result.applied.is_empty());
-    assert_eq!(result.pending, plan.changes);
+    assert_eq!(result.pending, plan);
 }
 
 #[derive(Clone)]
@@ -970,7 +968,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     .unwrap();
     assert_eq!(timed_out.status, RoleApplyStatus::ResponseUnknown);
     assert!(timed_out.applied.is_empty());
-    assert_eq!(timed_out.pending, plan.changes);
+    assert_eq!(timed_out.pending, plan);
 
     let resubmitted_source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(catalog)),
@@ -990,7 +988,7 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     .unwrap();
 
     assert_eq!(resubmitted.status, RoleApplyStatus::Complete);
-    assert_eq!(resubmitted.applied, plan.changes);
+    assert_eq!(resubmitted.applied, plan);
     assert!(resubmitted.pending.is_empty());
 }
 
@@ -1018,7 +1016,7 @@ async fn expired_processing_budget_starts_no_updates_and_returns_latest_state() 
 
     assert_eq!(result.status, RoleApplyStatus::DeadlineExceeded);
     assert!(result.applied.is_empty());
-    assert_eq!(result.pending, plan.changes);
+    assert_eq!(result.pending, plan);
     assert!(source.updates.lock().unwrap().is_empty());
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["guild_id"],
@@ -1086,7 +1084,7 @@ async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes
         result
             .applied
             .iter()
-            .map(|change| change.logical_id.to_string())
+            .map(|(logical_id, _)| logical_id.to_string())
             .collect::<Vec<_>>(),
         ["a"]
     );
@@ -1094,7 +1092,7 @@ async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes
         result
             .pending
             .iter()
-            .map(|change| change.logical_id.to_string())
+            .map(|(logical_id, _)| logical_id.to_string())
             .collect::<Vec<_>>(),
         ["b"]
     );
@@ -1155,7 +1153,7 @@ async fn acknowledged_update_is_reported_as_success_even_when_refetch_fails() {
     .unwrap();
 
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("refetch failed")));
-    assert_eq!(result.applied, plan.changes);
+    assert_eq!(result.applied, plan);
     assert!(result.pending.is_empty());
 }
 
