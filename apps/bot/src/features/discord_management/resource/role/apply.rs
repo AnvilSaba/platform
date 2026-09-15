@@ -3,10 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes};
+use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes, reconcile_pending_updates};
 use crate::features::discord_management::apply::guild_lock::{GuildApplyLock, GuildApplyPermit};
 use crate::features::discord_management::configuration::{
-    Color, DefinitionFile, KnownPermission, PermissionVocabulary, PlanInput, RoleAttributes, StateFile, serialize_state,
+    Color, DefinitionFile, KnownPermission, ManagedValue, PendingRoleUpdate, PermissionVocabulary, PlanInput,
+    RoleAttributes, StateFile, serialize_state,
 };
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId};
@@ -57,11 +58,15 @@ struct ApplySession {
 
 impl ApplySession {
     fn mark_applied(&mut self, logical_id: &RoleLogicalId) {
+        let desired = self.pending.create_desired.get(logical_id).cloned();
         let change = self
             .pending
             .remove(logical_id)
             .expect("適用中の Role change は pending に存在します");
         self.applied.insert(logical_id.clone(), change);
+        if let Some(desired) = desired {
+            self.applied.create_desired.insert(logical_id.clone(), desired);
+        }
     }
 
     fn into_result(self, status: RoleApplyStatus) -> Result<RoleApplyResult, ManagementError> {
@@ -155,7 +160,8 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
         confirmed_plan: &RolePlan,
         processing_deadline: Instant,
     ) -> Result<ApplyPreparation, ManagementError> {
-        let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
+        let PlanInput { definition, mut state } =
+            PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
         let Some(permit) = self.apply_lock.try_acquire(guild_id) else {
             return Ok(ApplyPreparation::Finished(result(
                 &state,
@@ -200,6 +206,7 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
                 )?));
             }
         };
+        reconcile_pending_updates(&definition, &mut state, &catalog)?;
         let current_plan = build_plan(&definition, &state, &catalog)?;
         if current_plan != *confirmed_plan {
             return Ok(ApplyPreparation::Finished(result(
@@ -266,7 +273,18 @@ async fn apply_attribute_changes<S: RoleUpdater>(
         Ok(Err(error)) => return Ok(Some(RoleApplyStatus::Failed(error.to_string()))),
         Err(_) => RoleUpdateOutcome::ResponseUnknown,
     };
+    if outcome == RoleUpdateOutcome::ResponseUnknown {
+        session.state.pending_role_updates.insert(
+            logical_id.clone(),
+            PendingRoleUpdate {
+                discord_id: role_id,
+                intent: "update".to_owned(),
+                fingerprint: attributes.intent_fingerprint(),
+            },
+        );
+    }
     if outcome == RoleUpdateOutcome::Applied {
+        session.state.pending_role_updates.remove(logical_id);
         session.mark_applied(logical_id);
     }
 
@@ -302,6 +320,7 @@ async fn apply_attribute_changes<S: RoleUpdater>(
     }
 
     if outcome == RoleUpdateOutcome::ResponseUnknown {
+        session.state.pending_role_updates.remove(logical_id);
         session.mark_applied(logical_id);
     }
     Ok(None)
@@ -517,6 +536,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     session.state.deleted_roles.remove(&logical_id);
                     session.state.pending_deletions.remove(&logical_id);
                     session.state.pending_creations.remove(&logical_id);
+                    session.state.pending_role_updates.remove(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {
@@ -574,35 +594,47 @@ fn build_role_create(
     default_permissions: &BTreeMap<KnownPermission, bool>,
     logical_id: &RoleLogicalId,
 ) -> Result<RoleCreate, ManagementError> {
-    let name = desired
+    let resolved = super::resolve_role_create_attributes(desired, default_permissions);
+    let name = resolved
         .name
         .as_ref()
+        .and_then(|value| match value {
+            ManagedValue::Value(value) => Some(value.clone()),
+            ManagedValue::Default => None,
+        })
         .ok_or_else(|| ManagementError::InvalidDefinition(format!("新しい Role {logical_id} には name が必要です")))?;
-    let name = super::resolve(name, "new role".to_owned());
-    let color = desired
+    let color = resolved
         .color
         .as_ref()
-        .map(|value| super::resolve(value, Color::default()))
-        .unwrap_or_default();
-    let hoist = desired
+        .and_then(|value| match value {
+            ManagedValue::Value(value) => Some(*value),
+            ManagedValue::Default => None,
+        })
+        .unwrap_or_else(Color::default);
+    let hoist = resolved
         .hoist
         .as_ref()
-        .map(|value| super::resolve(value, false))
+        .and_then(|value| match value {
+            ManagedValue::Value(value) => Some(*value),
+            ManagedValue::Default => None,
+        })
         .unwrap_or(false);
-    let mentionable = desired
+    let mentionable = resolved
         .mentionable
         .as_ref()
-        .map(|value| super::resolve(value, false))
+        .and_then(|value| match value {
+            ManagedValue::Value(value) => Some(*value),
+            ManagedValue::Default => None,
+        })
         .unwrap_or(false);
     let mut permissions = permission_names
         .iter()
         .map(|permission| (permission.clone(), false))
         .collect::<BTreeMap<_, _>>();
-    for (permission, value) in &desired.permissions {
-        let default = *default_permissions
-            .get(permission)
-            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-        permissions.insert(permission.clone(), super::resolve(value, default));
+    for (permission, value) in &resolved.permissions {
+        if let ManagedValue::Value(value) = value {
+            permissions.insert(permission.clone(), *value);
+        }
     }
     Ok(RoleCreate {
         name,

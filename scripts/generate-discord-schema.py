@@ -66,7 +66,7 @@ definitions["role"] = resource({
 channel_attributes = {
     "type": {"enum": ["category", "text", "announcement", "voice", "stage", "forum", "media"]},
     "name": managed(string), "parent": {"oneOf": [logical_id, ref("clear")]},
-    "topic": managed(string, True), "nsfw": managed(boolean),
+    "topic": managed({"type": "string", "maxLength": 1024}, True), "nsfw": managed(boolean),
     "slowmode_seconds": managed(integer), "default_auto_archive_minutes": managed({"enum": [60, 1440, 4320, 10080]}),
     "default_thread_slowmode_seconds": managed(integer), "bitrate": managed(integer),
     "user_limit": managed(integer), "rtc_region": managed(string, True),

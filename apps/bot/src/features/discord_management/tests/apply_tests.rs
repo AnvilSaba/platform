@@ -916,6 +916,99 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
     assert_eq!(result.pending, plan);
 }
 
+/// export は実構成へ到達済みの Role 更新 marker を解決して次の state へ持ち越さない。
+#[tokio::test]
+async fn role_export_clears_a_resolved_pending_update_marker() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "モデレーター")],
+    };
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "pending_role_updates": {
+            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
+        }
+    }"#;
+
+    let files = export_roles(&source, guild_id(100), Some(state_json)).await.unwrap();
+    let state: serde_json::Value = serde_json::from_str(&files.state_json).unwrap();
+    assert!(state.get("pending_role_updates").is_none());
+}
+
+/// plan は実構成へ到達済みの Role 更新 marker を解決し、未完了更新を再計画しない。
+#[tokio::test]
+async fn role_plan_reconciles_a_resolved_pending_update_marker() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "モデレーター")],
+    };
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "pending_role_updates": {
+            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
+        }
+    }"#;
+
+    let plan = plan_roles(&source, guild_id(100), definition, state_json)
+        .await
+        .unwrap();
+    assert!(plan.is_empty());
+}
+
+/// @everyone の更新 marker も Guild ID で解決し、実構成到達時に plan から除外する。
+#[tokio::test]
+async fn role_plan_reconciles_a_resolved_pending_update_for_everyone() {
+    let mut everyone = role("100", "@everyone");
+    everyone.permissions = known_permission_values([("SEND_MESSAGES", true), ("VIEW_CHANNEL", true)]);
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![everyone],
+    };
+    let definition = "schema_version = 1\n[roles.everyone.permissions]\nSEND_MESSAGES = true\n";
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {},
+        "pending_role_updates": {
+            "everyone": {"discord_id": "100", "intent": "update", "fingerprint": "old"}
+        }
+    }"#;
+
+    let plan = plan_roles(&source, guild_id(100), definition, state_json)
+        .await
+        .unwrap();
+    assert!(plan.is_empty());
+}
+
+/// 更新保留中でも外部 Role 消失は ADR0004 の予期せぬ消失として停止する。
+#[tokio::test]
+async fn role_export_does_not_tolerate_a_pending_update_disappearance() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: Vec::new(),
+    };
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "pending_role_updates": {
+            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
+        }
+    }"#;
+
+    let error = export_roles(&source, guild_id(100), Some(state_json))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失") && message.contains("moderator"))
+    );
+}
+
 #[derive(Clone)]
 struct NeverCompletesRoleUpdate {
     catalog: RoleCatalog,
