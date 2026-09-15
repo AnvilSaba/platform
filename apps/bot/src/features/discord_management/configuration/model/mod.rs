@@ -11,24 +11,23 @@ use serde::{
 };
 use validator::{Validate, ValidationError};
 
-use super::{AttributeChange, ManagementError, RoleSnapshot, SCHEMA_VERSION};
+use super::{ManagementError, SCHEMA_VERSION};
 use crate::features::discord_management::ids::{
     ChannelId, ChannelLogicalId, ChannelSettingsSetId, GuildId, MemberId, MemberLogicalId, RoleId, RoleLogicalId,
     RoleSettingsSetId,
 };
-
 
 mod channel;
 mod definition;
 mod role;
 mod state;
 
-pub(super) use channel::*;
-pub(super) use definition::*;
+pub(crate) use channel::*;
+pub(crate) use definition::*;
 pub use role::Color;
-pub(super) use role::*;
-pub(super) use state::*;
+pub(crate) use role::*;
+pub(crate) use state::*;
 
 mod input;
 
-pub(super) use input::PlanInput;
+pub(crate) use input::PlanInput;

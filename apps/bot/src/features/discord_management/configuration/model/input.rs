@@ -1,16 +1,12 @@
 use super::*;
 
-pub(in super::super) struct PlanInput {
-    pub(in super::super) definition: DefinitionFile,
-    pub(in super::super) state: StateFile,
+pub(crate) struct PlanInput {
+    pub(crate) definition: DefinitionFile,
+    pub(crate) state: StateFile,
 }
 
 impl PlanInput {
-    pub(in super::super) fn parse(
-        definition_toml: &str,
-        state_json: &str,
-        guild_id: GuildId,
-    ) -> Result<Self, ManagementError> {
+    pub(crate) fn parse(definition_toml: &str, state_json: &str, guild_id: GuildId) -> Result<Self, ManagementError> {
         let definition = DefinitionFile::parse(definition_toml)?;
         let state = StateFile::parse_for_guild(state_json, guild_id)?;
         validate_references(&definition, &state)?;
@@ -18,10 +14,7 @@ impl PlanInput {
     }
 }
 
-fn validate_references(
-    definition: &DefinitionFile,
-    state: &StateFile,
-) -> Result<(), ManagementError> {
+fn validate_references(definition: &DefinitionFile, state: &StateFile) -> Result<(), ManagementError> {
     for (logical_id, role) in &definition.roles {
         if *logical_id != everyone_logical_id() && role.is_reference() && !state.roles.contains_key(logical_id) {
             return Err(ManagementError::InvalidState(format!(
@@ -219,5 +212,3 @@ fn is_clear_value(value: &toml::Value) -> bool {
         .and_then(toml::Value::as_bool)
         .is_some_and(|clear| clear)
 }
-
-
