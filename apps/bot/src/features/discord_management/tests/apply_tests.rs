@@ -1188,6 +1188,7 @@ impl RoleUpdater for BlockingRoleTarget {
 /// 同一Guildへの並行applyを待機させず拒否し、競合更新と二重適用を防ぐ。
 #[tokio::test]
 async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
+    let apply_lock = GuildApplyLock::default();
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let source = BlockingRoleTarget {
         catalog: Arc::new(Mutex::new(RoleCatalog {
@@ -1205,16 +1206,18 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
     let first_source = source.clone();
     let first_plan = plan.clone();
     let first_state = state.clone();
+    let first_apply_lock = apply_lock.clone();
     let first = tokio::spawn(async move {
-        apply_role_updates(
-            &first_source,
-            guild_id(100),
-            definition,
-            &first_state,
-            &first_plan,
-            Instant::now() + Duration::from_secs(60),
-        )
-        .await
+        let vocabulary = test_permission_vocabulary();
+        RoleApplyWorkflow::new(&first_apply_lock, &first_source, &vocabulary)
+            .apply_role_updates(
+                guild_id(100),
+                definition,
+                &first_state,
+                &first_plan,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .await
     });
     tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
         .await
@@ -1223,8 +1226,7 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
 
     let second = tokio::time::timeout(
         Duration::from_secs(1),
-        apply_role_updates(
-            &source,
+        RoleApplyWorkflow::new(&apply_lock, &source, &test_permission_vocabulary()).apply_role_updates(
             guild_id(100),
             definition,
             &state,

@@ -1,8 +1,6 @@
 use super::{
-    apply::{
-        RoleApplyOptions, RoleApplyResult, RoleApplyStatus, apply_role_updates as apply_role_updates_workflow,
-        apply_roles as apply_roles_workflow, apply_roles_with_options as apply_roles_with_options_workflow,
-    },
+    GuildApplyLock,
+    apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
     bind::{BindResult, bind_resource as bind_resource_workflow},
     configuration::*,
     domain::*,
@@ -169,17 +167,17 @@ async fn apply_role_updates<S: RoleUpdater>(
     confirmed_plan: &RolePlan,
     processing_deadline: Instant,
 ) -> Result<RoleApplyResult, ManagementError> {
+    let apply_lock = GuildApplyLock::default();
     let vocabulary = test_permission_vocabulary();
-    apply_role_updates_workflow(
-        source,
-        &vocabulary,
-        guild_id,
-        definition_toml,
-        state_json,
-        confirmed_plan,
-        processing_deadline,
-    )
-    .await
+    RoleApplyWorkflow::new(&apply_lock, source, &vocabulary)
+        .apply_role_updates(
+            guild_id,
+            definition_toml,
+            state_json,
+            confirmed_plan,
+            processing_deadline,
+        )
+        .await
 }
 
 async fn apply_roles<S: RoleLifecycleTarget>(
@@ -190,17 +188,17 @@ async fn apply_roles<S: RoleLifecycleTarget>(
     confirmed_plan: &RolePlan,
     processing_deadline: Instant,
 ) -> Result<RoleApplyResult, ManagementError> {
+    let apply_lock = GuildApplyLock::default();
     let vocabulary = test_permission_vocabulary();
-    apply_roles_workflow(
-        source,
-        &vocabulary,
-        guild_id,
-        definition_toml,
-        state_json,
-        confirmed_plan,
-        processing_deadline,
-    )
-    .await
+    RoleApplyWorkflow::new(&apply_lock, source, &vocabulary)
+        .apply_roles(
+            guild_id,
+            definition_toml,
+            state_json,
+            confirmed_plan,
+            processing_deadline,
+        )
+        .await
 }
 
 async fn apply_roles_with_options<S: RoleLifecycleTarget>(
@@ -212,18 +210,18 @@ async fn apply_roles_with_options<S: RoleLifecycleTarget>(
     options: RoleApplyOptions,
     processing_deadline: Instant,
 ) -> Result<RoleApplyResult, ManagementError> {
+    let apply_lock = GuildApplyLock::default();
     let vocabulary = test_permission_vocabulary();
-    apply_roles_with_options_workflow(
-        source,
-        &vocabulary,
-        guild_id,
-        definition_toml,
-        state_json,
-        confirmed_plan,
-        options,
-        processing_deadline,
-    )
-    .await
+    RoleApplyWorkflow::new(&apply_lock, source, &vocabulary)
+        .apply_roles_with_options(
+            guild_id,
+            definition_toml,
+            state_json,
+            confirmed_plan,
+            options,
+            processing_deadline,
+        )
+        .await
 }
 
 #[derive(Clone)]

@@ -11,6 +11,7 @@ mod plan;
 mod port;
 mod resource;
 
+pub(crate) use apply::GuildApplyLock;
 pub use command::{bind, role_apply, role_export, role_plan};
 
 #[cfg(test)]

@@ -11,11 +11,11 @@ use serenity::{
 };
 use tracing::warn;
 
-use crate::app::{AppContext, AppError};
+use crate::app::{AppContext, AppError, BotDataExt};
 
 use super::{
     adapter::SerenityRoleSource,
-    apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, apply_roles, apply_roles_with_options},
+    apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
     bind::bind_resource,
     confirmation::{ConfirmationError, ConfirmationStore},
     domain::{ManagementError, ResourceType},
@@ -352,29 +352,30 @@ pub async fn role_apply(
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+                let bot_data = ctx.bot_data();
+                let apply_lock = bot_data.discord_management_apply_lock();
+                let workflow = RoleApplyWorkflow::new(apply_lock, &source, &vocabulary);
                 let result = if allow_deletions {
-                    apply_roles_with_options(
-                        &source,
-                        &vocabulary,
-                        payload.guild_id,
-                        &payload.definition,
-                        &payload.state,
-                        &payload.plan,
-                        RoleApplyOptions { allow_deletions: true },
-                        deadlines.processing,
-                    )
-                    .await
+                    workflow
+                        .apply_roles_with_options(
+                            payload.guild_id,
+                            &payload.definition,
+                            &payload.state,
+                            &payload.plan,
+                            RoleApplyOptions { allow_deletions: true },
+                            deadlines.processing,
+                        )
+                        .await
                 } else {
-                    apply_roles(
-                        &source,
-                        &vocabulary,
-                        payload.guild_id,
-                        &payload.definition,
-                        &payload.state,
-                        &payload.plan,
-                        deadlines.processing,
-                    )
-                    .await
+                    workflow
+                        .apply_roles(
+                            payload.guild_id,
+                            &payload.definition,
+                            &payload.state,
+                            &payload.plan,
+                            deadlines.processing,
+                        )
+                        .await
                 };
                 let needs_deletion_confirmation = matches!(
                     &result,
