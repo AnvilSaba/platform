@@ -1,4 +1,4 @@
-use validator::ValidationError;
+use validator::{ValidateLength, ValidateRange};
 
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -124,7 +124,7 @@ impl RoleMode {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawRoleAttributes {
-    #[validate(custom(function = "validate_role_name"))]
+    #[validate(length(min = 1, max = 100, message = "name は1文字以上かつ100文字以内で指定してください"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<ManagedValue<String>>,
 
@@ -139,19 +139,6 @@ pub(crate) struct RawRoleAttributes {
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) permissions: BTreeMap<PermissionName, ManagedValue<bool>>,
-}
-
-fn validate_role_name(value: &ManagedValue<String>) -> Result<(), ValidationError> {
-    let ManagedValue::Value(value) = value else {
-        return Ok(());
-    };
-    if value.is_empty() {
-        return Err(validation_error("length", "name は1文字以上で指定してください"));
-    }
-    if value.chars().count() > 100 {
-        return Err(validation_error("length", "name は100文字以内で指定してください"));
-    }
-    Ok(())
 }
 
 impl RawRoleAttributes {
@@ -241,6 +228,38 @@ impl<T> ManagedValue<T> {
         match self {
             Self::Value(value) => value.clone(),
             Self::Default => default,
+        }
+    }
+}
+
+impl<T, U> ValidateLength<U> for ManagedValue<T>
+where
+    T: ValidateLength<U>,
+    U: PartialEq + PartialOrd,
+{
+    fn length(&self) -> Option<U> {
+        match self {
+            Self::Value(value) => value.length(),
+            Self::Default => None,
+        }
+    }
+}
+
+impl<T, U> ValidateRange<U> for ManagedValue<T>
+where
+    T: ValidateRange<U>,
+{
+    fn greater_than(&self, max: U) -> Option<bool> {
+        match self {
+            Self::Value(value) => value.greater_than(max),
+            Self::Default => None,
+        }
+    }
+
+    fn less_than(&self, min: U) -> Option<bool> {
+        match self {
+            Self::Value(value) => value.less_than(min),
+            Self::Default => None,
         }
     }
 }

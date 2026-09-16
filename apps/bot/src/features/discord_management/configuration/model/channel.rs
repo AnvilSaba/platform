@@ -4,7 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser::SerializeMap};
-use validator::ValidationError;
+use validator::{ValidateLength, ValidateRange, ValidationError};
 
 use super::{KnownPermission, PermissionName, PermissionVocabulary};
 use crate::features::discord_management::{
@@ -110,6 +110,38 @@ impl<T> ChannelValue<T> {
             Self::Default => default,
             Self::Clear => None,
             Self::Value(_) => unreachable!("Value は into_value で先に取り出されます"),
+        }
+    }
+}
+
+impl<T, U> ValidateLength<U> for ChannelValue<T>
+where
+    T: ValidateLength<U>,
+    U: PartialEq + PartialOrd,
+{
+    fn length(&self) -> Option<U> {
+        match self {
+            Self::Value(value) => value.length(),
+            Self::Default | Self::Clear => None,
+        }
+    }
+}
+
+impl<T, U> ValidateRange<U> for ChannelValue<T>
+where
+    T: ValidateRange<U>,
+{
+    fn greater_than(&self, max: U) -> Option<bool> {
+        match self {
+            Self::Value(value) => value.greater_than(max),
+            Self::Default | Self::Clear => None,
+        }
+    }
+
+    fn less_than(&self, min: U) -> Option<bool> {
+        match self {
+            Self::Value(value) => value.less_than(min),
+            Self::Default | Self::Clear => None,
         }
     }
 }
@@ -344,25 +376,29 @@ impl ChannelAttributes {
 pub(crate) struct RawChannelAttributes {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub(crate) kind: Option<RawChannelKind>,
-    #[validate(custom(function = "validate_channel_name"))]
+    #[validate(length(min = 1, max = 100, message = "name は1文字以上かつ100文字以内で指定してください"))]
+    #[validate(custom(function = "validate_channel_name_markers"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<ChannelValue<String>>,
     #[validate(custom(function = "validate_channel_parent"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) parent: Option<ChannelValue<ChannelLogicalId>>,
-    #[validate(custom(function = "validate_channel_topic"))]
+    #[validate(length(max = 1024, message = "topic は1024文字以内で指定してください"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) topic: Option<ChannelValue<String>>,
     #[validate(custom(function = "validate_channel_nsfw"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) nsfw: Option<ChannelValue<bool>>,
-    #[validate(custom(function = "validate_channel_slowmode"))]
+    #[validate(range(max = 21600, message = "slowmode_seconds は0から21600の範囲で指定してください"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slowmode_seconds: Option<ChannelValue<u16>>,
     #[validate(custom(function = "validate_channel_auto_archive"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_auto_archive_minutes: Option<ChannelValue<u16>>,
-    #[validate(custom(function = "validate_channel_thread_slowmode"))]
+    #[validate(range(
+        max = 21600,
+        message = "default_thread_slowmode_seconds は0から21600の範囲で指定してください"
+    ))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -406,45 +442,12 @@ fn validation_error(code: &'static str, message: impl Into<String>) -> Validatio
     ValidationError::new(code).with_message(message.into().into())
 }
 
-fn validate_channel_name(value: &ChannelValue<String>) -> Result<(), ValidationError> {
-    validate_channel_string(value, "name", 100, false, false, |value| !value.is_empty())
-}
-
-fn validate_channel_topic(value: &ChannelValue<String>) -> Result<(), ValidationError> {
-    validate_channel_string(value, "topic", 1024, true, true, |_| true)
-}
-
-fn validate_channel_string(
-    value: &ChannelValue<String>,
-    attribute: &'static str,
-    max_length: usize,
-    allow_default: bool,
-    allow_clear: bool,
-    additional: impl FnOnce(&str) -> bool,
-) -> Result<(), ValidationError> {
-    match value {
-        ChannelValue::Value(value) if !additional(value) => Err(validation_error(
-            "length",
-            format!("{attribute} は1文字以上で指定してください"),
-        )),
-        ChannelValue::Value(value) if value.chars().count() > max_length => Err(validation_error(
-            "length",
-            format!("{attribute} は{max_length}文字以内で指定してください"),
-        )),
-        ChannelValue::Default if !allow_default => Err(validation_error(
-            "invalid_marker",
-            format!("{attribute} に default は指定できません"),
-        )),
-        ChannelValue::Clear if !allow_clear => Err(validation_error(
-            "invalid_marker",
-            format!("{attribute} は解除できません"),
-        )),
-        _ => Ok(()),
-    }
-}
-
 fn validate_channel_parent(value: &ChannelValue<ChannelLogicalId>) -> Result<(), ValidationError> {
     validate_channel_markers(value, "parent", false, true)
+}
+
+fn validate_channel_name_markers(value: &ChannelValue<String>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "name", false, false)
 }
 
 fn validate_channel_nsfw(value: &ChannelValue<bool>) -> Result<(), ValidationError> {
@@ -465,24 +468,6 @@ fn validate_channel_markers<T>(
         ChannelValue::Clear if !allow_clear => Err(validation_error(
             "invalid_marker",
             format!("{attribute} は解除できません"),
-        )),
-        _ => Ok(()),
-    }
-}
-
-fn validate_channel_slowmode(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
-    validate_channel_u16(value, "slowmode_seconds")
-}
-
-fn validate_channel_thread_slowmode(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
-    validate_channel_u16(value, "default_thread_slowmode_seconds")
-}
-
-fn validate_channel_u16(value: &ChannelValue<u16>, attribute: &'static str) -> Result<(), ValidationError> {
-    match value {
-        ChannelValue::Value(value) if *value > 21_600 => Err(validation_error(
-            "range",
-            format!("{attribute} は0から21600の範囲で指定してください"),
         )),
         _ => Ok(()),
     }
