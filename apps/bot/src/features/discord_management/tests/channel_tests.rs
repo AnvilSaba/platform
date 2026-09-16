@@ -626,9 +626,13 @@ async fn channel_create_plan_renders_desired_attributes() {
     };
     let definition = r#"
         schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "案内"
         [channels.rules]
         type = "text"
         name = "ルール"
+        parent = "information"
         topic = "案内"
         slowmode_seconds = 5
     "#;
@@ -647,6 +651,9 @@ async fn channel_create_plan_renders_desired_attributes() {
     assert!(rendered.contains("type: text"));
     assert!(rendered.contains("name:"));
     assert!(rendered.contains("ルール"));
+    assert!(rendered.contains("parent: information"));
+    assert!(!rendered.contains("TaggedLogicalId"));
+    assert!(!rendered.contains("PhantomData"));
     assert!(rendered.contains("slowmode_seconds: 5"));
 }
 

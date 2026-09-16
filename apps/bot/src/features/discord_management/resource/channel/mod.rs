@@ -294,12 +294,15 @@ impl AttributeChanges {
             );
         }
         if let Some(change) = &self.parent {
-            render_optional_value_change(output, logical_id, discord_id, "parent", change);
+            render_optional_display_value_change(output, logical_id, discord_id, "parent", change);
         }
         if let Some(change) = &self.planned_parent {
             output.push_str(&format!(
-                "- {} ({}) parent: {:?} -> planned:{}\n",
-                logical_id, discord_id, change.current, change.logical_id
+                "- {} ({}) parent: {} -> planned:{}\n",
+                logical_id,
+                discord_id,
+                display_optional(change.current.as_ref()),
+                change.logical_id
             ));
         }
         if let Some(change) = &self.topic {
@@ -391,6 +394,27 @@ fn render_optional_value_change<T: std::fmt::Debug>(
         change.current(),
         change.desired()
     ));
+}
+
+fn render_optional_display_value_change<T: std::fmt::Display>(
+    output: &mut String,
+    logical_id: &ChannelLogicalId,
+    discord_id: &ChannelId,
+    attribute: &str,
+    change: &OptionalValueChange<T>,
+) {
+    output.push_str(&format!(
+        "- {} ({}) {}: {} -> {}\n",
+        logical_id,
+        discord_id,
+        attribute,
+        display_optional(change.current().as_ref()),
+        display_optional(change.desired())
+    ));
+}
+
+fn display_optional<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value.map_or_else(|| "None".to_owned(), ToString::to_string)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -511,7 +535,7 @@ fn render_create_attributes(attributes: &ChannelAttributes, output: &mut String)
     }
     if let Some(parent) = &attributes.parent {
         match parent {
-            ChannelValue::Value(parent) => output.push_str(&format!("    parent: {parent:?}\n")),
+            ChannelValue::Value(parent) => output.push_str(&format!("    parent: {parent}\n")),
             ChannelValue::Clear => output.push_str("    parent: None\n"),
             ChannelValue::Default => {}
         }
