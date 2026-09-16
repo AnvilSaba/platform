@@ -145,6 +145,11 @@ impl<'de> Deserialize<'de> for OverwriteTarget {
             return Ok(Self::Everyone);
         }
         if let Some(logical_id) = value.strip_prefix("role:") {
+            if logical_id == "everyone" {
+                return Err(de::Error::custom(
+                    "権限対象 role:everyone は使用できません。everyone を指定してください",
+                ));
+            }
             return RoleLogicalId::parse(logical_id)
                 .map(Self::Role)
                 .map_err(de::Error::custom);
@@ -615,8 +620,18 @@ pub(crate) enum Ensure {
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MemberDefinition {
+    #[validate(custom(function = "validate_member_mode"))]
     #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
     pub(crate) mode: RoleMode,
+}
+
+fn validate_member_mode(value: &RoleMode) -> Result<(), ValidationError> {
+    if matches!(value, RoleMode::Reference) {
+        Ok(())
+    } else {
+        Err(ValidationError::new("member_must_be_reference")
+            .with_message("Member は参照専用として宣言してください".into()))
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]

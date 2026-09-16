@@ -166,6 +166,13 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
     assert_eq!(returned_state["roles"]["moderator"], "300");
     assert_eq!(source.creates.lock().unwrap().len(), 1);
     assert_eq!(source.creates.lock().unwrap()[0].name, "運営");
+    assert_eq!(
+        source.creates.lock().unwrap()[0]
+            .permissions
+            .get(&known_permission("VIEW_CHANNEL")),
+        Some(&true),
+        "未指定権限は @everyone の既定値を継承します",
+    );
 }
 
 /// Role の name は引用符と改行を含んでも plan 上で安全に表示する。

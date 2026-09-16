@@ -13,8 +13,8 @@ use validator::{Validate, ValidationError};
 
 use super::{ManagementError, SCHEMA_VERSION};
 use crate::features::discord_management::ids::{
-    ChannelId, ChannelLogicalId, ChannelSettingsSetId, GuildId, MemberId, MemberLogicalId, RoleId, RoleLogicalId,
-    RoleSettingsSetId,
+    ChannelId, ChannelLogicalId, ChannelSettingsSetId, GuildId, MemberId, MemberLogicalId, MessageLogicalId, RoleId,
+    RoleLogicalId, RoleSettingsSetId,
 };
 
 mod channel;

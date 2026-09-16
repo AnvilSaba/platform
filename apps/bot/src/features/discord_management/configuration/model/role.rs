@@ -1,17 +1,5 @@
 use validator::ValidationError;
 
-pub(crate) fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
-    for (logical_id, member) in &definition.members {
-        if !matches!(member.mode, RoleMode::Reference) {
-            return Err(validation_error(
-                "member_must_be_reference",
-                format!("Member {logical_id} は参照専用として宣言してください"),
-            ));
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawRoleDefinition {
@@ -246,35 +234,33 @@ pub(crate) enum ManagedValue<T> {
 }
 
 impl<T> ManagedValue<T> {
-    pub(crate) fn as_value(&self) -> Option<&T> {
-        match self {
-            Self::Value(value) => Some(value),
-            Self::Default => None,
-        }
-    }
-
-    pub(crate) fn into_value(self) -> Option<T> {
-        match self {
-            Self::Value(value) => Some(value),
-            Self::Default => None,
-        }
-    }
-
-    pub(crate) fn is_default(&self) -> bool {
-        matches!(self, Self::Default)
-    }
-
     pub(crate) fn resolve(&self, default: T) -> T
     where
         T: Clone,
     {
-        if self.is_default() {
-            default
-        } else {
-            self.clone()
-                .into_value()
-                .expect("Default 以外の ManagedValue は Value です")
+        match self {
+            Self::Value(value) => value.clone(),
+            Self::Default => default,
         }
+    }
+}
+
+/// `Option<ManagedValue<T>>` の省略と既定値を一度に解決する interface です。
+///
+/// 外側の `None` は未指定のまま `None` を返し、`Some(Default)` は渡された
+/// 既定値へ、`Some(Value(value))` はその値へ解決します。
+pub(crate) trait OptionalManagedValueExt<T> {
+    fn resolve_optional(&self, default: T) -> Option<T>
+    where
+        T: Clone;
+}
+
+impl<T> OptionalManagedValueExt<T> for Option<ManagedValue<T>> {
+    fn resolve_optional(&self, default: T) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.as_ref().map(|value| value.resolve(default))
     }
 }
 

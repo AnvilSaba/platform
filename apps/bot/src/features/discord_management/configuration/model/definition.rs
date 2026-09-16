@@ -25,14 +25,46 @@ pub(crate) struct RawDefinitionFile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
 
+    #[validate(nested)]
+    #[validate(custom(function = "validate_resource_names"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) message_sets: BTreeMap<String, RawResourceDefinition>,
 
+    #[validate(nested)]
+    #[validate(custom(function = "validate_resource_names"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) order: Option<RawOrderDefinition>,
+}
+
+fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
+    for (name, thread) in &definition.threads {
+        if !thread.is_absent() && thread.name.is_none() {
+            return Err(validation_error(
+                "required",
+                format!("管理スレッド {name} には name が必要です"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_resource_names(resources: &BTreeMap<String, RawResourceDefinition>) -> Result<(), ValidationError> {
+    for name in resources.keys() {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(validation_error(
+                "format",
+                format!("管理リソース名 {name} は英数字、ハイフン、アンダースコアだけで指定してください"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -92,7 +124,8 @@ impl DefinitionFile {
 ///
 /// これらの実装はまだ別Featureですが、設定モデルから自由形式の
 /// `toml::Value` を引き回さないため、現在のスキーマに対応する範囲だけを型付けします。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Validate)]
+#[validate(schema(function = "validate_resource_definition"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawResourceDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,16 +133,46 @@ pub(crate) struct RawResourceDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) channel: Option<ChannelLogicalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(length(min = 1, max = 100, message = "name は1文字以上100文字以内で指定してください"))]
     pub(crate) name: Option<String>,
+    #[validate(nested)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) body: Vec<RawMessageDefinition>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawMessageDefinition {
-    pub(crate) id: String,
+    pub(crate) id: MessageLogicalId,
+    #[validate(length(min = 1, message = "body は1文字以上で指定してください"))]
     pub(crate) body: String,
+}
+
+fn validate_resource_definition(value: &RawResourceDefinition) -> Result<(), ValidationError> {
+    if value.is_absent() {
+        if value.channel.is_some() || value.name.is_some() || !value.body.is_empty() {
+            return Err(validation_error(
+                "exclusive",
+                "ensure = \"absent\" の管理リソースには channel、name、body を指定できません",
+            ));
+        }
+        return Ok(());
+    }
+
+    if value.channel.is_none() {
+        return Err(validation_error("required", "管理リソースには channel が必要です"));
+    }
+
+    let mut ids = BTreeSet::new();
+    for message in &value.body {
+        if !ids.insert(&message.id) {
+            return Err(validation_error(
+                "duplicate",
+                format!("body の message id {} が重複しています", message.id),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Serialize)]
