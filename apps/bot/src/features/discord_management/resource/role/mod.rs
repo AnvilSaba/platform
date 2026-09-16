@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{
     configuration::{
-        Color, DefinitionFile, KnownPermission, RoleAttributes, RoleDefinition, StateFile, everyone_logical_id,
-        resolve_role_id,
+        Color, DefinitionFile, KnownPermission, OptionalManagedValueExt, RoleAttributes, RoleDefinition, StateFile,
+        everyone_logical_id, resolve_role_id,
     },
     domain::ManagementError,
     port::{RoleCatalog, RoleCreate, RoleSnapshot, RoleUpdate},
@@ -54,24 +54,22 @@ impl AttributeChanges {
         default_permissions: &BTreeMap<KnownPermission, bool>,
         grantable_permissions: &BTreeSet<KnownPermission>,
     ) -> Result<Option<Self>, ManagementError> {
-        let name = desired.name.as_ref().and_then(|value| {
-            ValueChange::between(
-                actual.name.clone(),
-                value.as_value().cloned().unwrap_or_else(|| "new role".to_owned()),
-            )
-        });
+        let name = desired
+            .name
+            .resolve_optional("new role".to_owned())
+            .and_then(|value| ValueChange::between(actual.name.clone(), value));
         let color = desired
             .color
-            .as_ref()
-            .and_then(|value| ValueChange::between(actual.color, value.as_value().copied().unwrap_or_default()));
+            .resolve_optional(Color::default())
+            .and_then(|value| ValueChange::between(actual.color, value));
         let hoist = desired
             .hoist
-            .as_ref()
-            .and_then(|value| ValueChange::between(actual.hoist, value.as_value().copied().unwrap_or(false)));
+            .resolve_optional(false)
+            .and_then(|value| ValueChange::between(actual.hoist, value));
         let mentionable = desired
             .mentionable
-            .as_ref()
-            .and_then(|value| ValueChange::between(actual.mentionable, value.as_value().copied().unwrap_or(false)));
+            .resolve_optional(false)
+            .and_then(|value| ValueChange::between(actual.mentionable, value));
         let mut permissions = BTreeMap::new();
         for (permission, value) in &desired.permissions {
             let current = *actual
@@ -81,7 +79,7 @@ impl AttributeChanges {
             let default = *default_permissions
                 .get(permission)
                 .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-            let desired = value.as_value().copied().unwrap_or(default);
+            let desired = value.resolve(default);
             if !current && desired && !grantable_permissions.contains(permission) {
                 return Err(ManagementError::InvalidDefinition(format!(
                     "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
@@ -374,19 +372,23 @@ fn build_role_create(
 ) -> Result<RoleCreate, ManagementError> {
     let name = desired
         .name
-        .as_ref()
-        .map(|value| value.resolve("new role".to_owned()))
+        .resolve_optional("new role".to_owned())
         .ok_or_else(|| ManagementError::InvalidDefinition(format!("新しい Role {logical_id} には name が必要です")))?;
 
     let mut permissions: BTreeMap<_, _> = permission_names
         .iter()
-        .map(|permission| (permission.clone(), false))
+        .map(|permission| {
+            let default = *default_permissions
+                .get(permission)
+                .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
+            (permission.clone(), default)
+        })
         .collect();
     for (permission, value) in &desired.permissions {
         let default = *default_permissions
             .get(permission)
             .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-        let resolved = value.as_value().copied().unwrap_or(default);
+        let resolved = value.resolve(default);
         if resolved && !grantable_permissions.contains(permission) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
@@ -397,18 +399,9 @@ fn build_role_create(
 
     Ok(RoleCreate {
         name,
-        color: desired
-            .color
-            .as_ref()
-            .map_or_else(Color::default, |value| value.as_value().copied().unwrap_or_default()),
-        hoist: desired
-            .hoist
-            .as_ref()
-            .is_some_and(|value| value.as_value().copied().unwrap_or(false)),
-        mentionable: desired
-            .mentionable
-            .as_ref()
-            .is_some_and(|value| value.as_value().copied().unwrap_or(false)),
+        color: desired.color.resolve_optional(Color::default()).unwrap_or_default(),
+        hoist: desired.hoist.resolve_optional(false).unwrap_or(false),
+        mentionable: desired.mentionable.resolve_optional(false).unwrap_or(false),
         permissions,
     })
 }
