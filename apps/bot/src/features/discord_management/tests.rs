@@ -651,6 +651,7 @@ async fn plan_rejects_a_message_set_channel_reference_without_a_declaration() {
         schema_version = 1
         [message_sets.guidelines]
         channel = "information"
+        body = []
     "#;
     let state = r#"{
         "schema_version": 1,
@@ -1996,15 +1997,48 @@ fn resource_definitions_are_validated_as_typed_models() {
         ManagementError::InvalidDefinition(message) if message.contains("present") && message.contains("ensure")
     ));
 
+    let missing_message_set_body = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            channel = "rules"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_message_set_body,
+        ManagementError::InvalidDefinition(message) if message.contains("body")
+    ));
+
+    let missing_message_set_channel = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            body = []
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_message_set_channel,
+        ManagementError::InvalidDefinition(message) if message.contains("channel")
+    ));
+
     let present_message_set = parse_definition(
         r#"
             schema_version = 1
             [message_sets.guidelines]
             ensure = "present"
+            channel = "rules"
+            body = []
         "#,
     )
     .unwrap();
-    assert!(present_message_set.message_sets["guidelines"].body.is_none());
+    assert!(
+        present_message_set.message_sets["guidelines"]
+            .body
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    );
 
     let thread_only_name = parse_definition(
         r#"
@@ -2112,6 +2146,13 @@ fn order_definition_is_typed_and_validated() {
     let valid = parse_definition(
         r#"
             schema_version = 1
+            [roles.moderator]
+            name = "運営"
+            [channels.information]
+            type = "category"
+            [channels.rules]
+            type = "text"
+            parent = "information"
             [order]
             roles = ["moderator"]
             categories = ["information"]
@@ -2121,6 +2162,82 @@ fn order_definition_is_typed_and_validated() {
     )
     .unwrap();
     assert!(valid.order.is_some());
+
+    let undeclared_role = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            roles = ["moderator"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        undeclared_role,
+        ManagementError::InvalidDefinition(message) if message.contains("moderator") && message.contains("宣言されていません")
+    ));
+
+    let undeclared_category = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            categories = ["information"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        undeclared_category,
+        ManagementError::InvalidDefinition(message) if message.contains("information") && message.contains("宣言されていません")
+    ));
+
+    let text_as_category = parse_definition(
+        r#"
+            schema_version = 1
+            [channels.rules]
+            type = "text"
+            [order]
+            categories = ["rules"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        text_as_category,
+        ManagementError::InvalidDefinition(message) if message.contains("rules") && message.contains("Text")
+    ));
+
+    let undeclared_child = parse_definition(
+        r#"
+            schema_version = 1
+            [channels.information]
+            type = "category"
+            [order.children]
+            information = ["rules"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        undeclared_child,
+        ManagementError::InvalidDefinition(message) if message.contains("rules") && message.contains("宣言されていません")
+    ));
+
+    let mismatched_parent = parse_definition(
+        r#"
+            schema_version = 1
+            [channels.information]
+            type = "category"
+            [channels.other]
+            type = "category"
+            [channels.rules]
+            type = "text"
+            parent = "other"
+            [order.children]
+            information = ["rules"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        mismatched_parent,
+        ManagementError::InvalidDefinition(message) if message.contains("rules") && message.contains("一致しません")
+    ));
 
     let duplicate_roles = parse_definition(
         r#"
