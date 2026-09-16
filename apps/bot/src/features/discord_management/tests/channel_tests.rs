@@ -357,6 +357,68 @@ async fn mixed_channel_apply_returns_confirmed_create_when_later_update_target_i
     assert_eq!(returned_state["channels"]["b_update"], "300");
 }
 
+/// Category 作成後の一時的に古い catalog で子 Channel の親解決に失敗しても、親の mapping を返して停止する。
+#[tokio::test]
+async fn stale_catalog_after_category_creation_returns_confirmed_parent_mapping() {
+    let mut source = lifecycle_channel_source(ChannelCatalog { channels: Vec::new() });
+    source.create_remove_channel = Some(ChannelId::new(500));
+    let definition = r#"
+        schema_version = 1
+        [channels.a_parent]
+        type = "category"
+        name = "親"
+        [channels.b_child]
+        type = "text"
+        name = "子"
+        parent = "a_parent"
+    "#;
+    let state_json = channel_state("{}");
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("a_parent").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("b_child").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        result.status,
+        ChannelApplyStatus::Failed(message) if message.contains("b_child") && message.contains("親")
+    ));
+    assert!(matches!(
+        result.applied.get(&ChannelLogicalId::parse("a_parent").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    assert!(matches!(
+        result.pending.get(&ChannelLogicalId::parse("b_child").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["channels"]["a_parent"], "500");
+    assert!(returned_state["channels"].get("b_child").is_none());
+}
+
 /// Category は Text 専用の nsfw 属性を公開 plan seam で拒否する。
 #[tokio::test]
 async fn category_rejects_nsfw_in_public_plan() {
