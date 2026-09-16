@@ -26,6 +26,7 @@ sysinfo = "0.39"
 thiserror = "2"
 tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal" ] }
 toml = "1.0"
+toml_edit = "0.24"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
 validator = { version = "0.21", features = [ "derive" ] }
