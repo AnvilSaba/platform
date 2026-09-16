@@ -18,7 +18,7 @@ pub(crate) mod apply;
 const DEFAULT_CHANNEL_NSFW: bool = false;
 const DEFAULT_SLOWMODE_SECONDS: u16 = 0;
 const DEFAULT_AUTO_ARCHIVE_MINUTES: Option<u16> = Some(1440);
-const DEFAULT_THREAD_SLOWMODE_SECONDS: Option<u16> = Some(0);
+const DEFAULT_THREAD_SLOWMODE_SECONDS: u16 = 0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
@@ -43,17 +43,18 @@ impl<T> ValueChange<T> {
     }
 }
 
-/// Optional な属性の差分を、値設定と解除の意図ごとに表します。
+/// Nullable な属性の差分を、値設定と解除の意図ごとに表します。
 ///
-/// 変更がない場合は `AttributeChanges` 側の `Option` が `None` になり、
-/// この型の値がある場合は必ず `Set` または `Clear` になります。
+/// 変更がない場合は `AttributeChanges` 側の外側の `Option` が `None` になり、
+/// この型の値がある場合は必ず `Set` または `Clear` になります。内側の
+/// `Option` は、属性の現在値が未設定であることを表します。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OptionalValueChange<T> {
+pub(crate) enum NullableValueChange<T> {
     Set { current: Option<T>, desired: T },
     Clear { current: Option<T> },
 }
 
-impl<T> OptionalValueChange<T>
+impl<T> NullableValueChange<T>
 where
     T: PartialEq,
 {
@@ -66,7 +67,7 @@ where
     }
 }
 
-impl<T> OptionalValueChange<T> {
+impl<T> NullableValueChange<T> {
     pub(crate) fn current(&self) -> &Option<T> {
         match self {
             Self::Set { current, .. } | Self::Clear { current } => current,
@@ -84,13 +85,13 @@ impl<T> OptionalValueChange<T> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttributeChanges {
     name: Option<ValueChange<String>>,
-    parent: Option<OptionalValueChange<ChannelId>>,
+    parent: Option<NullableValueChange<ChannelId>>,
     planned_parent: Option<PlannedParentChange>,
-    topic: Option<OptionalValueChange<String>>,
+    topic: Option<NullableValueChange<String>>,
     nsfw: Option<ValueChange<bool>>,
     slowmode_seconds: Option<ValueChange<u16>>,
-    default_auto_archive_minutes: Option<OptionalValueChange<u16>>,
-    default_thread_slowmode_seconds: Option<OptionalValueChange<u16>>,
+    default_auto_archive_minutes: Option<NullableValueChange<u16>>,
+    default_thread_slowmode_seconds: Option<ValueChange<u16>>,
     overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>,
 }
 
@@ -121,7 +122,7 @@ impl AttributeChanges {
             .transpose()?
             .and_then(|desired| ValueChange::between(actual.name.clone(), desired));
         let (parent, planned_parent) = match parent_target {
-            Some(ParentTarget::Resolved(desired)) => (OptionalValueChange::between(actual.parent_id, desired), None),
+            Some(ParentTarget::Resolved(desired)) => (NullableValueChange::between(actual.parent_id, desired), None),
             Some(ParentTarget::Planned(logical_id)) => (
                 None,
                 Some(PlannedParentChange {
@@ -135,46 +136,31 @@ impl AttributeChanges {
             .topic
             .as_ref()
             .map(resolve_topic)
-            .transpose()?
-            .and_then(|desired| OptionalValueChange::between(actual.topic.clone(), desired));
+            .and_then(|desired| NullableValueChange::between(actual.topic.clone(), desired));
         let nsfw = desired
             .nsfw
             .as_ref()
-            .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW, logical_id, "nsfw"))
+            .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW))
             .transpose()?
             .and_then(|desired| ValueChange::between(actual.nsfw, desired));
         let slowmode_seconds = desired
             .slowmode_seconds
             .as_ref()
-            .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS, logical_id, "slowmode_seconds"))
+            .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS))
             .transpose()?
             .and_then(|desired| ValueChange::between(actual.slowmode_seconds, desired));
         let default_auto_archive_minutes = desired
             .default_auto_archive_minutes
             .as_ref()
-            .map(|value| {
-                resolve_optional_u16(
-                    value,
-                    DEFAULT_AUTO_ARCHIVE_MINUTES,
-                    logical_id,
-                    "default_auto_archive_minutes",
-                )
-            })
+            .map(|value| resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES))
             .transpose()?
-            .and_then(|desired| OptionalValueChange::between(actual.default_auto_archive_minutes, desired));
+            .and_then(|desired| NullableValueChange::between(actual.default_auto_archive_minutes, desired));
         let default_thread_slowmode_seconds = desired
             .default_thread_slowmode_seconds
             .as_ref()
-            .map(|value| {
-                resolve_optional_u16(
-                    value,
-                    DEFAULT_THREAD_SLOWMODE_SECONDS,
-                    logical_id,
-                    "default_thread_slowmode_seconds",
-                )
-            })
+            .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
             .transpose()?
-            .and_then(|desired| OptionalValueChange::between(actual.default_thread_slowmode_seconds, desired));
+            .and_then(|desired| ValueChange::between(actual.default_thread_slowmode_seconds, desired));
         let overwrites = build_overwrite_changes(logical_id, desired, actual, state)?;
         if !can_manage_roles && !overwrites.is_empty() {
             return Err(ManagementError::ChannelPermissionDenied(
@@ -214,7 +200,7 @@ impl AttributeChanges {
     }
 
     #[cfg(test)]
-    pub(crate) fn topic(&self) -> Option<&OptionalValueChange<String>> {
+    pub(crate) fn topic(&self) -> Option<&NullableValueChange<String>> {
         self.topic.as_ref()
     }
 
@@ -229,12 +215,12 @@ impl AttributeChanges {
     }
 
     #[cfg(test)]
-    pub(crate) fn default_auto_archive_minutes(&self) -> Option<&OptionalValueChange<u16>> {
+    pub(crate) fn default_auto_archive_minutes(&self) -> Option<&NullableValueChange<u16>> {
         self.default_auto_archive_minutes.as_ref()
     }
 
     #[cfg(test)]
-    pub(crate) fn default_thread_slowmode_seconds(&self) -> Option<&OptionalValueChange<u16>> {
+    pub(crate) fn default_thread_slowmode_seconds(&self) -> Option<&ValueChange<u16>> {
         self.default_thread_slowmode_seconds.as_ref()
     }
 
@@ -268,48 +254,66 @@ impl AttributeChanges {
             })?;
             ChannelUpdateValue::Set(parent_id)
         } else {
-            optional_update(self.parent.as_ref())
+            nullable_update(self.parent.as_ref())
         };
         Ok(ChannelUpdate {
             name: self.name.as_ref().map(|change| change.desired.clone()),
             parent_id,
-            topic: optional_update(self.topic.as_ref()),
+            topic: nullable_update(self.topic.as_ref()),
             nsfw: self.nsfw.as_ref().map(|change| *change.desired()),
             slowmode_seconds: self.slowmode_seconds.as_ref().map(|change| *change.desired()),
-            default_auto_archive_minutes: optional_update(self.default_auto_archive_minutes.as_ref()),
-            default_thread_slowmode_seconds: optional_update(self.default_thread_slowmode_seconds.as_ref()),
+            default_auto_archive_minutes: nullable_update(self.default_auto_archive_minutes.as_ref()),
+            default_thread_slowmode_seconds: self
+                .default_thread_slowmode_seconds
+                .as_ref()
+                .map(|change| *change.desired()),
             overwrites: (!self.overwrites.is_empty()).then_some(overwrites),
         })
     }
 
     fn render(&self, logical_id: &ChannelLogicalId, discord_id: &ChannelId, output: &mut String) {
         if let Some(change) = &self.name {
-            render_value_change(
+            render_change_line(
                 output,
                 logical_id,
                 discord_id,
                 "name",
-                change.current(),
-                change.desired(),
+                display_string(change.current()),
+                display_string(change.desired()),
             );
         }
         if let Some(change) = &self.parent {
-            render_optional_display_value_change(output, logical_id, discord_id, "parent", change);
-        }
-        if let Some(change) = &self.planned_parent {
-            output.push_str(&format!(
-                "- {} ({}) parent: {} -> planned:{}\n",
+            render_change_line(
+                output,
                 logical_id,
                 discord_id,
-                display_optional(change.current.as_ref()),
-                change.logical_id
-            ));
+                "parent",
+                display_nullable(change.current().as_ref()),
+                display_nullable(change.desired()),
+            );
+        }
+        if let Some(change) = &self.planned_parent {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "parent",
+                display_nullable(change.current.as_ref()),
+                format!("planned:{}", change.logical_id),
+            );
         }
         if let Some(change) = &self.topic {
-            render_optional_value_change(output, logical_id, discord_id, "topic", change);
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "topic",
+                display_nullable_string(change.current().as_ref()),
+                display_nullable_string(change.desired()),
+            );
         }
         if let Some(change) = &self.nsfw {
-            render_value_change(
+            render_change_line(
                 output,
                 logical_id,
                 discord_id,
@@ -319,7 +323,7 @@ impl AttributeChanges {
             );
         }
         if let Some(change) = &self.slowmode_seconds {
-            render_value_change(
+            render_change_line(
                 output,
                 logical_id,
                 discord_id,
@@ -329,92 +333,82 @@ impl AttributeChanges {
             );
         }
         if let Some(change) = &self.default_auto_archive_minutes {
-            render_optional_value_change(output, logical_id, discord_id, "default_auto_archive_minutes", change);
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_auto_archive_minutes",
+                display_nullable(change.current().as_ref()),
+                display_nullable(change.desired()),
+            );
         }
         if let Some(change) = &self.default_thread_slowmode_seconds {
-            render_optional_value_change(
+            render_change_line(
                 output,
                 logical_id,
                 discord_id,
                 "default_thread_slowmode_seconds",
-                change,
+                change.current(),
+                change.desired(),
             );
         }
         for (target, permissions) in &self.overwrites {
             for (permission, change) in permissions {
-                render_value_change(
+                render_change_line(
                     output,
                     logical_id,
                     discord_id,
-                    &format!("overwrites.{target:?}.{permission}"),
-                    change.current(),
-                    change.desired(),
+                    &format!("overwrites.{target}.{permission}"),
+                    display_overwrite_value(change.current()),
+                    display_overwrite_value(change.desired()),
                 );
             }
         }
     }
 }
 
-fn optional_update<T: Clone>(change: Option<&OptionalValueChange<T>>) -> ChannelUpdateValue<T> {
+fn nullable_update<T: Clone>(change: Option<&NullableValueChange<T>>) -> ChannelUpdateValue<T> {
     let Some(change) = change else {
         return ChannelUpdateValue::Keep;
     };
     match change {
-        OptionalValueChange::Set { desired, .. } => ChannelUpdateValue::Set(desired.clone()),
-        OptionalValueChange::Clear { .. } => ChannelUpdateValue::Clear,
+        NullableValueChange::Set { desired, .. } => ChannelUpdateValue::Set(desired.clone()),
+        NullableValueChange::Clear { .. } => ChannelUpdateValue::Clear,
     }
 }
 
-fn render_value_change<T: std::fmt::Debug>(
+fn render_change_line<C: std::fmt::Display, D: std::fmt::Display>(
     output: &mut String,
     logical_id: &ChannelLogicalId,
     discord_id: &ChannelId,
     attribute: &str,
-    current: &T,
-    desired: &T,
+    current: C,
+    desired: D,
 ) {
     output.push_str(&format!(
-        "- {} ({}) {}: {:?} -> {:?}\n",
+        "- {} ({}) {}: {} -> {}\n",
         logical_id, discord_id, attribute, current, desired
     ));
 }
 
-fn render_optional_value_change<T: std::fmt::Debug>(
-    output: &mut String,
-    logical_id: &ChannelLogicalId,
-    discord_id: &ChannelId,
-    attribute: &str,
-    change: &OptionalValueChange<T>,
-) {
-    output.push_str(&format!(
-        "- {} ({}) {}: {:?} -> {:?}\n",
-        logical_id,
-        discord_id,
-        attribute,
-        change.current(),
-        change.desired()
-    ));
+fn display_string(value: &str) -> String {
+    serde_json::to_string(value).expect("文字列は JSON へ直列化できます")
 }
 
-fn render_optional_display_value_change<T: std::fmt::Display>(
-    output: &mut String,
-    logical_id: &ChannelLogicalId,
-    discord_id: &ChannelId,
-    attribute: &str,
-    change: &OptionalValueChange<T>,
-) {
-    output.push_str(&format!(
-        "- {} ({}) {}: {} -> {}\n",
-        logical_id,
-        discord_id,
-        attribute,
-        display_optional(change.current().as_ref()),
-        display_optional(change.desired())
-    ));
-}
-
-fn display_optional<T: std::fmt::Display>(value: Option<&T>) -> String {
+fn display_nullable<T: std::fmt::Display>(value: Option<&T>) -> String {
     value.map_or_else(|| "None".to_owned(), ToString::to_string)
+}
+
+fn display_nullable_string(value: Option<&String>) -> String {
+    value.map_or_else(|| "None".to_owned(), |value| format!("Some({})", display_string(value)))
+}
+
+fn display_overwrite_value(value: &OverwriteValue) -> &'static str {
+    match value {
+        OverwriteValue::Allow => "allow",
+        OverwriteValue::Deny => "deny",
+        OverwriteValue::Clear => "clear",
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -456,7 +450,13 @@ impl Change {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Plan {
     changes: BTreeMap<ChannelLogicalId, Change>,
-    create_desired: BTreeMap<ChannelLogicalId, ChannelAttributes>,
+    create_desired: BTreeMap<ChannelLogicalId, CreateDesired>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CreateDesired {
+    payload: ChannelCreate,
+    parent_logical_id: Option<ChannelLogicalId>,
 }
 
 pub(crate) type ChannelPlan = Plan;
@@ -486,7 +486,7 @@ impl Plan {
         debug_assert!(self.changes.insert(logical_id, change).is_none());
     }
 
-    fn insert_create(&mut self, logical_id: ChannelLogicalId, change: Change, desired: ChannelAttributes) {
+    fn insert_create(&mut self, logical_id: ChannelLogicalId, change: Change, desired: CreateDesired) {
         debug_assert!(matches!(change, Change::Create));
         debug_assert!(self.changes.insert(logical_id.clone(), change).is_none());
         self.create_desired.insert(logical_id, desired);
@@ -525,89 +525,48 @@ impl Plan {
     }
 }
 
-fn render_create_attributes(attributes: &ChannelAttributes, output: &mut String) {
+fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
+    let payload = &desired.payload;
     output.push_str("  desired:\n");
-    if let Some(kind) = attributes.kind {
-        output.push_str(&format!("    type: {}\n", kind.as_str()));
-    }
-    if let Some(ChannelValue::Value(name)) = &attributes.name {
-        output.push_str(&format!("    name: {name:?}\n"));
-    }
-    if let Some(parent) = &attributes.parent {
-        match parent {
-            ChannelValue::Value(parent) => output.push_str(&format!("    parent: {parent}\n")),
-            ChannelValue::Clear => output.push_str("    parent: None\n"),
-            ChannelValue::Default => {}
-        }
-    }
-    if let Some(topic) = &attributes.topic {
-        output.push_str(&format!("    topic: {}\n", render_topic_value(topic)));
-    }
-    if let Some(nsfw) = &attributes.nsfw {
-        let nsfw = match nsfw {
-            ChannelValue::Value(value) => *value,
-            ChannelValue::Default | ChannelValue::Clear => DEFAULT_CHANNEL_NSFW,
-        };
-        output.push_str(&format!("    nsfw: {nsfw}\n"));
-    }
-    if let Some(slowmode) = &attributes.slowmode_seconds {
-        output.push_str(&format!("    slowmode_seconds: {}\n", render_slowmode_value(slowmode)));
-    }
-    if let Some(auto_archive) = &attributes.default_auto_archive_minutes {
+    output.push_str(&format!("    type: {}\n", payload.kind.as_str()));
+    output.push_str(&format!("    name: {}\n", display_string(&payload.name)));
+    let parent = match (desired.parent_logical_id.as_ref(), payload.parent_id) {
+        (Some(logical_id), Some(discord_id)) => format!("{logical_id} ({discord_id})"),
+        (Some(logical_id), None) => logical_id.to_string(),
+        (None, Some(discord_id)) => discord_id.to_string(),
+        (None, None) => "None".to_owned(),
+    };
+    if payload.kind == ChannelKind::Text {
+        output.push_str(&format!("    parent: {parent}\n"));
+        output.push_str(&format!(
+            "    topic: {}\n",
+            display_nullable_string(payload.topic.as_ref())
+        ));
+        output.push_str(&format!("    nsfw: {}\n", payload.nsfw));
+        output.push_str(&format!("    slowmode_seconds: {}\n", payload.slowmode_seconds));
         output.push_str(&format!(
             "    default_auto_archive_minutes: {}\n",
-            render_optional_u16_value(auto_archive, DEFAULT_AUTO_ARCHIVE_MINUTES)
+            display_nullable(payload.default_auto_archive_minutes.as_ref())
         ));
-    }
-    if let Some(thread_slowmode) = &attributes.default_thread_slowmode_seconds {
         output.push_str(&format!(
             "    default_thread_slowmode_seconds: {}\n",
-            render_optional_u16_value(thread_slowmode, DEFAULT_THREAD_SLOWMODE_SECONDS)
+            payload.default_thread_slowmode_seconds
         ));
     }
-    let overwrites = attributes
+    let overwrites = payload
         .overwrites
         .iter()
         .filter_map(|(subject, permissions)| {
             let permissions = permissions
+                .known
                 .iter()
-                .filter_map(|(permission, value)| {
-                    let value = match value {
-                        OverwriteValue::Allow => "allow",
-                        OverwriteValue::Deny => "deny",
-                        OverwriteValue::Clear => return None,
-                    };
-                    Some(format!("{permission}: {value}"))
-                })
+                .map(|(permission, value)| format!("{permission}: {}", display_overwrite_value(value)))
                 .collect::<Vec<_>>();
             (!permissions.is_empty()).then_some(format!("{subject}: {{{}}}", permissions.join(", ")))
         })
         .collect::<Vec<_>>();
     if !overwrites.is_empty() {
         output.push_str(&format!("    overwrites: {{{}}}\n", overwrites.join(", ")));
-    }
-}
-
-fn render_topic_value(value: &ChannelValue<String>) -> String {
-    match value {
-        ChannelValue::Value(value) if value.is_empty() => "None".to_owned(),
-        ChannelValue::Value(value) => format!("Some({value:?})"),
-        ChannelValue::Default | ChannelValue::Clear => "None".to_owned(),
-    }
-}
-
-fn render_slowmode_value(value: &ChannelValue<u16>) -> u16 {
-    match value {
-        ChannelValue::Value(value) => *value,
-        ChannelValue::Default | ChannelValue::Clear => DEFAULT_SLOWMODE_SECONDS,
-    }
-}
-
-fn render_optional_u16_value(value: &ChannelValue<u16>, default: Option<u16>) -> String {
-    match value {
-        ChannelValue::Value(value) => format!("Some({value})"),
-        ChannelValue::Default => format!("{default:?}"),
-        ChannelValue::Clear => "None".to_owned(),
     }
 }
 
@@ -660,15 +619,19 @@ pub(crate) fn build_channel_plan_with_capabilities(
             &planned_channel_creations,
         )?;
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
-            validate_channel_creation(
-                logical_id,
-                &attributes,
-                definition,
-                state,
-                Some(&actual),
-                &planned_channel_creations,
-            )?;
-            plan.insert_create(logical_id.clone(), Change::Create, attributes.clone());
+            let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
+            let parent_logical_id = match attributes.parent.as_ref() {
+                Some(ChannelValue::Value(parent)) => Some(parent.clone()),
+                Some(ChannelValue::Default | ChannelValue::Clear) | None => None,
+            };
+            plan.insert_create(
+                logical_id.clone(),
+                Change::Create,
+                CreateDesired {
+                    payload,
+                    parent_logical_id,
+                },
+            );
             continue;
         };
         let Some(current) = actual.get(&discord_id).copied() else {
@@ -973,33 +936,14 @@ fn resolve_parent_target(
     }
 }
 
-fn resolve_parent(
-    value: &ChannelValue<ChannelLogicalId>,
-    logical_id: &ChannelLogicalId,
-    state: &StateFile,
-) -> Result<Option<ChannelId>, ManagementError> {
-    match resolve_parent_target(value, logical_id, state, &BTreeSet::new())? {
-        ParentTarget::Resolved(parent_id) => Ok(parent_id),
-        ParentTarget::Planned(parent) => Err(ManagementError::InvalidState(format!(
-            "Channel {logical_id} の親 {parent} の作成結果が state にありません"
-        ))),
+fn resolve_topic(value: &ChannelValue<String>) -> Option<String> {
+    match value {
+        ChannelValue::Value(value) => Some(value.clone()),
+        ChannelValue::Default | ChannelValue::Clear => None,
     }
 }
 
-fn resolve_topic(value: &ChannelValue<String>) -> Result<Option<String>, ManagementError> {
-    Ok(match value {
-        ChannelValue::Value(value) if value.is_empty() => None,
-        ChannelValue::Value(value) => Some(value.clone()),
-        ChannelValue::Default | ChannelValue::Clear => None,
-    })
-}
-
-fn resolve_bool(
-    value: &ChannelValue<bool>,
-    default: bool,
-    _logical_id: &ChannelLogicalId,
-    _attribute: &str,
-) -> Result<bool, ManagementError> {
+fn resolve_bool(value: &ChannelValue<bool>, default: bool) -> Result<bool, ManagementError> {
     Ok(match value {
         ChannelValue::Value(value) => *value,
         ChannelValue::Default => default,
@@ -1011,12 +955,7 @@ fn resolve_bool(
     })
 }
 
-fn resolve_u16(
-    value: &ChannelValue<u16>,
-    default: u16,
-    _logical_id: &ChannelLogicalId,
-    _attribute: &str,
-) -> Result<u16, ManagementError> {
+fn resolve_u16(value: &ChannelValue<u16>, default: u16) -> Result<u16, ManagementError> {
     Ok(match value {
         ChannelValue::Value(value) => *value,
         ChannelValue::Default => default,
@@ -1024,12 +963,7 @@ fn resolve_u16(
     })
 }
 
-fn resolve_optional_u16(
-    value: &ChannelValue<u16>,
-    default: Option<u16>,
-    _logical_id: &ChannelLogicalId,
-    _attribute: &str,
-) -> Result<Option<u16>, ManagementError> {
+fn resolve_nullable_u16(value: &ChannelValue<u16>, default: Option<u16>) -> Result<Option<u16>, ManagementError> {
     Ok(match value {
         ChannelValue::Value(value) => Some(*value),
         ChannelValue::Default => default,
@@ -1132,41 +1066,36 @@ pub(crate) fn desired_channel_create_with_catalog(
         logical_id,
     )?;
     let parent_id = match attributes.parent.as_ref() {
-        Some(value) => resolve_parent(value, logical_id, state)?,
+        Some(value) => match resolve_parent_target(value, logical_id, state, &planned_channel_creations)? {
+            ParentTarget::Resolved(parent_id) => parent_id,
+            // 同じ plan 内で先に作成する Category は、作成後に state へ追加された
+            // snowflake を apply 時にもう一度解決します。
+            ParentTarget::Planned(_) => None,
+        },
         None => None,
     };
     let topic = match attributes.topic.as_ref() {
-        Some(value) => resolve_topic(value)?,
+        Some(value) => resolve_topic(value),
         None => None,
     };
     let nsfw = attributes
         .nsfw
         .as_ref()
-        .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW, logical_id, "nsfw"))
+        .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW))
         .transpose()?
         .unwrap_or(DEFAULT_CHANNEL_NSFW);
     let slowmode_seconds = attributes
         .slowmode_seconds
         .as_ref()
-        .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS, logical_id, "slowmode_seconds"))
+        .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS))
         .transpose()?
         .unwrap_or(DEFAULT_SLOWMODE_SECONDS);
     let default_auto_archive_minutes = match attributes.default_auto_archive_minutes.as_ref() {
-        Some(value) => resolve_optional_u16(
-            value,
-            DEFAULT_AUTO_ARCHIVE_MINUTES,
-            logical_id,
-            "default_auto_archive_minutes",
-        )?,
+        Some(value) => resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES)?,
         None => DEFAULT_AUTO_ARCHIVE_MINUTES,
     };
     let default_thread_slowmode_seconds = match attributes.default_thread_slowmode_seconds.as_ref() {
-        Some(value) => resolve_optional_u16(
-            value,
-            DEFAULT_THREAD_SLOWMODE_SECONDS,
-            logical_id,
-            "default_thread_slowmode_seconds",
-        )?,
+        Some(value) => resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS)?,
         None => DEFAULT_THREAD_SLOWMODE_SECONDS,
     };
     let mut overwrites = BTreeMap::new();
