@@ -547,27 +547,26 @@ fn ordered_changes(
 
 fn channel_matches_update(channel: &ChannelSnapshot, update: &ChannelUpdate) -> bool {
     update.name.as_ref().is_none_or(|name| channel.name == *name)
-        && optional_matches(channel.parent_id.as_ref(), &update.parent_id)
-        && optional_matches(channel.topic.as_ref(), &update.topic)
+        && nullable_matches(channel.parent_id.as_ref(), &update.parent_id)
+        && nullable_matches(channel.topic.as_ref(), &update.topic)
         && update.nsfw.is_none_or(|nsfw| channel.nsfw == nsfw)
         && update
             .slowmode_seconds
             .is_none_or(|seconds| channel.slowmode_seconds == seconds)
-        && optional_matches(
+        && nullable_matches(
             channel.default_auto_archive_minutes.as_ref(),
             &update.default_auto_archive_minutes,
         )
-        && optional_matches(
-            channel.default_thread_slowmode_seconds.as_ref(),
-            &update.default_thread_slowmode_seconds,
-        )
+        && update
+            .default_thread_slowmode_seconds
+            .is_none_or(|seconds| channel.default_thread_slowmode_seconds == seconds)
         && update
             .overwrites
             .as_ref()
             .is_none_or(|overwrites| channel.overwrites == *overwrites)
 }
 
-fn optional_matches<T: PartialEq>(actual: Option<&T>, update: &ChannelUpdateValue<T>) -> bool {
+fn nullable_matches<T: PartialEq>(actual: Option<&T>, update: &ChannelUpdateValue<T>) -> bool {
     match update {
         ChannelUpdateValue::Keep => true,
         ChannelUpdateValue::Set(desired) => actual == Some(desired),

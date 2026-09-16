@@ -3,7 +3,10 @@
 //! 実装側（現在は Serenity Adapter）をこのモジュールの Interface に依存させ、
 //! `export`・`plan`・`apply`・`bind` が Discord SDK の型を直接参照しないようにします。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use super::{
     configuration::{ChannelKind, Color, KnownPermission, OverwriteValue},
@@ -146,7 +149,8 @@ pub(super) struct ChannelSnapshot {
     pub nsfw: bool,
     pub slowmode_seconds: u16,
     pub default_auto_archive_minutes: Option<u16>,
-    pub default_thread_slowmode_seconds: Option<u16>,
+    /// Discord が未設定を返す場合も API 上の canonical 値 0 として扱います。
+    pub default_thread_slowmode_seconds: u16,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
@@ -223,6 +227,16 @@ impl PartialOrd for ChannelOverwriteTarget {
     }
 }
 
+impl fmt::Display for ChannelOverwriteTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Everyone => formatter.write_str("everyone"),
+            Self::Role(id) => write!(formatter, "role:{id}"),
+            Self::Member(id) => write!(formatter, "member:{id}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ChannelCreate {
     pub kind: ChannelKind,
@@ -232,7 +246,7 @@ pub(super) struct ChannelCreate {
     pub nsfw: bool,
     pub slowmode_seconds: u16,
     pub default_auto_archive_minutes: Option<u16>,
-    pub default_thread_slowmode_seconds: Option<u16>,
+    pub default_thread_slowmode_seconds: u16,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
@@ -256,11 +270,12 @@ pub(super) struct ChannelUpdate {
     pub nsfw: Option<bool>,
     pub slowmode_seconds: Option<u16>,
     pub default_auto_archive_minutes: ChannelUpdateValue<u16>,
-    pub default_thread_slowmode_seconds: ChannelUpdateValue<u16>,
+    /// `None` は Keep、具体的な値（解除時は 0）が更新値です。
+    pub default_thread_slowmode_seconds: Option<u16>,
     pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
 }
 
-/// Channel の optional 属性を更新する要求です。
+/// Channel の nullable 属性を更新する要求です。
 ///
 /// `Keep` は API payload から省略し、`Set` は具体値を設定し、`Clear` は
 /// Discord の null 相当へ戻します。ネストした `Option` でこの三値を表現しません。
@@ -305,10 +320,8 @@ impl ChannelUpdate {
             ChannelUpdateValue::Set(minutes) => channel.default_auto_archive_minutes = Some(*minutes),
             ChannelUpdateValue::Clear => channel.default_auto_archive_minutes = None,
         }
-        match &self.default_thread_slowmode_seconds {
-            ChannelUpdateValue::Keep => {}
-            ChannelUpdateValue::Set(seconds) => channel.default_thread_slowmode_seconds = Some(*seconds),
-            ChannelUpdateValue::Clear => channel.default_thread_slowmode_seconds = None,
+        if let Some(seconds) = self.default_thread_slowmode_seconds {
+            channel.default_thread_slowmode_seconds = seconds;
         }
         if let Some(overwrites) = &self.overwrites {
             channel.overwrites.clone_from(overwrites);
