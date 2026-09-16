@@ -3,11 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes, reconcile_pending_updates};
+use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes};
 use crate::features::discord_management::apply::guild_lock::{GuildApplyLock, GuildApplyPermit};
 use crate::features::discord_management::configuration::{
-    DefinitionFile, KnownPermission, ManagedValue, PendingRoleUpdate, PermissionVocabulary, PlanInput, RoleAttributes,
-    StateFile, serialize_state,
+    DefinitionFile, KnownPermission, ManagedValue, PermissionVocabulary, PlanInput, RoleAttributes, StateFile,
+    serialize_state,
 };
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId};
@@ -160,8 +160,7 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
         confirmed_plan: &RolePlan,
         processing_deadline: Instant,
     ) -> Result<ApplyPreparation, ManagementError> {
-        let PlanInput { definition, mut state } =
-            PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
+        let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
         let Some(permit) = self.apply_lock.try_acquire(guild_id) else {
             return Ok(ApplyPreparation::Finished(result(
                 &state,
@@ -206,7 +205,6 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
                 )?));
             }
         };
-        reconcile_pending_updates(&definition, &mut state, &catalog)?;
         let current_plan = build_plan(&definition, &state, &catalog)?;
         if current_plan != *confirmed_plan {
             return Ok(ApplyPreparation::Finished(result(
@@ -273,19 +271,10 @@ async fn apply_attribute_changes<S: RoleUpdater>(
         Ok(Err(error)) => return Ok(Some(RoleApplyStatus::Failed(error.to_string()))),
         Err(_) => RoleUpdateOutcome::ResponseUnknown,
     };
-    if outcome == RoleUpdateOutcome::ResponseUnknown {
-        session.state.pending_role_updates.insert(
-            logical_id.clone(),
-            PendingRoleUpdate {
-                discord_id: role_id,
-                intent: "update".to_owned(),
-                fingerprint: attributes.intent_fingerprint(),
-            },
-        );
-    }
     if outcome == RoleUpdateOutcome::Applied {
-        session.state.pending_role_updates.remove(logical_id);
         session.mark_applied(logical_id);
+    } else {
+        return Ok(Some(RoleApplyStatus::ResponseUnknown));
     }
 
     let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
@@ -319,10 +308,6 @@ async fn apply_attribute_changes<S: RoleUpdater>(
         }));
     }
 
-    if outcome == RoleUpdateOutcome::ResponseUnknown {
-        session.state.pending_role_updates.remove(logical_id);
-        session.mark_applied(logical_id);
-    }
     Ok(None)
 }
 
@@ -536,7 +521,6 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     session.state.deleted_roles.remove(&logical_id);
                     session.state.pending_deletions.remove(&logical_id);
                     session.state.pending_creations.remove(&logical_id);
-                    session.state.pending_role_updates.remove(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {

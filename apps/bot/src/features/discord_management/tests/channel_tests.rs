@@ -637,9 +637,9 @@ async fn binding_unknown_channel_creation_clears_pending_and_allows_resubmit() {
     );
 }
 
-/// Channel 更新の応答不明を state に残し、同じ fingerprint の plan を再投入できる。
+/// Channel 更新の応答不明は state に残さず、別の定義を次回 plan できる。
 #[tokio::test]
-async fn unknown_channel_update_is_recorded_and_can_be_resubmitted() {
+async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definition() {
     let catalog = Arc::new(Mutex::new(ChannelCatalog {
         channels: vec![channel_snapshot("300", ChannelKind::Text, "旧ルール", None)],
     }));
@@ -678,13 +678,26 @@ async fn unknown_channel_update_is_recorded_and_can_be_resubmitted() {
         .unwrap();
     assert_eq!(unknown.status, ChannelApplyStatus::ResponseUnknown);
     let unknown_state: serde_json::Value = serde_json::from_str(&unknown.state_json).unwrap();
-    assert_eq!(unknown_state["pending_channel_updates"]["rules"]["discord_id"], "300");
-    assert_eq!(unknown_state["pending_channel_updates"]["rules"]["intent"], "update");
-    assert!(
-        unknown_state["pending_channel_updates"]["rules"]["fingerprint"]
-            .as_str()
-            .is_some_and(|fingerprint| !fingerprint.is_empty())
-    );
+    let input_state: serde_json::Value = serde_json::from_str(&state_json).unwrap();
+    assert_eq!(unknown_state["guild_id"], input_state["guild_id"]);
+    assert_eq!(unknown_state["channels"], input_state["channels"]);
+
+    let changed_definition = r#"
+        schema_version = 1
+        [channels.rules]
+        type = "text"
+        name = "別のルール"
+    "#;
+    let changed_plan = plan_channels(
+        &first_source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        changed_definition,
+        &unknown.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(changed_plan.get(&ChannelLogicalId::parse("rules").unwrap()).is_some());
 
     let second_source = UnknownChannelUpdateSource {
         catalog,
@@ -705,7 +718,8 @@ async fn unknown_channel_update_is_recorded_and_can_be_resubmitted() {
         .unwrap();
     assert_eq!(resubmitted.status, ChannelApplyStatus::Complete);
     let resolved_state: serde_json::Value = serde_json::from_str(&resubmitted.state_json).unwrap();
-    assert!(resolved_state.get("pending_channel_updates").is_none());
+    assert_eq!(resolved_state["guild_id"], input_state["guild_id"]);
+    assert_eq!(resolved_state["channels"], input_state["channels"]);
     assert_eq!(second_source.catalog.lock().unwrap().channels[0].name, "ルール");
 }
 
@@ -758,7 +772,6 @@ async fn channel_apply_times_out_can_manage_roles_and_returns_state() {
     assert_eq!(returned_state["guild_id"], "100");
     assert_eq!(returned_state["channels"]["rules"], "300");
     assert_eq!(returned_state["roles"], serde_json::json!({}));
-    assert!(returned_state.get("pending_channel_updates").is_none());
 }
 
 /// Category を先に作成してから、その論理 ID を親に持つ Text Channel を作成する。
@@ -1524,82 +1537,4 @@ async fn deleted_channel_mapping_is_released_when_definition_is_omitted() {
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert!(state.get("channels").is_none());
     assert!(state.get("deleted_channels").is_none());
-}
-
-/// export は実構成へ到達済みの更新 marker を解決して次の state へ持ち越さない。
-#[tokio::test]
-async fn channel_export_clears_a_resolved_pending_update_marker() {
-    let source = ChannelCatalogSource {
-        catalog: ChannelCatalog {
-            channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
-        },
-    };
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "channels": {"rules": "300"},
-        "pending_channel_updates": {
-            "rules": {"discord_id": "300", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-    let files = export_channels(&source, guild_id(100), Some(state_json)).await.unwrap();
-    let state: serde_json::Value = serde_json::from_str(&files.state_json).unwrap();
-    assert!(state.get("pending_channel_updates").is_none());
-}
-
-/// plan は実構成へ到達済みの Channel 更新 marker を解決し、未完了更新を再計画しない。
-#[tokio::test]
-async fn channel_plan_reconciles_a_resolved_pending_update_marker() {
-    let source = ChannelCatalogSource {
-        catalog: ChannelCatalog {
-            channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
-        },
-    };
-    let definition = r#"
-        schema_version = 1
-        [channels.rules]
-        type = "text"
-        name = "ルール"
-    "#;
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "channels": {"rules": "300"},
-        "pending_channel_updates": {
-            "rules": {"discord_id": "300", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-
-    let plan = plan_channels(
-        &source,
-        &test_permission_vocabulary(),
-        guild_id(100),
-        definition,
-        state_json,
-    )
-    .await
-    .unwrap();
-    assert!(plan.is_empty());
-}
-
-/// 更新保留中でも外部消失は ADR0004 の予期せぬ消失として停止する。
-#[tokio::test]
-async fn channel_export_does_not_tolerate_a_pending_update_disappearance() {
-    let source = ChannelCatalogSource {
-        catalog: ChannelCatalog { channels: Vec::new() },
-    };
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "channels": {"rules": "300"},
-        "pending_channel_updates": {
-            "rules": {"discord_id": "300", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-    let error = export_channels(&source, guild_id(100), Some(state_json))
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失") && message.contains("rules"))
-    );
 }

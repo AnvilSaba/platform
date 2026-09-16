@@ -37,7 +37,6 @@ impl<T> ValueChange<T> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttributeChanges {
-    intent_fingerprint: String,
     name: Option<ValueChange<String>>,
     color: Option<ValueChange<Color>>,
     hoist: Option<ValueChange<bool>>,
@@ -53,7 +52,6 @@ impl AttributeChanges {
         default_permissions: &BTreeMap<KnownPermission, bool>,
         grantable_permissions: &BTreeSet<KnownPermission>,
     ) -> Result<Option<Self>, ManagementError> {
-        let intent_fingerprint = fingerprint(&format!("{desired:?}"));
         let name = desired
             .name
             .as_ref()
@@ -91,7 +89,6 @@ impl AttributeChanges {
         }
 
         let changes = Self {
-            intent_fingerprint,
             name,
             color,
             hoist,
@@ -111,11 +108,6 @@ impl AttributeChanges {
             && self.hoist.is_none()
             && self.mentionable.is_none()
             && self.permissions.is_empty()
-    }
-
-    /// 現在値を除いた更新意図の fingerprint です。
-    pub(crate) fn intent_fingerprint(&self) -> String {
-        self.intent_fingerprint.clone()
     }
 
     #[cfg(test)]
@@ -206,15 +198,6 @@ fn render_value_change<T: std::fmt::Display>(
         change.current(),
         change.desired()
     ));
-}
-
-fn fingerprint(value: &str) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3_u64);
-    }
-    format!("{hash:016x}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -471,19 +454,6 @@ pub(crate) fn build_plan(
             )));
         }
     }
-    for logical_id in state.pending_role_updates.keys() {
-        let Some(role) = definition.roles.get(logical_id) else {
-            return Err(ManagementError::InvalidState(format!(
-                "Role {logical_id} の更新意図が未解決のため、定義を変更できません"
-            )));
-        };
-        if !role.is_managed() {
-            return Err(ManagementError::InvalidState(format!(
-                "Role {logical_id} の更新意図が未解決です"
-            )));
-        }
-    }
-
     for (logical_id, desired) in &definition.roles {
         if desired.is_absent() {
             if *logical_id == everyone_logical_id() {
@@ -531,15 +501,7 @@ pub(crate) fn build_plan(
                     "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
                 )));
             }
-            add_update(
-                &mut plan,
-                logical_id,
-                discord_id,
-                actual,
-                &desired_attributes,
-                catalog,
-                state,
-            )?;
+            add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
             continue;
         }
 
@@ -592,15 +554,7 @@ pub(crate) fn build_plan(
                 "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
         }
-        add_update(
-            &mut plan,
-            logical_id,
-            discord_id,
-            actual,
-            &desired_attributes,
-            catalog,
-            state,
-        )?;
+        add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
     }
 
     for (logical_id, discord_id) in &state.roles {
@@ -618,48 +572,6 @@ pub(crate) fn build_plan(
     Ok(plan)
 }
 
-/// 応答不明の更新について、再取得した実構成が希望値へ到達していれば
-/// 未完了 marker を解決します。
-pub(crate) fn reconcile_pending_updates(
-    definition: &DefinitionFile,
-    state: &mut StateFile,
-    catalog: &RoleCatalog,
-) -> Result<(), ManagementError> {
-    let actual_roles = catalog
-        .roles
-        .iter()
-        .map(|role| (role.id, role))
-        .collect::<BTreeMap<_, _>>();
-    let pending_logical_ids = state.pending_role_updates.keys().cloned().collect::<Vec<_>>();
-    for logical_id in pending_logical_ids {
-        let Some(role_definition) = definition.roles.get(&logical_id) else {
-            continue;
-        };
-        if !role_definition.is_managed() {
-            continue;
-        }
-        let Ok(role_id) = resolve_role_id(&logical_id, state) else {
-            continue;
-        };
-        let Some(actual) = actual_roles.get(&role_id).copied() else {
-            continue;
-        };
-        let desired = compose_attributes(role_definition, &definition.settings_sets.role);
-        if AttributeChanges::between(
-            &logical_id,
-            actual,
-            &desired,
-            &catalog.default_permissions,
-            &catalog.grantable_permissions,
-        )?
-        .is_none()
-        {
-            state.pending_role_updates.remove(&logical_id);
-        }
-    }
-    Ok(())
-}
-
 fn add_update(
     plan: &mut Plan,
     logical_id: &RoleLogicalId,
@@ -667,15 +579,7 @@ fn add_update(
     actual: &RoleSnapshot,
     desired: &RoleAttributes,
     catalog: &RoleCatalog,
-    state: &StateFile,
 ) -> Result<(), ManagementError> {
-    if let Some(pending) = state.pending_role_updates.get(logical_id)
-        && (pending.discord_id != discord_id || pending.fingerprint != fingerprint(&format!("{desired:?}")))
-    {
-        return Err(ManagementError::InvalidState(format!(
-            "Role {logical_id} の未完了更新 intent と今回の定義が一致しません"
-        )));
-    }
     if let Some(attributes) = AttributeChanges::between(
         logical_id,
         actual,
