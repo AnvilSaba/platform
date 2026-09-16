@@ -1891,6 +1891,164 @@ fn definition_validates_raw_attribute_values_with_validator() {
     assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("voice")));
 }
 
+/// Option<ManagedValue<T>> の省略と既定値を、呼び出し側の分岐なしで解決できる。
+#[test]
+fn optional_managed_value_resolution_preserves_omission() {
+    let omitted: Option<ManagedValue<u16>> = None;
+    assert_eq!(omitted.resolve_optional(10), None);
+    assert_eq!(Some(ManagedValue::Default).resolve_optional(10), Some(10));
+    assert_eq!(Some(ManagedValue::Value(20)).resolve_optional(10), Some(20));
+}
+
+/// @everyone の overwrite は everyone 表記へ統一し、別名を黙って二重管理しない。
+#[test]
+fn role_everyone_overwrite_is_rejected_with_canonical_name() {
+    let error = parse_definition(
+        r#"
+            schema_version = 1
+            [channels.rules]
+            type = "text"
+            [channels.rules.overwrites."role:everyone"]
+            VIEW_CHANNEL = "allow"
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ManagementError::InvalidDefinition(message)
+            if message.contains("role:everyone") && message.contains("everyone")
+    ));
+}
+
+/// typed resource 定義の構文・単項目・複数項目制約を parse 時に検証する。
+#[test]
+fn resource_definitions_are_validated_as_typed_models() {
+    let invalid_member_mode = parse_definition(
+        r#"
+            schema_version = 1
+            [members.owner]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_member_mode,
+        ManagementError::InvalidDefinition(message) if message.contains("参照専用")
+    ));
+
+    let missing_channel = parse_definition(
+        r#"
+            schema_version = 1
+            [threads.details]
+            name = "詳細"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_channel,
+        ManagementError::InvalidDefinition(message) if message.contains("channel")
+    ));
+
+    let missing_thread_name = parse_definition(
+        r#"
+            schema_version = 1
+            [threads.details]
+            channel = "rules"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_thread_name,
+        ManagementError::InvalidDefinition(message) if message.contains("name")
+    ));
+
+    let empty_body = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            channel = "rules"
+            [[message_sets.guidelines.body]]
+            id = "basic"
+            body = ""
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        empty_body,
+        ManagementError::InvalidDefinition(message) if message.contains("body")
+    ));
+
+    let invalid_id = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            channel = "rules"
+            [[message_sets.guidelines.body]]
+            id = ""
+            body = "本文"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_id,
+        ManagementError::InvalidDefinition(message) if message.contains("論理 ID")
+    ));
+
+    let long_thread_name = "a".repeat(101);
+    let long_thread_name = parse_definition(&format!(
+        "schema_version = 1\n[threads.details]\nchannel = \"rules\"\nname = \"{long_thread_name}\"\n"
+    ))
+    .unwrap_err();
+    assert!(matches!(
+        long_thread_name,
+        ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100")
+    ));
+
+    let absent_with_attributes = parse_definition(
+        r#"
+            schema_version = 1
+            [threads.details]
+            ensure = "absent"
+            name = "詳細"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        absent_with_attributes,
+        ManagementError::InvalidDefinition(message) if message.contains("absent")
+    ));
+
+    let duplicate_body_ids = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            channel = "rules"
+            [[message_sets.guidelines.body]]
+            id = "basic"
+            body = "本文1"
+            [[message_sets.guidelines.body]]
+            id = "basic"
+            body = "本文2"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate_body_ids,
+        ManagementError::InvalidDefinition(message) if message.contains("重複")
+    ));
+
+    let unknown_key = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            channel = "rules"
+            typo = true
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(unknown_key, ManagementError::InvalidDefinition(message) if message.contains("typo")));
+}
+
 #[cfg(test)]
 #[path = "tests/apply_tests.rs"]
 mod apply_tests;

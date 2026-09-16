@@ -207,6 +207,15 @@ impl fmt::Display for MemberLogicalIdTag {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum MessageLogicalIdTag {}
+
+impl fmt::Display for MessageLogicalIdTag {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub(crate) enum ChannelSettingsSetIdTag {}
 
 impl fmt::Display for ChannelSettingsSetIdTag {
@@ -217,4 +226,5 @@ impl fmt::Display for ChannelSettingsSetIdTag {
 
 pub(crate) type ChannelLogicalId = LogicalId<ChannelLogicalIdTag>;
 pub(crate) type MemberLogicalId = LogicalId<MemberLogicalIdTag>;
+pub(crate) type MessageLogicalId = LogicalId<MessageLogicalIdTag>;
 pub(crate) type ChannelSettingsSetId = LogicalId<ChannelSettingsSetIdTag>;
