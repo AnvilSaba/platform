@@ -168,6 +168,30 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
     assert_eq!(source.creates.lock().unwrap()[0].name, "運営");
 }
 
+/// Role の name は引用符と改行を含んでも plan 上で安全に表示する。
+#[tokio::test]
+async fn role_plan_quotes_name_changes_with_json_escaping() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "旧\n名")],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        name = "新\"名\n改行"
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.render().contains("name: \"旧\\n名\" -> \"新\\\"名\\n改行\""));
+}
+
 /// 先行する Role 作成後に後続更新の対象が消えた場合も、作成済み mapping を返して停止する。
 #[tokio::test]
 async fn mixed_role_apply_returns_confirmed_create_when_later_update_target_is_missing() {

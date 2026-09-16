@@ -646,8 +646,7 @@ async fn channel_create_plan_renders_desired_attributes() {
     let rendered = plan.render();
     assert!(rendered.contains("desired:"));
     assert!(rendered.contains("type: text"));
-    assert!(rendered.contains("name:"));
-    assert!(rendered.contains("ルール"));
+    assert!(rendered.contains("name: \"ルール\""));
     assert!(rendered.contains("parent: information"));
     assert!(!rendered.contains("TaggedLogicalId"));
     assert!(!rendered.contains("PhantomData"));
@@ -655,6 +654,33 @@ async fn channel_create_plan_renders_desired_attributes() {
     assert!(rendered.contains("slowmode_seconds: 5"));
     assert!(rendered.contains("default_auto_archive_minutes: 1440"));
     assert!(rendered.contains("default_thread_slowmode_seconds: 0"));
+}
+
+/// Channel の name は引用符と改行を含んでも plan 上で安全に表示する。
+#[tokio::test]
+async fn channel_plan_quotes_name_changes_with_json_escaping() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_snapshot("300", ChannelKind::Text, "旧\n名", None)],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.rules]
+        type = "text"
+        name = "新\"名\n改行"
+    "#;
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"rules":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.render().contains("name: \"旧\\n名\" -> \"新\\\"名\\n改行\""));
 }
 
 /// Text の topic に空文字を指定した場合、解除ではなく空文字の設定として扱う。
