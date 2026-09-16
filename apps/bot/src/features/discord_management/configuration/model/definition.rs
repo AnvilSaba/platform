@@ -32,7 +32,7 @@ pub(crate) struct RawDefinitionFile {
     pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) order: Option<RawResourceDefinition>,
+    pub(crate) order: Option<RawOrderDefinition>,
 }
 
 #[derive(Debug)]
@@ -88,37 +88,88 @@ impl DefinitionFile {
     }
 }
 
-/// 未実装の message set / thread 定義を TOML adapter 内に保持します。
+/// 管理メッセージ群・管理スレッドの入力を保持する typed model です。
 ///
-/// Channel の設定モデルへ自由形式の `toml::Value` を渡さないための隔離 seam です。
+/// これらの実装はまだ別Featureですが、設定モデルから自由形式の
+/// `toml::Value` を引き回さないため、現在のスキーマに対応する範囲だけを型付けします。
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawResourceDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ensure: Option<Ensure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) channel: Option<ChannelLogicalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) body: Vec<RawMessageDefinition>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(transparent)]
-pub(crate) struct RawResourceDefinition(toml::Value);
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawMessageDefinition {
+    pub(crate) id: String,
+    pub(crate) body: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawOrderDefinition {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) roles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) categories: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) children: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawResourceDefinitionWire {
+    #[serde(default)]
+    ensure: Option<Ensure>,
+    #[serde(default)]
+    channel: Option<ChannelLogicalId>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    body: Vec<RawMessageDefinition>,
+}
+
+impl From<RawResourceDefinitionWire> for RawResourceDefinition {
+    fn from(value: RawResourceDefinitionWire) -> Self {
+        Self {
+            ensure: value.ensure,
+            channel: value.channel,
+            name: value.name,
+            body: value.body,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawResourceDefinition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = toml::Value::deserialize(deserializer)?;
+        if !value.is_table() {
+            return Err(de::Error::custom("管理リソース定義はテーブルで指定してください"));
+        }
+        let wire = value
+            .try_into::<RawResourceDefinitionWire>()
+            .map_err(de::Error::custom)?;
+        Ok(wire.into())
+    }
+}
 
 impl RawResourceDefinition {
-    pub(crate) fn is_table(&self) -> bool {
-        self.0.is_table()
-    }
-
     pub(crate) fn is_absent(&self) -> bool {
-        self.table()
-            .and_then(|table| table.get("ensure"))
-            .and_then(toml::Value::as_str)
-            .is_some_and(|ensure| ensure == "absent")
+        matches!(self.ensure, Some(Ensure::Absent))
     }
 
-    pub(crate) fn has_channel(&self) -> bool {
-        self.table().is_some_and(|table| table.contains_key("channel"))
-    }
-
-    pub(crate) fn channel_name(&self) -> Option<&str> {
-        self.table()
-            .and_then(|table| table.get("channel"))
-            .and_then(toml::Value::as_str)
-    }
-
-    fn table(&self) -> Option<&toml::map::Map<String, toml::Value>> {
-        self.0.as_table()
+    pub(crate) fn channel(&self) -> Option<&ChannelLogicalId> {
+        self.channel.as_ref()
     }
 }
 

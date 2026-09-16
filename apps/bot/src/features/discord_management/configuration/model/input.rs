@@ -40,12 +40,7 @@ fn validate_references(definition: &DefinitionFile, state: &StateFile) -> Result
         validate_channel_references(logical_id, channel.attributes(), definition, state)?;
     }
 
-    for (logical_id, member) in &definition.members {
-        if !matches!(member.mode, RoleMode::Reference) {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Member {logical_id} は参照専用として宣言してください"
-            )));
-        }
+    for logical_id in definition.members.keys() {
         if !state.members.contains_key(logical_id) {
             return Err(ManagementError::InvalidState(format!(
                 "Member {logical_id} の対応がありません"
@@ -79,32 +74,17 @@ fn validate_channel_container_reference(
     definition: &DefinitionFile,
     state: &StateFile,
 ) -> Result<(), ManagementError> {
-    if !value.is_table() {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "{resource_kind} {resource_name} はテーブルで指定してください"
-        )));
-    }
     if value.is_absent() {
         return Ok(());
     }
 
-    if !value.has_channel() {
+    let Some(channel_id) = value.channel() else {
         return Err(ManagementError::InvalidDefinition(format!(
             "{resource_kind} {resource_name} の channel がありません"
         )));
-    }
-    let Some(channel) = value.channel_name() else {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "{resource_kind} {resource_name} の channel は Channel 論理 ID で指定してください"
-        )));
     };
-    let channel_id = ChannelLogicalId::parse(channel).map_err(|error| {
-        ManagementError::InvalidDefinition(format!(
-            "{resource_kind} {resource_name} の channel {channel} が不正です: {error}"
-        ))
-    })?;
     require_channel_reference(
-        &channel_id,
+        channel_id,
         definition,
         state,
         &format!("{resource_kind} {resource_name} の投稿先"),
@@ -122,47 +102,39 @@ fn validate_channel_references(
     }
 
     for subject in attributes.overwrites.keys() {
-        if subject == "everyone" {
-            validate_role_overwrite_reference(channel_id, &everyone_logical_id(), definition)?;
-            continue;
-        }
-        if let Some(logical_id) = subject.strip_prefix("role:") {
-            let logical_id = RoleLogicalId::parse(logical_id).map_err(|error| {
-                ManagementError::InvalidDefinition(format!("Channel {channel_id} の {subject} が不正です: {error}"))
-            })?;
-            if logical_id == everyone_logical_id() {
-                validate_role_overwrite_reference(channel_id, &logical_id, definition)?;
-                continue;
+        match subject {
+            OverwriteTarget::Everyone => {
+                validate_role_overwrite_reference(channel_id, &everyone_logical_id(), definition)?;
             }
-            if !definition.roles.contains_key(&logical_id) {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {channel_id} の権限対象 Role {logical_id} の宣言がありません"
-                )));
+            OverwriteTarget::Role(logical_id) => {
+                if *logical_id == everyone_logical_id() {
+                    validate_role_overwrite_reference(channel_id, logical_id, definition)?;
+                    continue;
+                }
+                if !definition.roles.contains_key(logical_id) {
+                    return Err(ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の権限対象 Role {logical_id} の宣言がありません"
+                    )));
+                }
+                validate_role_overwrite_reference(channel_id, logical_id, definition)?;
+                if !state.roles.contains_key(logical_id) {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Channel {channel_id} の権限対象 Role {logical_id} の対応がありません"
+                    )));
+                }
             }
-            validate_role_overwrite_reference(channel_id, &logical_id, definition)?;
-            if logical_id != everyone_logical_id() && !state.roles.contains_key(&logical_id) {
-                return Err(ManagementError::InvalidState(format!(
-                    "Channel {channel_id} の権限対象 Role {logical_id} の対応がありません"
-                )));
+            OverwriteTarget::Member(logical_id) => {
+                if !definition.members.contains_key(logical_id) {
+                    return Err(ManagementError::InvalidDefinition(format!(
+                        "Channel {channel_id} の権限対象 Member {logical_id} の宣言がありません"
+                    )));
+                }
+                if !state.members.contains_key(logical_id) {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Channel {channel_id} の権限対象 Member {logical_id} の対応がありません"
+                    )));
+                }
             }
-        } else if let Some(logical_id) = subject.strip_prefix("member:") {
-            let logical_id = MemberLogicalId::parse(logical_id).map_err(|error| {
-                ManagementError::InvalidDefinition(format!("Channel {channel_id} の {subject} が不正です: {error}"))
-            })?;
-            if !definition.members.contains_key(&logical_id) {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {channel_id} の権限対象 Member {logical_id} の宣言がありません"
-                )));
-            }
-            if !state.members.contains_key(&logical_id) {
-                return Err(ManagementError::InvalidState(format!(
-                    "Channel {channel_id} の権限対象 Member {logical_id} の対応がありません"
-                )));
-            }
-        } else {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Channel {channel_id} の権限対象 {subject} は everyone、role:<論理 ID>、member:<論理 ID> のいずれかで指定してください"
-            )));
         }
     }
 
