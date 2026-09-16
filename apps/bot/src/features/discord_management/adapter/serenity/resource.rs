@@ -21,12 +21,12 @@ impl From<GuildId> for SerenityGuildId {
     }
 }
 
-pub(crate) struct SerenityRoleSource<'a> {
+pub(crate) struct SerenityManagementAdapter<'a> {
     pub(super) http: &'a Http,
     pub(super) bot_user_id: UserId,
 }
 
-impl<'a> SerenityRoleSource<'a> {
+impl<'a> SerenityManagementAdapter<'a> {
     pub(crate) fn new(http: &'a Http, bot_user_id: UserId) -> Self {
         Self { http, bot_user_id }
     }
@@ -36,7 +36,7 @@ impl<'a> SerenityRoleSource<'a> {
     }
 }
 
-impl ResourceSource for SerenityRoleSource<'_> {
+impl ResourceSource for SerenityManagementAdapter<'_> {
     async fn lookup_resource(
         &self,
         guild_id: &GuildId,

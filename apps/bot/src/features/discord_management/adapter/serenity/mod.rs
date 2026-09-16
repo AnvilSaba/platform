@@ -4,4 +4,4 @@ mod channel;
 mod resource;
 mod role;
 
-pub(crate) use resource::SerenityRoleSource;
+pub(crate) use resource::SerenityManagementAdapter;
