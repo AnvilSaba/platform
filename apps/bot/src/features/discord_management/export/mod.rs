@@ -124,7 +124,7 @@ pub(super) async fn export_roles<S: RoleSource>(
         );
     }
 
-    let definition_toml = toml::to_string_pretty(&RawDefinitionFile {
+    let definition_toml = serialize_definition(&RawDefinitionFile {
         schema_version: SCHEMA_VERSION,
         settings_sets: RawSettingsSets::default(),
         roles: definitions,
@@ -133,8 +133,7 @@ pub(super) async fn export_roles<S: RoleSource>(
         message_sets: BTreeMap::new(),
         threads: BTreeMap::new(),
         order: None,
-    })
-    .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    })?;
     let state_json = serde_json::to_string_pretty(&RawStateFile {
         schema_version: SCHEMA_VERSION,
         guild_id,
@@ -331,7 +330,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
         );
     }
 
-    let definition_toml = toml::to_string_pretty(&RawDefinitionFile {
+    let definition_toml = serialize_definition(&RawDefinitionFile {
         schema_version: SCHEMA_VERSION,
         settings_sets: RawSettingsSets::default(),
         roles: role_definitions,
@@ -340,8 +339,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
         message_sets: BTreeMap::new(),
         threads: BTreeMap::new(),
         order: None,
-    })
-    .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    })?;
     let mut exported_roles = previous_role_mappings;
     for (discord_id, logical_id) in &role_ids {
         exported_roles.entry(logical_id.clone()).or_insert(*discord_id);
@@ -363,6 +361,44 @@ pub(super) async fn export_channels<S: ChannelSource>(
         definition_toml,
         state_json: format!("{state_json}\n"),
     })
+}
+
+fn serialize_definition(definition: &RawDefinitionFile) -> Result<String, ManagementError> {
+    let serialized = toml::to_string_pretty(definition)
+        .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    let mut document = serialized
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    inline_marker_tables(document.as_item_mut());
+    Ok(document.to_string())
+}
+
+fn inline_marker_tables(item: &mut toml_edit::Item) {
+    match item {
+        toml_edit::Item::Table(table) => {
+            for (_, child) in table.iter_mut() {
+                inline_marker_tables(child);
+            }
+            table.fmt();
+
+            let marker = ["default", "clear"].into_iter().find(|key| {
+                table.len() == 1 && table.get(key).and_then(toml_edit::Item::as_bool) == Some(true)
+            });
+            if let Some(marker) = marker {
+                let mut inline = toml_edit::InlineTable::new();
+                inline.insert(marker, true.into());
+                *item = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
+            }
+        }
+        toml_edit::Item::ArrayOfTables(tables) => {
+            for table in tables.iter_mut() {
+                for (_, child) in table.iter_mut() {
+                    inline_marker_tables(child);
+                }
+            }
+        }
+        toml_edit::Item::None | toml_edit::Item::Value(_) => {}
+    }
 }
 
 fn register_role_overwrite_target(
@@ -438,4 +474,33 @@ fn export_overwrites(
         result.insert(subject, values);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod marker_format_tests {
+    use super::inline_marker_tables;
+
+    #[test]
+    fn marker_tables_are_inlined_without_inlining_structured_tables() {
+        let mut document = r#"
+[settings_sets.channels.base.topic]
+default = true
+
+[channels.rules.parent]
+clear = true
+
+[channels.rules.overwrites.everyone]
+VIEW_CHANNEL = "deny"
+"#
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+
+        inline_marker_tables(document.as_item_mut());
+        let output = document.to_string();
+
+        assert!(output.contains("topic = { default = true }"));
+        assert!(output.contains("parent = { clear = true }"));
+        assert!(output.contains("[channels.rules.overwrites.everyone]"));
+        assert!(!output.contains("overwrites = {"));
+    }
 }
