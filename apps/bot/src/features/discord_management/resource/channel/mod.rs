@@ -83,7 +83,6 @@ impl<T> OptionalValueChange<T> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttributeChanges {
-    intent_fingerprint: String,
     name: Option<ValueChange<String>>,
     parent: Option<OptionalValueChange<ChannelId>>,
     planned_parent: Option<PlannedParentChange>,
@@ -110,7 +109,6 @@ impl AttributeChanges {
         planned_channel_creations: &BTreeSet<ChannelLogicalId>,
         can_manage_roles: bool,
     ) -> Result<Option<Self>, ManagementError> {
-        let intent_fingerprint = fingerprint(&format!("{desired:?}"));
         let parent_target = desired
             .parent
             .as_ref()
@@ -185,7 +183,6 @@ impl AttributeChanges {
         }
 
         let changes = Self {
-            intent_fingerprint,
             name,
             parent,
             planned_parent,
@@ -209,14 +206,6 @@ impl AttributeChanges {
             && self.default_auto_archive_minutes.is_none()
             && self.default_thread_slowmode_seconds.is_none()
             && self.overwrites.is_empty()
-    }
-
-    /// 更新要求のうち、現在値ではなく「何を実現したいか」だけを識別します。
-    ///
-    /// API 応答不明から再投入する際、対象の現在値が途中で変わっても同じ
-    /// 意図として扱えるよう、`current` は fingerprint に含めません。
-    pub(crate) fn intent_fingerprint(&self) -> String {
-        self.intent_fingerprint.clone()
     }
 
     #[cfg(test)]
@@ -371,17 +360,6 @@ fn optional_update<T: Clone>(change: Option<&OptionalValueChange<T>>) -> Channel
         OptionalValueChange::Set { desired, .. } => ChannelUpdateValue::Set(desired.clone()),
         OptionalValueChange::Clear { .. } => ChannelUpdateValue::Clear,
     }
-}
-
-fn fingerprint(value: &str) -> String {
-    // State の再投入間で安定する軽量な FNV-1a fingerprint です。機密性や
-    // 改ざん検知は目的とせず、未完了の意図が同一かを識別するために使います。
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3_u64);
-    }
-    format!("{hash:016x}")
 }
 
 fn render_value_change<T: std::fmt::Debug>(
@@ -721,13 +699,6 @@ pub(crate) fn build_channel_plan_with_capabilities(
                 "Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
         }
-        if let Some(pending) = state.pending_channel_updates.get(logical_id)
-            && (pending.discord_id != discord_id || pending.fingerprint != fingerprint(&format!("{attributes:?}")))
-        {
-            return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の未完了更新 intent と今回の定義が一致しません"
-            )));
-        }
         if let Some(attributes) = AttributeChanges::between(
             logical_id,
             current,
@@ -777,57 +748,6 @@ fn planned_channel_creations(definition: &DefinitionFile, state: &StateFile) -> 
         .collect()
 }
 
-/// 応答不明の更新について、再取得した実構成が希望値へ到達していれば
-/// 未完了 marker を解決します。
-pub(crate) fn reconcile_pending_updates(
-    definition: &DefinitionFile,
-    state: &mut StateFile,
-    catalog: &ChannelCatalog,
-    can_manage_roles: bool,
-) -> Result<(), ManagementError> {
-    let actual = catalog
-        .channels
-        .iter()
-        .map(|channel| (channel.id, channel))
-        .collect::<BTreeMap<_, _>>();
-    let planned_channel_creations = planned_channel_creations(definition, state);
-    let pending_logical_ids = state.pending_channel_updates.keys().cloned().collect::<Vec<_>>();
-    for logical_id in pending_logical_ids {
-        let Some(channel_definition) = definition.channels.get(&logical_id) else {
-            continue;
-        };
-        if !channel_definition.is_managed() {
-            continue;
-        }
-        let Some(channel_id) = state.channels.get(&logical_id).copied() else {
-            continue;
-        };
-        let Some(actual) = actual.get(&channel_id).copied() else {
-            continue;
-        };
-        let desired = compose_attributes(channel_definition);
-        let Some(kind) = desired.kind else {
-            continue;
-        };
-        if actual.kind != kind || !actual.manageable {
-            continue;
-        }
-        if AttributeChanges::between(
-            &logical_id,
-            actual,
-            &desired,
-            state,
-            &planned_channel_creations,
-            can_manage_roles,
-        )?
-        .is_none()
-        {
-            state.pending_channel_updates.remove(&logical_id);
-        }
-    }
-    Ok(())
-}
-
 fn validate_pending_channel_state(definition: &DefinitionFile, state: &StateFile) -> Result<(), ManagementError> {
     if let Some(logical_id) = state.pending_channel_creations.iter().next() {
         return Err(ManagementError::InvalidState(format!(
@@ -843,18 +763,6 @@ fn validate_pending_channel_state(definition: &DefinitionFile, state: &StateFile
         if !channel.is_absent() {
             return Err(ManagementError::InvalidState(format!(
                 "Channel {logical_id} の削除意図が未解決です"
-            )));
-        }
-    }
-    for logical_id in state.pending_channel_updates.keys() {
-        let Some(channel) = definition.channels.get(logical_id) else {
-            return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の更新意図が未解決のため、定義を変更できません"
-            )));
-        };
-        if !channel.is_managed() {
-            return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の更新意図が未解決です"
             )));
         }
     }

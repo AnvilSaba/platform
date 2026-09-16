@@ -882,9 +882,9 @@ async fn apply_requires_a_new_plan_when_managed_attributes_changed_after_confirm
     assert!(source.updates.lock().unwrap().is_empty());
 }
 
-/// 更新応答が不明で再取得値も希望値と違う場合、成功扱いせず以降の更新を停止する。
+/// 更新応答が不明な場合、state の論理 ID 対応を変更せず応答不明を返す。
 #[tokio::test]
-async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
+async fn unknown_update_response_preserves_state_mapping() {
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "運営")],
@@ -914,99 +914,16 @@ async fn unknown_update_response_stops_when_refetched_value_does_not_match() {
     assert_eq!(result.status, RoleApplyStatus::ResponseUnknown);
     assert!(result.applied.is_empty());
     assert_eq!(result.pending, plan);
-}
-
-/// export は実構成へ到達済みの Role 更新 marker を解決して次の state へ持ち越さない。
-#[tokio::test]
-async fn role_export_clears_a_resolved_pending_update_marker() {
-    let source = StatefulFakeRoleSource {
-        guild_id: "100".to_owned(),
-        roles: vec![role("200", "モデレーター")],
-    };
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {"moderator": "200"},
-        "pending_role_updates": {
-            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-
-    let files = export_roles(&source, guild_id(100), Some(state_json)).await.unwrap();
-    let state: serde_json::Value = serde_json::from_str(&files.state_json).unwrap();
-    assert!(state.get("pending_role_updates").is_none());
-}
-
-/// plan は実構成へ到達済みの Role 更新 marker を解決し、未完了更新を再計画しない。
-#[tokio::test]
-async fn role_plan_reconciles_a_resolved_pending_update_marker() {
-    let source = StatefulFakeRoleSource {
-        guild_id: "100".to_owned(),
-        roles: vec![role("200", "モデレーター")],
-    };
-    let definition = "schema_version = 1\n[roles.moderator]\nname = \"モデレーター\"\n";
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {"moderator": "200"},
-        "pending_role_updates": {
-            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-
-    let plan = plan_roles(&source, guild_id(100), definition, state_json)
-        .await
-        .unwrap();
-    assert!(plan.is_empty());
-}
-
-/// @everyone の更新 marker も Guild ID で解決し、実構成到達時に plan から除外する。
-#[tokio::test]
-async fn role_plan_reconciles_a_resolved_pending_update_for_everyone() {
-    let mut everyone = role("100", "@everyone");
-    everyone.permissions = known_permission_values([("SEND_MESSAGES", true), ("VIEW_CHANNEL", true)]);
-    let source = StatefulFakeRoleSource {
-        guild_id: "100".to_owned(),
-        roles: vec![everyone],
-    };
-    let definition = "schema_version = 1\n[roles.everyone.permissions]\nSEND_MESSAGES = true\n";
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {},
-        "pending_role_updates": {
-            "everyone": {"discord_id": "100", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-
-    let plan = plan_roles(&source, guild_id(100), definition, state_json)
-        .await
-        .unwrap();
-    assert!(plan.is_empty());
-}
-
-/// 更新保留中でも外部 Role 消失は ADR0004 の予期せぬ消失として停止する。
-#[tokio::test]
-async fn role_export_does_not_tolerate_a_pending_update_disappearance() {
-    let source = StatefulFakeRoleSource {
-        guild_id: "100".to_owned(),
-        roles: Vec::new(),
-    };
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {"moderator": "200"},
-        "pending_role_updates": {
-            "moderator": {"discord_id": "200", "intent": "update", "fingerprint": "old"}
-        }
-    }"#;
-
-    let error = export_roles(&source, guild_id(100), Some(state_json))
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失") && message.contains("moderator"))
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&state).unwrap()
     );
+
+    let changed_definition = "schema_version = 1\n[roles.moderator]\nname = \"別の名前\"\n";
+    let changed_plan = plan_roles(&source, guild_id(100), changed_definition, &result.state_json)
+        .await
+        .unwrap();
+    assert!(changed_plan.get(&logical_id("moderator")).is_some());
 }
 
 #[derive(Clone)]
@@ -1031,9 +948,9 @@ impl RoleUpdater for NeverCompletesRoleUpdate {
     }
 }
 
-/// 更新期限超過時に進捗を不明として返し、未完了変更を安全に再投入できることを保証する。
+/// 更新期限超過時に応答不明として返し、入力 state の対応を維持する。
 #[tokio::test]
-async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
+async fn update_deadline_returns_unknown_progress_without_state_change() {
     let catalog = RoleCatalog {
         roles: vec![role("200", "運営")],
         permission_names: BTreeSet::new(),
@@ -1062,27 +979,10 @@ async fn update_deadline_returns_unknown_progress_that_can_be_resubmitted() {
     assert_eq!(timed_out.status, RoleApplyStatus::ResponseUnknown);
     assert!(timed_out.applied.is_empty());
     assert_eq!(timed_out.pending, plan);
-
-    let resubmitted_source = ApplyingFakeRoleSource {
-        catalog: Arc::new(Mutex::new(catalog)),
-        updates: Arc::new(Mutex::new(Vec::new())),
-        outcome: RoleUpdateOutcome::Applied,
-        apply_update: true,
-    };
-    let resubmitted = apply_role_updates(
-        &resubmitted_source,
-        guild_id(100),
-        definition,
-        &timed_out.state_json,
-        &plan,
-        Instant::now() + Duration::from_secs(60),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(resubmitted.status, RoleApplyStatus::Complete);
-    assert_eq!(resubmitted.applied, plan);
-    assert!(resubmitted.pending.is_empty());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&timed_out.state_json).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&state).unwrap()
+    );
 }
 
 /// 処理開始時点で期限切れなら更新を一件も始めず、取得済みの最新stateを返すことを保証する。
