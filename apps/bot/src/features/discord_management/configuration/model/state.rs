@@ -1,5 +1,4 @@
 #[derive(Debug, Deserialize, Serialize, Validate)]
-#[validate(schema(function = "validate_state"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawStateFile {
     #[validate(range(
@@ -25,24 +24,6 @@ pub(crate) struct RawStateFile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "deserialize_unique_member_mappings")]
     pub(crate) members: BTreeMap<MemberLogicalId, MemberId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) deleted_roles: BTreeSet<RoleLogicalId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_creations: BTreeSet<RoleLogicalId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) deleted_channels: BTreeSet<ChannelLogicalId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_channel_creations: BTreeSet<ChannelLogicalId>,
-
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_channel_deletions: BTreeSet<ChannelLogicalId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,24 +39,6 @@ pub(crate) struct StateFile {
 
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) members: BTreeMap<MemberLogicalId, MemberId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) deleted_roles: BTreeSet<RoleLogicalId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_creations: BTreeSet<RoleLogicalId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_deletions: BTreeSet<RoleLogicalId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) deleted_channels: BTreeSet<ChannelLogicalId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_channel_creations: BTreeSet<ChannelLogicalId>,
-
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub(crate) pending_channel_deletions: BTreeSet<ChannelLogicalId>,
 }
 
 impl StateFile {
@@ -103,12 +66,6 @@ impl StateFile {
             roles: raw.roles,
             channels: raw.channels,
             members: raw.members,
-            deleted_roles: raw.deleted_roles,
-            pending_creations: raw.pending_creations,
-            pending_deletions: raw.pending_deletions,
-            deleted_channels: raw.deleted_channels,
-            pending_channel_creations: raw.pending_channel_creations,
-            pending_channel_deletions: raw.pending_channel_deletions,
         })
     }
 }
@@ -243,70 +200,6 @@ where
         }
     }
 
-    Ok(())
-}
-
-pub(crate) fn validate_state(state: &RawStateFile) -> Result<(), ValidationError> {
-    for logical_id in &state.deleted_roles {
-        if !state.roles.contains_key(logical_id) {
-            return Err(validation_error(
-                "deleted_role_without_mapping",
-                format!("削除済み Role {logical_id} に対応する Snowflake がありません"),
-            ));
-        }
-        if state.pending_deletions.contains(logical_id) {
-            return Err(validation_error(
-                "conflicting_role_operation",
-                format!("Role {logical_id} に競合する未完了状態があります"),
-            ));
-        }
-    }
-    for logical_id in &state.pending_deletions {
-        if !state.roles.contains_key(logical_id) || state.deleted_roles.contains(logical_id) {
-            return Err(validation_error(
-                "invalid_pending_deletion",
-                format!("Role {logical_id} の削除意図に対応する active state がありません"),
-            ));
-        }
-    }
-    for logical_id in &state.pending_creations {
-        if state.roles.contains_key(logical_id) && !state.deleted_roles.contains(logical_id) {
-            return Err(validation_error(
-                "invalid_pending_creation",
-                format!("作成結果不明の Role {logical_id} に Snowflake が設定されています"),
-            ));
-        }
-    }
-    for logical_id in &state.deleted_channels {
-        if !state.channels.contains_key(logical_id) {
-            return Err(validation_error(
-                "deleted_channel_without_mapping",
-                format!("削除済み Channel {logical_id} に対応する Snowflake がありません"),
-            ));
-        }
-        if state.pending_channel_deletions.contains(logical_id) {
-            return Err(validation_error(
-                "conflicting_channel_operation",
-                format!("Channel {logical_id} に競合する未完了状態があります"),
-            ));
-        }
-    }
-    for logical_id in &state.pending_channel_deletions {
-        if !state.channels.contains_key(logical_id) || state.deleted_channels.contains(logical_id) {
-            return Err(validation_error(
-                "invalid_pending_channel_deletion",
-                format!("Channel {logical_id} の削除意図に対応する active state がありません"),
-            ));
-        }
-    }
-    for logical_id in &state.pending_channel_creations {
-        if state.channels.contains_key(logical_id) && !state.deleted_channels.contains(logical_id) {
-            return Err(validation_error(
-                "invalid_pending_channel_creation",
-                format!("作成結果不明の Channel {logical_id} に Snowflake が設定されています"),
-            ));
-        }
-    }
     Ok(())
 }
 

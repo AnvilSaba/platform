@@ -165,7 +165,7 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
 
 /// 先行する Role 作成成功を state に残したまま、後続作成の失敗で停止することを保証する。
 #[tokio::test]
-async fn create_failure_returns_successful_mappings_and_pending_creations() {
+async fn create_failure_returns_successful_mappings_only() {
     let mut source = lifecycle_source(RoleCatalog {
         roles: vec![role("100", "@everyone")],
         permission_names: BTreeSet::new(),
@@ -198,9 +198,9 @@ async fn create_failure_returns_successful_mappings_and_pending_creations() {
     assert!(returned_state["roles"].get("second").is_none());
 }
 
-/// 作成応答不明時に重複作成せず、確認が必要な state を返すことを保証する。
+/// 作成応答不明時に重複作成せず、入力 state を変更せず返すことを保証する。
 #[tokio::test]
-async fn unknown_create_response_is_recorded_without_retrying_creation() {
+async fn unknown_create_response_leaves_mapping_unchanged() {
     let mut source = lifecycle_source(RoleCatalog {
         roles: vec![role("100", "@everyone")],
         permission_names: BTreeSet::new(),
@@ -228,55 +228,14 @@ async fn unknown_create_response_is_recorded_without_retrying_creation() {
     assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
     assert_eq!(source.creates.lock().unwrap().len(), 1);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
-    assert!(
-        plan_roles(&source, guild_id(100), definition, &result.state_json)
-            .await
-            .is_err()
+    assert_eq!(
+        returned_state,
+        serde_json::from_str::<serde_json::Value>(&state_json).unwrap()
     );
-}
-
-/// 削除済み Role の再作成応答不明でも旧 ID と pending 状態を矛盾なく保持することを保証する。
-#[tokio::test]
-async fn unknown_recreation_response_keeps_deleted_mapping_until_confirmation() {
-    let mut source = lifecycle_source(RoleCatalog {
-        roles: vec![role("100", "@everyone")],
-        permission_names: BTreeSet::new(),
-        grantable_permissions: BTreeSet::new(),
-        default_permissions: BTreeMap::new(),
-    });
-    source.create_outcome = RoleCreateOutcome::ResponseUnknown;
-    let definition = "schema_version = 1\n[roles.moderator]\nname = \"再作成\"\n";
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {"moderator": "200"},
-        "deleted_roles": ["moderator"]
-    }"#;
-    let plan = plan_roles(&source, guild_id(100), definition, state_json)
+    let rerun = plan_roles(&source, guild_id(100), definition, &result.state_json)
         .await
         .unwrap();
-
-    let result = apply_roles(
-        &source,
-        guild_id(100),
-        definition,
-        state_json,
-        &plan,
-        Instant::now() + Duration::from_secs(60),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
-    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(returned_state["roles"]["moderator"], "200");
-    assert_eq!(returned_state["deleted_roles"], serde_json::json!(["moderator"]));
-    assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
-    let error = plan_roles(&source, guild_id(100), definition, &result.state_json)
-        .await
-        .unwrap_err();
-    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("作成結果不明")));
+    assert!(matches!(rerun.get(&logical_id("moderator")), Some(Change::Create)));
 }
 
 /// 定義から Role を外す管理解除が実物を残し、state だけを更新して再適用を無差分にすることを保証する。
@@ -395,13 +354,12 @@ async fn deletion_permission_shortage_is_distinguished_from_confirmation_require
         RoleApplyStatus::DeletionPermissionDenied(message) if message.contains("MANAGE_ROLES")
     ));
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(returned_state["pending_deletions"], serde_json::json!(["unused"]));
-    assert!(returned_state.get("deleted_roles").is_none());
+    assert_eq!(returned_state["roles"]["unused"], "200");
 }
 
-/// 明示削除成功を deleted として保存し、同じ削除と deleted からの再作成を無差分・新 ID で扱うことを保証する。
+/// 明示削除成功で対応を除去し、対応がない同じ論理 ID は通常の作成になることを保証する。
 #[tokio::test]
-async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
+async fn confirmed_deletion_removes_mapping_and_allows_recreation() {
     let source = lifecycle_source(RoleCatalog {
         roles: vec![role("200", "不要")],
         permission_names: BTreeSet::new(),
@@ -427,7 +385,7 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
 
     assert_eq!(deleted.status, RoleApplyStatus::Complete);
     let deleted_state: serde_json::Value = serde_json::from_str(&deleted.state_json).unwrap();
-    assert_eq!(deleted_state["deleted_roles"], serde_json::json!(["unused"]));
+    assert!(deleted_state["roles"].get("unused").is_none());
     assert!(
         plan_roles(&source, guild_id(100), delete_definition, &deleted.state_json)
             .await
@@ -439,11 +397,8 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
     let create_plan = plan_roles(&source, guild_id(100), create_definition, &deleted.state_json)
         .await
         .unwrap();
-    assert_eq!(
-        create_plan.get(&logical_id("unused")).and_then(Change::recreated),
-        Some(true)
-    );
-    let recreated = apply_roles(
+    assert!(matches!(create_plan.get(&logical_id("unused")), Some(Change::Create)));
+    let created = apply_roles(
         &source,
         guild_id(100),
         create_definition,
@@ -453,10 +408,10 @@ async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
     )
     .await
     .unwrap();
-    assert_eq!(recreated.status, RoleApplyStatus::Complete);
-    let recreated_state: serde_json::Value = serde_json::from_str(&recreated.state_json).unwrap();
-    assert_eq!(recreated_state["roles"]["unused"], "300");
-    assert!(recreated_state.get("deleted_roles").is_none());
+    assert_eq!(created.status, RoleApplyStatus::Complete);
+    let created_state: serde_json::Value = serde_json::from_str(&created.state_json).unwrap();
+    assert_eq!(created_state["roles"]["unused"], "300");
+    assert!(created_state["roles"].get("unused").is_some());
 }
 
 /// 削除成功直後の state を保持したまま最新構成の取得失敗で停止することを保証する。
@@ -490,13 +445,13 @@ async fn delete_refresh_failure_returns_deleted_state_without_rollback() {
     assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("取得に失敗")));
     assert_eq!(result.applied.len(), 1);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(returned_state["deleted_roles"], serde_json::json!(["unused"]));
+    assert!(returned_state["roles"].get("unused").is_none());
     assert!(source.catalog.lock().unwrap().roles.is_empty());
 }
 
-/// 削除応答不明時に既知 ID と意図を state に残し、存在確認で次回に確定できることを保証する。
+/// 削除応答不明時は対応表を維持し、最新の実構成で不在を確認した次回 apply で除去する。
 #[tokio::test]
-async fn unknown_delete_response_keeps_intent_until_existence_is_confirmed() {
+async fn unknown_delete_response_keeps_mapping_until_actual_absence() {
     let mut source = lifecycle_source(RoleCatalog {
         roles: vec![role("200", "不要")],
         permission_names: BTreeSet::new(),
@@ -525,15 +480,22 @@ async fn unknown_delete_response_keeps_intent_until_existence_is_confirmed() {
     assert_eq!(unknown.status, RoleApplyStatus::DeletionResponseUnknown);
     let unknown_state: serde_json::Value = serde_json::from_str(&unknown.state_json).unwrap();
     assert_eq!(unknown_state["roles"]["unused"], "200");
-    assert_eq!(unknown_state["pending_deletions"], serde_json::json!(["unused"]));
 
     source.catalog.lock().unwrap().roles.clear();
+    let rerun = plan_roles(&source, guild_id(100), definition, &unknown.state_json)
+        .await
+        .unwrap();
+    assert!(matches!(
+        rerun.get(&logical_id("unused")),
+        Some(Change::Delete { discord_id }) if *discord_id == role_id("200")
+    ));
+
     let resolved = apply_roles_with_options(
         &source,
         guild_id(100),
         definition,
         &unknown.state_json,
-        &plan,
+        &rerun,
         RoleApplyOptions { allow_deletions: true },
         Instant::now() + Duration::from_secs(60),
     )
@@ -541,86 +503,8 @@ async fn unknown_delete_response_keeps_intent_until_existence_is_confirmed() {
     .unwrap();
     assert_eq!(resolved.status, RoleApplyStatus::Complete);
     let resolved_state: serde_json::Value = serde_json::from_str(&resolved.state_json).unwrap();
-    assert_eq!(resolved_state["deleted_roles"], serde_json::json!(["unused"]));
-    assert!(resolved_state.get("pending_deletions").is_none());
+    assert!(resolved_state["roles"].get("unused").is_none());
     assert_eq!(source.deletes.lock().unwrap().len(), 1);
-}
-
-/// 削除応答後の存在確認が取得不能な場合、削除済みとはせず判定不能として返すことを保証する。
-#[tokio::test]
-async fn unknown_delete_response_with_failed_verification_is_indeterminate() {
-    let mut source = lifecycle_source(RoleCatalog {
-        roles: vec![role("200", "不要")],
-        permission_names: BTreeSet::new(),
-        grantable_permissions: BTreeSet::new(),
-        default_permissions: BTreeMap::new(),
-    });
-    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
-    source.apply_delete = false;
-    source.catalog_error_on_call = Some(3);
-    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
-    let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
-        .await
-        .unwrap();
-
-    let result = apply_roles_with_options(
-        &source,
-        guild_id(100),
-        definition,
-        &state_json,
-        &plan,
-        RoleApplyOptions { allow_deletions: true },
-        Instant::now() + Duration::from_secs(60),
-    )
-    .await
-    .unwrap();
-
-    assert!(matches!(
-        result.status,
-        RoleApplyStatus::DeletionVerificationIndeterminate(message) if message.contains("取得に失敗")
-    ));
-    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(returned_state["roles"]["unused"], "200");
-    assert_eq!(returned_state["pending_deletions"], serde_json::json!(["unused"]));
-    assert!(returned_state.get("deleted_roles").is_none());
-}
-
-/// 削除後の存在確認で閲覧権限が不足した場合、一般的な取得不能とは別に返すことを保証する。
-#[tokio::test]
-async fn unknown_delete_response_with_verification_permission_shortage_is_distinguished() {
-    let mut source = lifecycle_source(RoleCatalog {
-        roles: vec![role("200", "不要")],
-        permission_names: BTreeSet::new(),
-        grantable_permissions: BTreeSet::new(),
-        default_permissions: BTreeMap::new(),
-    });
-    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
-    source.apply_delete = false;
-    source.catalog_error_on_call = Some(3);
-    source.catalog_permission_denied = true;
-    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
-    let state_json = state("100", r#"{"unused":"200"}"#);
-    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
-        .await
-        .unwrap();
-
-    let result = apply_roles_with_options(
-        &source,
-        guild_id(100),
-        definition,
-        &state_json,
-        &plan,
-        RoleApplyOptions { allow_deletions: true },
-        Instant::now() + Duration::from_secs(60),
-    )
-    .await
-    .unwrap();
-
-    assert!(matches!(
-        result.status,
-        RoleApplyStatus::DeletionVerificationPermissionDenied(message) if message.contains("閲覧権限")
-    ));
 }
 
 /// active 対応先が予期せず消えた場合、自動再作成せず state エラーで停止することを保証する。
@@ -1047,7 +931,7 @@ impl RoleUpdater for FailsOnSecondUpdate {
 
 /// 途中の更新失敗で処理を停止し、適用済みと未適用の差分を正確に分けて返すことを保証する。
 #[tokio::test]
-async fn apply_stops_at_first_failure_and_reports_successful_and_pending_changes() {
+async fn apply_stops_at_first_failure_and_reports_successful_and_remaining_changes() {
     let source = FailsOnSecondUpdate {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![role("200", "A"), role("201", "B")],

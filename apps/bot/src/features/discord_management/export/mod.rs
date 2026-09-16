@@ -42,19 +42,14 @@ pub(super) async fn export_roles<S: RoleSource>(
         .collect::<BTreeMap<_, _>>();
     let catalog = source.role_catalog(&guild_id).await?;
     let catalog_ids = catalog.roles.iter().map(|role| role.id).collect::<BTreeSet<_>>();
-    if let Some(previous_state) = previous_state.as_ref() {
+    if previous_state.is_some() {
         for (logical_id, discord_id) in &previous_mappings {
             if catalog_ids.contains(discord_id) {
                 continue;
             }
-            let pending = previous_state.deleted_roles.contains(logical_id)
-                || previous_state.pending_creations.contains(logical_id)
-                || previous_state.pending_deletions.contains(logical_id);
-            if !pending {
-                return Err(ManagementError::InvalidState(format!(
-                    "論理 ID {logical_id} に対応する Role の Snowflake {discord_id} が Guild から予期せず消失しています"
-                )));
-            }
+            return Err(ManagementError::InvalidState(format!(
+                "論理 ID {logical_id} に対応する Role の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
         }
     }
     let roles = catalog.roles.into_iter().filter(|role| role.manageable);
@@ -152,30 +147,6 @@ pub(super) async fn export_roles<S: RoleSource>(
             .as_ref()
             .map(|state| state.members.clone())
             .unwrap_or_default(),
-        deleted_roles: previous_state
-            .as_ref()
-            .map(|state| state.deleted_roles.clone())
-            .unwrap_or_default(),
-        pending_creations: previous_state
-            .as_ref()
-            .map(|state| state.pending_creations.clone())
-            .unwrap_or_default(),
-        pending_deletions: previous_state
-            .as_ref()
-            .map(|state| state.pending_deletions.clone())
-            .unwrap_or_default(),
-        deleted_channels: previous_state
-            .as_ref()
-            .map(|state| state.deleted_channels.clone())
-            .unwrap_or_default(),
-        pending_channel_creations: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_creations.clone())
-            .unwrap_or_default(),
-        pending_channel_deletions: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_deletions.clone())
-            .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
 
@@ -208,19 +179,14 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .iter()
         .map(|channel| channel.id)
         .collect::<BTreeSet<_>>();
-    if let Some(previous_state) = previous_state.as_ref() {
+    if previous_state.is_some() {
         for (logical_id, discord_id) in &previous_mappings {
             if catalog_ids.contains(discord_id) {
                 continue;
             }
-            let pending = previous_state.deleted_channels.contains(logical_id)
-                || previous_state.pending_channel_creations.contains(logical_id)
-                || previous_state.pending_channel_deletions.contains(logical_id);
-            if !pending {
-                return Err(ManagementError::InvalidState(format!(
-                    "論理 ID {logical_id} に対応する Channel の Snowflake {discord_id} が Guild から予期せず消失しています"
-                )));
-            }
+            return Err(ManagementError::InvalidState(format!(
+                "論理 ID {logical_id} に対応する Channel の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
         }
     }
     let channels = catalog
@@ -390,30 +356,6 @@ pub(super) async fn export_channels<S: ChannelSource>(
         roles: exported_roles,
         channels: mappings,
         members: exported_members,
-        deleted_roles: previous_state
-            .as_ref()
-            .map(|state| state.deleted_roles.clone())
-            .unwrap_or_default(),
-        pending_creations: previous_state
-            .as_ref()
-            .map(|state| state.pending_creations.clone())
-            .unwrap_or_default(),
-        pending_deletions: previous_state
-            .as_ref()
-            .map(|state| state.pending_deletions.clone())
-            .unwrap_or_default(),
-        deleted_channels: previous_state
-            .as_ref()
-            .map(|state| state.deleted_channels.clone())
-            .unwrap_or_default(),
-        pending_channel_creations: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_creations.clone())
-            .unwrap_or_default(),
-        pending_channel_deletions: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_deletions.clone())
-            .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
 
