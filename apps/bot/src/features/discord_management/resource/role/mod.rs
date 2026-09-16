@@ -2,11 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{
     configuration::{
-        Color, DefinitionFile, KnownPermission, ManagedValue, RoleAttributes, RoleDefinition, StateFile,
-        everyone_logical_id, resolve_role_id,
+        Color, DefinitionFile, KnownPermission, RoleAttributes, RoleDefinition, StateFile, everyone_logical_id,
+        resolve_role_id,
     },
     domain::ManagementError,
-    port::{RoleCatalog, RoleSnapshot, RoleUpdate},
+    port::{RoleCatalog, RoleCreate, RoleSnapshot, RoleUpdate},
 };
 use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettingsSetId};
 
@@ -54,22 +54,24 @@ impl AttributeChanges {
         default_permissions: &BTreeMap<KnownPermission, bool>,
         grantable_permissions: &BTreeSet<KnownPermission>,
     ) -> Result<Option<Self>, ManagementError> {
-        let name = desired
-            .name
-            .as_ref()
-            .and_then(|value| ValueChange::between(actual.name.clone(), resolve(value, "new role".to_owned())));
+        let name = desired.name.as_ref().and_then(|value| {
+            ValueChange::between(
+                actual.name.clone(),
+                value.as_value().cloned().unwrap_or_else(|| "new role".to_owned()),
+            )
+        });
         let color = desired
             .color
             .as_ref()
-            .and_then(|value| ValueChange::between(actual.color, resolve(value, Color::default())));
+            .and_then(|value| ValueChange::between(actual.color, value.as_value().copied().unwrap_or_default()));
         let hoist = desired
             .hoist
             .as_ref()
-            .and_then(|value| ValueChange::between(actual.hoist, resolve(value, false)));
+            .and_then(|value| ValueChange::between(actual.hoist, value.as_value().copied().unwrap_or(false)));
         let mentionable = desired
             .mentionable
             .as_ref()
-            .and_then(|value| ValueChange::between(actual.mentionable, resolve(value, false)));
+            .and_then(|value| ValueChange::between(actual.mentionable, value.as_value().copied().unwrap_or(false)));
         let mut permissions = BTreeMap::new();
         for (permission, value) in &desired.permissions {
             let current = *actual
@@ -79,7 +81,7 @@ impl AttributeChanges {
             let default = *default_permissions
                 .get(permission)
                 .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-            let desired = resolve(value, default);
+            let desired = value.as_value().copied().unwrap_or(default);
             if !current && desired && !grantable_permissions.contains(permission) {
                 return Err(ManagementError::InvalidDefinition(format!(
                     "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
@@ -254,7 +256,7 @@ impl Change {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Plan {
     changes: BTreeMap<RoleLogicalId, Change>,
-    create_desired: BTreeMap<RoleLogicalId, RoleAttributes>,
+    create_desired: BTreeMap<RoleLogicalId, RoleCreate>,
 }
 
 pub(crate) type RolePlan = Plan;
@@ -284,7 +286,7 @@ impl Plan {
         debug_assert!(self.changes.insert(logical_id, change).is_none());
     }
 
-    fn insert_create(&mut self, logical_id: RoleLogicalId, change: Change, desired: RoleAttributes) {
+    fn insert_create(&mut self, logical_id: RoleLogicalId, change: Change, desired: RoleCreate) {
         debug_assert!(matches!(change, Change::Create));
         debug_assert!(self.changes.insert(logical_id.clone(), change).is_none());
         self.create_desired.insert(logical_id, desired);
@@ -325,37 +327,21 @@ impl Plan {
     }
 }
 
-fn render_create_attributes(attributes: &RoleAttributes, output: &mut String) {
+fn render_create_attributes(attributes: &RoleCreate, output: &mut String) {
     output.push_str("  desired:\n");
-    if let Some(ManagedValue::Value(name)) = &attributes.name {
-        output.push_str(&format!("    name: {}\n", display_quoted_string(name)));
-    }
-    if let Some(ManagedValue::Value(color)) = &attributes.color {
-        output.push_str(&format!("    color: {}\n", color.get()));
-    }
-    if let Some(hoist) = &attributes.hoist {
-        render_create_value(output, "hoist", hoist);
-    }
-    if let Some(mentionable) = &attributes.mentionable {
-        render_create_value(output, "mentionable", mentionable);
-    }
+    output.push_str(&format!("    name: {}\n", display_quoted_string(&attributes.name)));
+    output.push_str(&format!("    color: {}\n", attributes.color.get()));
+    output.push_str(&format!("    hoist: {}\n", attributes.hoist));
+    output.push_str(&format!("    mentionable: {}\n", attributes.mentionable));
     if !attributes.permissions.is_empty() {
         output.push_str("    permissions: {");
         for (index, (permission, value)) in attributes.permissions.iter().enumerate() {
             if index != 0 {
                 output.push_str(", ");
             }
-            if let ManagedValue::Value(value) = value {
-                output.push_str(&format!("{permission}: {value}"));
-            }
+            output.push_str(&format!("{permission}: {value}"));
         }
         output.push_str("}\n");
-    }
-}
-
-fn render_create_value<T: std::fmt::Display>(output: &mut String, attribute: &str, value: &ManagedValue<T>) {
-    if let ManagedValue::Value(value) = value {
-        output.push_str(&format!("    {attribute}: {value}\n"));
     }
 }
 
@@ -374,48 +360,57 @@ pub(crate) fn compose_attributes(
     composed
 }
 
-/// Role 作成時に Discord API へ送る具体値へ、明示した属性だけを解決します。
+/// Role 作成時に Discord API へ送る concrete payload を組み立てます。
 ///
-/// 作成 plan の表示と apply の payload が同じ既定値を使うための共有 resolver です。
-pub(crate) fn resolve_role_create_attributes(
+/// 作成 plan の表示と apply の payload が同じ既定値を使うため、plan にこの payload を
+/// 保持します。入力は parse/validator 済みですが、設定セット合成後にしか決められない
+/// 作成時の必須値と Discord 側 capability はここで検査します。
+fn build_role_create(
     desired: &RoleAttributes,
+    permission_names: &BTreeSet<KnownPermission>,
     default_permissions: &BTreeMap<KnownPermission, bool>,
-) -> RoleAttributes {
-    RoleAttributes {
-        name: desired
-            .name
-            .as_ref()
-            .map(|value| ManagedValue::Value(resolve(value, "new role".to_owned()))),
+    grantable_permissions: &BTreeSet<KnownPermission>,
+    logical_id: &RoleLogicalId,
+) -> Result<RoleCreate, ManagementError> {
+    let name = desired
+        .name
+        .as_ref()
+        .map(|value| value.resolve("new role".to_owned()))
+        .ok_or_else(|| ManagementError::InvalidDefinition(format!("新しい Role {logical_id} には name が必要です")))?;
+
+    let mut permissions: BTreeMap<_, _> = permission_names
+        .iter()
+        .map(|permission| (permission.clone(), false))
+        .collect();
+    for (permission, value) in &desired.permissions {
+        let default = *default_permissions
+            .get(permission)
+            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
+        let resolved = value.as_value().copied().unwrap_or(default);
+        if resolved && !grantable_permissions.contains(permission) {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
+            )));
+        }
+        permissions.insert(permission.clone(), resolved);
+    }
+
+    Ok(RoleCreate {
+        name,
         color: desired
             .color
             .as_ref()
-            .map(|value| ManagedValue::Value(resolve(value, Color::default()))),
+            .map_or_else(Color::default, |value| value.as_value().copied().unwrap_or_default()),
         hoist: desired
             .hoist
             .as_ref()
-            .map(|value| ManagedValue::Value(resolve(value, false))),
+            .is_some_and(|value| value.as_value().copied().unwrap_or(false)),
         mentionable: desired
             .mentionable
             .as_ref()
-            .map(|value| ManagedValue::Value(resolve(value, false))),
-        permissions: desired
-            .permissions
-            .iter()
-            .map(|(permission, value)| {
-                let default = *default_permissions
-                    .get(permission)
-                    .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-                (permission.clone(), ManagedValue::Value(resolve(value, default)))
-            })
-            .collect(),
-    }
-}
-
-pub(crate) fn resolve<T: Clone>(value: &ManagedValue<T>, default: T) -> T {
-    match value {
-        ManagedValue::Value(value) => value.clone(),
-        ManagedValue::Default => default,
-    }
+            .is_some_and(|value| value.as_value().copied().unwrap_or(false)),
+        permissions,
+    })
 }
 
 /// Role の希望構成と実構成から、Role 部分の変更計画を組み立てます。
@@ -483,13 +478,15 @@ pub(crate) fn build_plan(
                     "参照専用 Role {logical_id} の対応がありません"
                 )));
             }
-            validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
             let attributes = compose_attributes(desired, &definition.settings_sets.role);
-            plan.insert_create(
-                logical_id.clone(),
-                Change::Create,
-                resolve_role_create_attributes(&attributes, &catalog.default_permissions),
-            );
+            let create = build_role_create(
+                &attributes,
+                &catalog.permission_names,
+                &catalog.default_permissions,
+                &catalog.grantable_permissions,
+                logical_id,
+            )?;
+            plan.insert_create(logical_id.clone(), Change::Create, create);
             continue;
         };
 
@@ -538,39 +535,6 @@ fn add_update(
         &catalog.grantable_permissions,
     )? {
         plan.insert(logical_id.clone(), Change::Update { discord_id, attributes });
-    }
-    Ok(())
-}
-
-fn validate_role_creation(
-    logical_id: &RoleLogicalId,
-    definition: &RoleDefinition,
-    settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
-    catalog: &RoleCatalog,
-) -> Result<(), ManagementError> {
-    let attributes = compose_attributes(definition, settings_sets);
-    let Some(name) = attributes.name.as_ref() else {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "新しい Role {logical_id} には name が必要です"
-        )));
-    };
-    let name = resolve(name, "new role".to_owned());
-    if name.is_empty() {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "新しい Role {logical_id} の name は空にできません"
-        )));
-    }
-    for (permission, value) in &attributes.permissions {
-        let default = *catalog
-            .default_permissions
-            .get(permission)
-            .expect("RoleCatalog は既知の権限の Guild 既定値をすべて保持します");
-        let resolved = resolve(value, default);
-        if resolved && !catalog.grantable_permissions.contains(permission) {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Role {logical_id} に権限 {permission} を付与できません。Bot 自身がこの権限を持っていません"
-            )));
-        }
     }
     Ok(())
 }

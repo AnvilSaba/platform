@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::{
     configuration::{
         ChannelAttributes, ChannelDefinition, ChannelKind, ChannelValue, DefinitionFile, KnownPermission,
-        OverwriteValue, StateFile,
+        OverwriteTarget, OverwriteValue, StateFile,
     },
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, RoleId},
@@ -446,6 +446,38 @@ struct CreateDesired {
     parent_logical_id: Option<ChannelLogicalId>,
 }
 
+impl CreateDesired {
+    /// Plan 時に解決できなかった親だけを、直前の作成結果を含む state から補完します。
+    /// その他の create payload は plan 時の concrete 値をそのまま使います。
+    fn payload_for_apply(
+        &self,
+        state: &StateFile,
+        catalog: &ChannelCatalog,
+        logical_id: &ChannelLogicalId,
+    ) -> Result<ChannelCreate, ManagementError> {
+        let mut payload = self.payload.clone();
+        if let Some(parent_logical_id) = &self.parent_logical_id {
+            if payload.parent_id.is_none() {
+                let parent_id = state.channels.get(parent_logical_id).copied().ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel {logical_id} の親 {parent_logical_id} の作成結果が state にありません"
+                    ))
+                })?;
+                payload.parent_id = Some(parent_id);
+            }
+            let parent_id = payload
+                .parent_id
+                .expect("親論理 ID がある create payload は親IDを持ちます");
+            if !catalog.channels.iter().any(|channel| channel.id == parent_id) {
+                return Err(ManagementError::InvalidState(format!(
+                    "Channel {logical_id} の親 {parent_logical_id} の Snowflake {parent_id} が Guild から予期せず消失しています"
+                )));
+            }
+        }
+        Ok(payload)
+    }
+}
+
 pub(crate) type ChannelPlan = Plan;
 
 impl Plan {
@@ -607,10 +639,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
         )?;
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
             let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
-            let parent_logical_id = match attributes.parent.as_ref() {
-                Some(ChannelValue::Value(parent)) => Some(parent.clone()),
-                Some(ChannelValue::Default | ChannelValue::Clear) | None => None,
-            };
+            let parent_logical_id = attributes.parent.as_ref().and_then(ChannelValue::as_value).cloned();
             plan.insert_create(
                 logical_id.clone(),
                 Change::Create,
@@ -743,8 +772,13 @@ fn validate_category_children(
             )));
         }
         let attributes = compose_attributes(child_definition);
-        if matches!(attributes.parent, None | Some(ChannelValue::Default))
-            || matches!(attributes.parent, Some(ChannelValue::Value(ref parent)) if parent == category_logical_id)
+        if attributes.parent.is_none()
+            || attributes.parent.as_ref().is_some_and(ChannelValue::is_default)
+            || attributes
+                .parent
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .is_some_and(|parent| parent == category_logical_id)
         {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Category {category_logical_id} の削除時、子 Channel {child_logical_id} の parent を変更または clear してください"
@@ -783,7 +817,7 @@ fn validate_channel_parent(
             "Category {logical_id} には parent を指定できません"
         )));
     }
-    let ChannelValue::Value(parent_logical_id) = parent else {
+    let Some(parent_logical_id) = parent.as_value() else {
         return Ok(());
     };
     let Some(parent_definition) = definition.channels.get(parent_logical_id) else {
@@ -844,16 +878,11 @@ fn validate_channel_creation(
     let kind = attributes.kind.ok_or_else(|| {
         ManagementError::InvalidDefinition(format!("新しい Channel {logical_id} には type が必要です"))
     })?;
-    let Some(ChannelValue::Value(name)) = attributes.name.as_ref() else {
+    let Some(_) = attributes.name.as_ref().and_then(ChannelValue::as_value) else {
         return Err(ManagementError::InvalidDefinition(format!(
             "新しい Channel {logical_id} には name の具体値が必要です"
         )));
     };
-    if name.is_empty() {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "新しい Channel {logical_id} の name は空にできません"
-        )));
-    }
     validate_channel_parent(
         logical_id,
         kind,
@@ -863,7 +892,7 @@ fn validate_channel_creation(
         actual,
         planned_channel_creations,
     )?;
-    if let Some(ChannelValue::Value(parent)) = &attributes.parent
+    if let Some(parent) = attributes.parent.as_ref().and_then(ChannelValue::as_value)
         && definition
             .channels
             .get(parent)
@@ -878,18 +907,10 @@ fn validate_channel_creation(
 }
 
 fn resolve_name(value: &ChannelValue<String>, logical_id: &ChannelLogicalId) -> Result<String, ManagementError> {
-    match value {
-        ChannelValue::Value(value) if !value.is_empty() => Ok(value.clone()),
-        ChannelValue::Value(_) => Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の name は空にできません"
-        ))),
-        ChannelValue::Default => Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の name に default は指定できません"
-        ))),
-        ChannelValue::Clear => Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の name は解除できません"
-        ))),
-    }
+    value
+        .as_value()
+        .cloned()
+        .ok_or_else(|| ManagementError::InvalidDefinition(format!("Channel {logical_id} の name は空にできません")))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -904,58 +925,44 @@ fn resolve_parent_target(
     state: &StateFile,
     planned_channel_creations: &BTreeSet<ChannelLogicalId>,
 ) -> Result<ParentTarget, ManagementError> {
-    match value {
-        ChannelValue::Value(parent) => {
-            if planned_channel_creations.contains(parent) {
-                Ok(ParentTarget::Planned(parent.clone()))
-            } else if let Some(parent_id) = state.channels.get(parent).copied() {
-                Ok(ParentTarget::Resolved(Some(parent_id)))
-            } else {
-                Err(ManagementError::InvalidState(format!(
-                    "Channel {logical_id} の親 {parent} の対応がありません"
-                )))
-            }
+    if let Some(parent) = value.as_value() {
+        if planned_channel_creations.contains(parent) {
+            Ok(ParentTarget::Planned(parent.clone()))
+        } else if let Some(parent_id) = state.channels.get(parent).copied() {
+            Ok(ParentTarget::Resolved(Some(parent_id)))
+        } else {
+            Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の親 {parent} の対応がありません"
+            )))
         }
-        ChannelValue::Clear => Ok(ParentTarget::Resolved(None)),
-        ChannelValue::Default => Err(ManagementError::InvalidDefinition(format!(
+    } else if value.is_clear() {
+        Ok(ParentTarget::Resolved(None))
+    } else {
+        Err(ManagementError::InvalidDefinition(format!(
             "Channel {logical_id} の parent に default は指定できません"
-        ))),
+        )))
     }
 }
 
 fn resolve_topic(value: &ChannelValue<String>) -> Option<String> {
-    match value {
-        ChannelValue::Value(value) => Some(value.clone()),
-        ChannelValue::Default | ChannelValue::Clear => None,
-    }
+    value.resolve_optional(None)
 }
 
 fn resolve_bool(value: &ChannelValue<bool>, default: bool) -> Result<bool, ManagementError> {
-    Ok(match value {
-        ChannelValue::Value(value) => *value,
-        ChannelValue::Default => default,
-        ChannelValue::Clear => {
-            return Err(ManagementError::InvalidDefinition(
-                "この属性は解除できません".to_owned(),
-            ));
-        }
-    })
+    if value.is_clear() {
+        return Err(ManagementError::InvalidDefinition(
+            "この属性は解除できません".to_owned(),
+        ));
+    }
+    Ok(value.resolve(default, default))
 }
 
 fn resolve_u16(value: &ChannelValue<u16>, default: u16) -> Result<u16, ManagementError> {
-    Ok(match value {
-        ChannelValue::Value(value) => *value,
-        ChannelValue::Default => default,
-        ChannelValue::Clear => 0,
-    })
+    Ok(value.resolve(default, 0))
 }
 
 fn resolve_nullable_u16(value: &ChannelValue<u16>, default: Option<u16>) -> Result<Option<u16>, ManagementError> {
-    Ok(match value {
-        ChannelValue::Value(value) => Some(*value),
-        ChannelValue::Default => default,
-        ChannelValue::Clear => None,
-    })
+    Ok(value.resolve_optional(default))
 }
 
 fn build_overwrite_changes(
@@ -985,42 +992,33 @@ fn build_overwrite_changes(
 }
 
 fn resolve_overwrite_target(
-    subject: &str,
+    subject: &OverwriteTarget,
     logical_id: &ChannelLogicalId,
     state: &StateFile,
 ) -> Result<ChannelOverwriteTarget, ManagementError> {
-    if subject == "everyone" {
-        return Ok(ChannelOverwriteTarget::Everyone);
-    }
-    if let Some(role) = subject.strip_prefix("role:") {
-        let role = super::super::ids::RoleLogicalId::parse(role).map_err(|error| {
-            ManagementError::InvalidDefinition(format!("Channel {logical_id} の {subject} が不正です: {error}"))
-        })?;
-        let discord_id = if role == super::super::configuration::everyone_logical_id() {
-            RoleId::new(state.guild_id.get())
-        } else {
-            state.roles.get(&role).copied().ok_or_else(|| {
+    match subject {
+        OverwriteTarget::Everyone => Ok(ChannelOverwriteTarget::Everyone),
+        OverwriteTarget::Role(role) => {
+            let discord_id = if *role == super::super::configuration::everyone_logical_id() {
+                RoleId::new(state.guild_id.get())
+            } else {
+                state.roles.get(role).copied().ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel {logical_id} の権限対象 Role {role} の対応がありません"
+                    ))
+                })?
+            };
+            Ok(ChannelOverwriteTarget::Role(discord_id))
+        }
+        OverwriteTarget::Member(member) => {
+            let discord_id = state.members.get(member).copied().ok_or_else(|| {
                 ManagementError::InvalidState(format!(
-                    "Channel {logical_id} の権限対象 Role {role} の対応がありません"
+                    "Channel {logical_id} の権限対象 Member {member} の対応がありません"
                 ))
-            })?
-        };
-        return Ok(ChannelOverwriteTarget::Role(discord_id));
+            })?;
+            Ok(ChannelOverwriteTarget::Member(discord_id))
+        }
     }
-    if let Some(member) = subject.strip_prefix("member:") {
-        let member = super::super::ids::MemberLogicalId::parse(member).map_err(|error| {
-            ManagementError::InvalidDefinition(format!("Channel {logical_id} の {subject} が不正です: {error}"))
-        })?;
-        let discord_id = state.members.get(&member).copied().ok_or_else(|| {
-            ManagementError::InvalidState(format!(
-                "Channel {logical_id} の権限対象 Member {member} の対応がありません"
-            ))
-        })?;
-        return Ok(ChannelOverwriteTarget::Member(discord_id));
-    }
-    Err(ManagementError::InvalidDefinition(format!(
-        "Channel {logical_id} の権限対象 {subject} が不正です"
-    )))
 }
 
 pub(crate) fn desired_channel_create_with_catalog(
@@ -1052,19 +1050,18 @@ pub(crate) fn desired_channel_create_with_catalog(
         attributes.name.as_ref().expect("作成前に Channel name を検証します"),
         logical_id,
     )?;
-    let parent_id = match attributes.parent.as_ref() {
-        Some(value) => match resolve_parent_target(value, logical_id, state, &planned_channel_creations)? {
+    let parent_id = attributes
+        .parent
+        .as_ref()
+        .map(|value| resolve_parent_target(value, logical_id, state, &planned_channel_creations))
+        .transpose()?
+        .and_then(|target| match target {
             ParentTarget::Resolved(parent_id) => parent_id,
             // 同じ plan 内で先に作成する Category は、作成後に state へ追加された
             // snowflake を apply 時にもう一度解決します。
             ParentTarget::Planned(_) => None,
-        },
-        None => None,
-    };
-    let topic = match attributes.topic.as_ref() {
-        Some(value) => resolve_topic(value),
-        None => None,
-    };
+        });
+    let topic = attributes.topic.as_ref().and_then(resolve_topic);
     let nsfw = attributes
         .nsfw
         .as_ref()
@@ -1077,14 +1074,18 @@ pub(crate) fn desired_channel_create_with_catalog(
         .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS))
         .transpose()?
         .unwrap_or(DEFAULT_SLOWMODE_SECONDS);
-    let default_auto_archive_minutes = match attributes.default_auto_archive_minutes.as_ref() {
-        Some(value) => resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES)?,
-        None => DEFAULT_AUTO_ARCHIVE_MINUTES,
-    };
-    let default_thread_slowmode_seconds = match attributes.default_thread_slowmode_seconds.as_ref() {
-        Some(value) => resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS)?,
-        None => DEFAULT_THREAD_SLOWMODE_SECONDS,
-    };
+    let default_auto_archive_minutes = attributes
+        .default_auto_archive_minutes
+        .as_ref()
+        .map(|value| resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES))
+        .transpose()?
+        .unwrap_or(DEFAULT_AUTO_ARCHIVE_MINUTES);
+    let default_thread_slowmode_seconds = attributes
+        .default_thread_slowmode_seconds
+        .as_ref()
+        .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
+        .transpose()?
+        .unwrap_or(DEFAULT_THREAD_SLOWMODE_SECONDS);
     let mut overwrites = BTreeMap::new();
     for (subject, permissions) in &attributes.overwrites {
         let target = resolve_overwrite_target(subject, logical_id, state)?;
