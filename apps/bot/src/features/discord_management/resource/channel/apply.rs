@@ -11,7 +11,7 @@ use crate::features::discord_management::{
     ids::{ChannelId, ChannelLogicalId, GuildId},
     port::{
         ChannelCatalog, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget, ChannelSnapshot,
-        ChannelSource, ChannelUpdate, ChannelUpdateOutcome, ChannelUpdater,
+        ChannelSource, ChannelUpdate, ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater,
     },
 };
 
@@ -337,6 +337,7 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
 }
 
 impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
+    #[cfg(test)]
     pub(crate) async fn apply_channels(
         &self,
         guild_id: GuildId,
@@ -407,7 +408,6 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         .expect("作成対象 Channel は definition に存在します");
                     let create = desired_channel_create_with_catalog(
                         desired,
-                        &session.definition.settings_sets.channel,
                         &logical_id,
                         &session.state,
                         &session.definition,
@@ -587,14 +587,14 @@ fn ordered_changes(
         let kind = definition
             .channels
             .get(logical_id)
-            .map(|channel| compose_attributes(channel, &definition.settings_sets.channel).kind);
+            .and_then(|channel| compose_attributes(channel).kind);
         match change {
             Change::Create { .. } => match kind {
-                Some(Some(ChannelKind::Category)) => 0,
+                Some(ChannelKind::Category) => 0,
                 _ => 1,
             },
             Change::Delete { .. } => match kind {
-                Some(Some(ChannelKind::Category)) => 3,
+                Some(ChannelKind::Category) => 3,
                 _ => 2,
             },
             Change::Update { .. } => 1,
@@ -606,20 +606,30 @@ fn ordered_changes(
 
 fn channel_matches_update(channel: &ChannelSnapshot, update: &ChannelUpdate) -> bool {
     update.name.as_ref().is_none_or(|name| channel.name == *name)
-        && update.parent_id.is_none_or(|parent| channel.parent_id == parent)
-        && update.topic.as_ref().is_none_or(|topic| channel.topic == *topic)
+        && optional_matches(channel.parent_id.as_ref(), &update.parent_id)
+        && optional_matches(channel.topic.as_ref(), &update.topic)
         && update.nsfw.is_none_or(|nsfw| channel.nsfw == nsfw)
         && update
             .slowmode_seconds
             .is_none_or(|seconds| channel.slowmode_seconds == seconds)
-        && update
-            .default_auto_archive_minutes
-            .is_none_or(|value| channel.default_auto_archive_minutes == value)
-        && update
-            .default_thread_slowmode_seconds
-            .is_none_or(|value| channel.default_thread_slowmode_seconds == value)
+        && optional_matches(
+            channel.default_auto_archive_minutes.as_ref(),
+            &update.default_auto_archive_minutes,
+        )
+        && optional_matches(
+            channel.default_thread_slowmode_seconds.as_ref(),
+            &update.default_thread_slowmode_seconds,
+        )
         && update
             .overwrites
             .as_ref()
             .is_none_or(|overwrites| channel.overwrites == *overwrites)
+}
+
+fn optional_matches<T: PartialEq>(actual: Option<&T>, update: &ChannelUpdateValue<T>) -> bool {
+    match update {
+        ChannelUpdateValue::Keep => true,
+        ChannelUpdateValue::Set(desired) => actual == Some(desired),
+        ChannelUpdateValue::Clear => actual.is_none(),
+    }
 }

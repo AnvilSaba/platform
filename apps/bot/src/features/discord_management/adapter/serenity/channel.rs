@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use serde_json::{Map, Value, json};
+use serde::{Serialize, Serializer};
 use serenity::{
     Error as SerenityError,
     all::{
         AutoArchiveDuration, ChannelId as SerenityChannelId, ChannelType, GuildId as SerenityGuildId,
-        PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId as SerenityRoleId, UserId,
+        PermissionOverwrite, PermissionOverwriteType, Permissions, UserId,
     },
     http::{HttpError, StatusCode},
     model::channel::GuildChannel,
@@ -17,11 +17,15 @@ use crate::features::discord_management::{
     ids::{ChannelId, GuildId, MemberId, RoleId},
     port::{
         ChannelCatalog, ChannelCreate, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
-        ChannelOverwriteTarget, ChannelSnapshot, ChannelSource, ChannelUpdate, ChannelUpdateOutcome, ChannelUpdater,
+        ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSnapshot, ChannelSource, ChannelUpdate,
+        ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater, PermissionBits,
     },
 };
 
 use super::{resource::SerenityRoleSource, role::permission_vocabulary};
+
+#[cfg(test)]
+use serenity::all::RoleId as SerenityRoleId;
 
 impl From<SerenityChannelId> for ChannelId {
     fn from(id: SerenityChannelId) -> Self {
@@ -45,6 +49,171 @@ impl From<MemberId> for UserId {
     fn from(id: MemberId) -> Self {
         Self::new(id.get())
     }
+}
+
+/// Discord の snowflake は JSON 上では文字列として送ります。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiscordSnowflake(u64);
+
+impl Serialize for DiscordSnowflake {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+/// Discord API の channel type 値です。enum の意味を adapter 内に閉じ込めます。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscordChannelType {
+    Text,
+    Category,
+}
+
+impl Serialize for DiscordChannelType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(match self {
+            Self::Text => 0,
+            Self::Category => 4,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+struct DiscordSeconds(u16);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+struct DiscordMinutes(u16);
+
+/// Discord の permission bitfield は JSON 上では文字列として送ります。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiscordPermissionBits(u64);
+
+impl Serialize for DiscordPermissionBits {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscordPermissionOverwriteType {
+    Role,
+    Member,
+}
+
+impl Serialize for DiscordPermissionOverwriteType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(match self {
+            Self::Role => 0,
+            Self::Member => 1,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DiscordPermissionOverwrite {
+    id: DiscordSnowflake,
+    #[serde(rename = "type")]
+    kind: DiscordPermissionOverwriteType,
+    allow: DiscordPermissionBits,
+    deny: DiscordPermissionBits,
+}
+
+/// Discord の nullable な PATCH 属性を表します。
+///
+/// `Keep` はフィールド自体を省略し、`Clear` は JSON null を送ります。
+#[derive(Debug)]
+enum NullableChannelField<T> {
+    Keep,
+    Set(T),
+    Clear,
+}
+
+impl<T> NullableChannelField<T> {
+    fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
+}
+
+impl<T: Serialize> Serialize for NullableChannelField<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Keep => serializer.serialize_unit(),
+            Self::Set(value) => value.serialize(serializer),
+            Self::Clear => serializer.serialize_none(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum CreateChannelRequest {
+    Text(CreateTextChannelRequest),
+    Category(CreateCategoryChannelRequest),
+}
+
+#[derive(Debug, Serialize)]
+struct CreateTextChannelRequest {
+    name: String,
+    #[serde(rename = "type")]
+    channel_type: DiscordChannelType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<DiscordSnowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    topic: Option<String>,
+    nsfw: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rate_limit_per_user: Option<DiscordSeconds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_auto_archive_duration: Option<DiscordMinutes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_thread_rate_limit_per_user: Option<DiscordSeconds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateCategoryChannelRequest {
+    name: String,
+    #[serde(rename = "type")]
+    channel_type: DiscordChannelType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModifyChannelRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
+    parent_id: NullableChannelField<DiscordSnowflake>,
+    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
+    topic: NullableChannelField<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nsfw: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rate_limit_per_user: Option<DiscordSeconds>,
+    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
+    default_auto_archive_duration: NullableChannelField<DiscordMinutes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_thread_rate_limit_per_user: Option<DiscordSeconds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
 }
 
 impl ChannelSource for SerenityRoleSource<'_> {
@@ -118,10 +287,11 @@ fn channel_snapshot(
         ChannelType::Text => ChannelKind::Text,
         _ => ChannelKind::Unsupported,
     };
+    let known_permission_mask = known_permission_mask(known_permissions);
     let overwrites = channel
         .permission_overwrites
         .iter()
-        .filter_map(|overwrite| overwrite_snapshot(overwrite, guild_id, known_permissions))
+        .filter_map(|overwrite| overwrite_snapshot(overwrite, guild_id, known_permissions, known_permission_mask))
         .collect::<Result<BTreeMap<_, _>, _>>();
     overwrites.map(|overwrites| ChannelSnapshot {
         id: ChannelId::from(channel.id),
@@ -152,14 +322,15 @@ fn overwrite_snapshot(
     overwrite: &PermissionOverwrite,
     guild_id: &GuildId,
     known_permissions: &[KnownPermission],
-) -> Option<Result<(ChannelOverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>), ManagementError>> {
+    known_permission_mask: Permissions,
+) -> Option<Result<(ChannelOverwriteTarget, ChannelOverwritePermissions), ManagementError>> {
     let target = match overwrite.kind {
         PermissionOverwriteType::Role(role_id) if role_id.get() == guild_id.get() => ChannelOverwriteTarget::Everyone,
         PermissionOverwriteType::Role(role_id) => ChannelOverwriteTarget::Role(RoleId::new(role_id.get())),
         PermissionOverwriteType::Member(user_id) => ChannelOverwriteTarget::Member(MemberId::new(user_id.get())),
         _ => return None,
     };
-    let permissions = known_permissions
+    let known = known_permissions
         .iter()
         .filter_map(|permission| {
             let serenity_permission = super::role::serenity_permission(permission);
@@ -172,7 +343,22 @@ fn overwrite_snapshot(
             }
         })
         .collect::<BTreeMap<_, _>>();
-    Some(Ok((target, permissions)))
+    let allow_unknown = PermissionBits::new(overwrite.allow.bits() & !known_permission_mask.bits());
+    let deny_unknown = PermissionBits::new(overwrite.deny.bits() & !known_permission_mask.bits());
+    Some(Ok((
+        target,
+        ChannelOverwritePermissions {
+            known,
+            allow_unknown,
+            deny_unknown,
+        },
+    )))
+}
+
+fn known_permission_mask(known_permissions: &[KnownPermission]) -> Permissions {
+    known_permissions.iter().fold(Permissions::empty(), |mask, permission| {
+        mask | super::role::serenity_permission(permission)
+    })
 }
 
 impl ChannelUpdater for SerenityRoleSource<'_> {
@@ -188,19 +374,6 @@ impl ChannelUpdater for SerenityRoleSource<'_> {
             ));
         }
         let serenity_channel_id = SerenityChannelId::from(*channel_id);
-        // Channel 編集の `permission_overwrites` は配列全体の置換です。後続の置換で
-        // 削除対象が先に消えてしまわないよう、delete_permission を先に実行します。
-        for target in &update.permission_overwrites_to_delete {
-            let permission_type = permission_overwrite_type(guild_id, target);
-            match serenity_channel_id
-                .delete_permission(self.http, permission_type, None)
-                .await
-            {
-                Ok(()) => {}
-                Err(error) => return map_channel_update_error(error),
-            }
-        }
-
         if channel_edit_is_required(&update) {
             let payload = edit_channel_payload(guild_id, &update);
             match self.http.edit_channel(serenity_channel_id.into(), &payload, None).await {
@@ -214,38 +387,21 @@ impl ChannelUpdater for SerenityRoleSource<'_> {
 
 fn channel_edit_is_required(update: &ChannelUpdate) -> bool {
     update.name.is_some()
-        || update.parent_id.is_some()
-        || update.topic.is_some()
+        || !update.parent_id.is_keep()
+        || !update.topic.is_keep()
         || update.nsfw.is_some()
         || update.slowmode_seconds.is_some()
-        || update.default_auto_archive_minutes.is_some()
-        || update.default_thread_slowmode_seconds.is_some()
-        || update
-            .overwrites
-            .as_ref()
-            .is_some_and(|overwrites| !overwrites.is_empty())
+        || !update.default_auto_archive_minutes.is_keep()
+        || !update.default_thread_slowmode_seconds.is_keep()
+        || update.overwrites.is_some()
 }
 
 fn channel_update_requires_manage_roles(update: &ChannelUpdate) -> bool {
-    !update.permission_overwrites_to_delete.is_empty()
-        || update
-            .overwrites
-            .as_ref()
-            .is_some_and(|overwrites| !overwrites.is_empty())
+    update.overwrites.is_some()
 }
 
 fn has_manage_roles(permissions: Permissions) -> bool {
     permissions.contains(Permissions::MANAGE_ROLES) || permissions.contains(Permissions::ADMINISTRATOR)
-}
-
-fn permission_overwrite_type(guild_id: &GuildId, target: &ChannelOverwriteTarget) -> PermissionOverwriteType {
-    match target {
-        ChannelOverwriteTarget::Everyone => {
-            PermissionOverwriteType::Role(SerenityGuildId::from(*guild_id).everyone_role())
-        }
-        ChannelOverwriteTarget::Role(role_id) => PermissionOverwriteType::Role(SerenityRoleId::new(role_id.get())),
-        ChannelOverwriteTarget::Member(member_id) => PermissionOverwriteType::Member(UserId::new(member_id.get())),
-    }
 }
 
 fn map_channel_update_error(error: SerenityError) -> Result<ChannelUpdateOutcome, ManagementError> {
@@ -303,127 +459,107 @@ impl ChannelLifecycleTarget for SerenityRoleSource<'_> {
     }
 }
 
-fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> Value {
-    let mut payload = Map::new();
-    payload.insert("name".to_owned(), Value::String(create.name));
-    payload.insert(
-        "type".to_owned(),
-        Value::Number(serde_json::Number::from(match create.kind {
-            ChannelKind::Text => 0,
-            ChannelKind::Category => 4,
-            ChannelKind::Unsupported => unreachable!("Unsupported Channel は構成管理から作成できません"),
-        })),
-    );
-    if let Some(parent_id) = create.parent_id {
-        payload.insert("parent_id".to_owned(), json!(parent_id.get()));
+fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateChannelRequest {
+    let permission_overwrites = (!create.overwrites.is_empty())
+        .then(|| overwrite_payloads(guild_id, &create.overwrites))
+        .filter(|overwrites| !overwrites.is_empty());
+    match create.kind {
+        ChannelKind::Text => CreateChannelRequest::Text(CreateTextChannelRequest {
+            name: create.name,
+            channel_type: DiscordChannelType::Text,
+            parent_id: create.parent_id.map(|id| DiscordSnowflake(id.get())),
+            topic: create.topic,
+            nsfw: create.nsfw,
+            rate_limit_per_user: Some(DiscordSeconds(create.slowmode_seconds)),
+            default_auto_archive_duration: create.default_auto_archive_minutes.map(DiscordMinutes),
+            default_thread_rate_limit_per_user: create.default_thread_slowmode_seconds.map(DiscordSeconds),
+            permission_overwrites,
+        }),
+        ChannelKind::Category => CreateChannelRequest::Category(CreateCategoryChannelRequest {
+            name: create.name,
+            channel_type: DiscordChannelType::Category,
+            permission_overwrites,
+        }),
+        ChannelKind::Unsupported => unreachable!("Unsupported Channel は構成管理から作成できません"),
     }
-    if create.kind == ChannelKind::Text {
-        if let Some(topic) = create.topic {
-            payload.insert("topic".to_owned(), Value::String(topic));
-        }
-        payload.insert("nsfw".to_owned(), Value::Bool(create.nsfw));
-        payload.insert(
-            "rate_limit_per_user".to_owned(),
-            Value::Number(serde_json::Number::from(create.slowmode_seconds)),
-        );
-        if let Some(minutes) = create.default_auto_archive_minutes {
-            payload.insert("default_auto_archive_duration".to_owned(), json!(minutes));
-        }
-        if let Some(seconds) = create.default_thread_slowmode_seconds {
-            payload.insert("default_thread_rate_limit_per_user".to_owned(), json!(seconds));
-        }
-    } else {
-        payload.insert("nsfw".to_owned(), Value::Bool(create.nsfw));
-    }
-    if !create.overwrites.is_empty() {
-        let overwrites = overwrite_payloads(guild_id, &create.overwrites);
-        if !overwrites.as_array().is_some_and(Vec::is_empty) {
-            payload.insert("permission_overwrites".to_owned(), overwrites);
-        }
-    }
-    Value::Object(payload)
 }
 
-fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> Value {
-    let mut payload = Map::new();
-    if let Some(name) = &update.name {
-        payload.insert("name".to_owned(), Value::String(name.clone()));
+fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyChannelRequest {
+    ModifyChannelRequest {
+        name: update.name.clone(),
+        parent_id: nullable_channel_field(&update.parent_id, |id| DiscordSnowflake(id.get())),
+        topic: nullable_channel_field(&update.topic, Clone::clone),
+        nsfw: update.nsfw,
+        rate_limit_per_user: update.slowmode_seconds.map(DiscordSeconds),
+        default_auto_archive_duration: nullable_channel_field(&update.default_auto_archive_minutes, |minutes| {
+            DiscordMinutes(*minutes)
+        }),
+        default_thread_rate_limit_per_user: match &update.default_thread_slowmode_seconds {
+            ChannelUpdateValue::Keep => None,
+            ChannelUpdateValue::Set(seconds) => Some(DiscordSeconds(*seconds)),
+            // Discord の仕様上、この属性を無効化する値は 0 です。
+            ChannelUpdateValue::Clear => Some(DiscordSeconds(0)),
+        },
+        permission_overwrites: update
+            .overwrites
+            .as_ref()
+            .map(|overwrites| overwrite_payloads(guild_id, overwrites)),
     }
-    if let Some(parent_id) = update.parent_id {
-        payload.insert(
-            "parent_id".to_owned(),
-            parent_id.map_or(Value::Null, |id| json!(id.get())),
-        );
+}
+
+fn nullable_channel_field<T, U>(value: &ChannelUpdateValue<T>, map: impl FnOnce(&T) -> U) -> NullableChannelField<U> {
+    match value {
+        ChannelUpdateValue::Keep => NullableChannelField::Keep,
+        ChannelUpdateValue::Set(value) => NullableChannelField::Set(map(value)),
+        ChannelUpdateValue::Clear => NullableChannelField::Clear,
     }
-    if let Some(topic) = &update.topic {
-        payload.insert("topic".to_owned(), topic.clone().map_or(Value::Null, Value::String));
-    }
-    if let Some(nsfw) = update.nsfw {
-        payload.insert("nsfw".to_owned(), Value::Bool(nsfw));
-    }
-    if let Some(seconds) = update.slowmode_seconds {
-        payload.insert("rate_limit_per_user".to_owned(), json!(seconds));
-    }
-    if let Some(minutes) = update.default_auto_archive_minutes {
-        payload.insert(
-            "default_auto_archive_duration".to_owned(),
-            minutes.map_or(Value::Null, |minutes| json!(minutes)),
-        );
-    }
-    if let Some(seconds) = update.default_thread_slowmode_seconds {
-        payload.insert(
-            "default_thread_rate_limit_per_user".to_owned(),
-            seconds.map_or(Value::Null, |seconds| json!(seconds)),
-        );
-    }
-    if let Some(overwrites) = &update.overwrites {
-        payload.insert(
-            "permission_overwrites".to_owned(),
-            overwrite_payloads(guild_id, overwrites),
-        );
-    }
-    Value::Object(payload)
 }
 
 fn overwrite_payloads(
     guild_id: &GuildId,
-    overwrites: &BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
-) -> Value {
-    Value::Array(
-        overwrites
-            .iter()
-            .filter_map(|(target, permissions)| {
-                let mut allow = Permissions::empty();
-                let mut deny = Permissions::empty();
-                for (permission, value) in permissions {
-                    match value {
-                        OverwriteValue::Allow => allow |= super::role::serenity_permission(permission),
-                        OverwriteValue::Deny => deny |= super::role::serenity_permission(permission),
-                        OverwriteValue::Clear => {}
-                    }
+    overwrites: &BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
+) -> Vec<DiscordPermissionOverwrite> {
+    overwrites
+        .iter()
+        .filter_map(|(target, permissions)| {
+            let mut allow = Permissions::from_bits_retain(permissions.allow_unknown.bits());
+            let mut deny = Permissions::from_bits_retain(permissions.deny_unknown.bits());
+            for (permission, value) in &permissions.known {
+                match value {
+                    OverwriteValue::Allow => allow |= super::role::serenity_permission(permission),
+                    OverwriteValue::Deny => deny |= super::role::serenity_permission(permission),
+                    OverwriteValue::Clear => {}
                 }
-                if allow.is_empty() && deny.is_empty() {
-                    return None;
-                }
-                let (id, kind) = match target {
-                    ChannelOverwriteTarget::Everyone => (guild_id.get(), 0),
-                    ChannelOverwriteTarget::Role(id) => (id.get(), 0),
-                    ChannelOverwriteTarget::Member(id) => (id.get(), 1),
-                };
-                Some(json!({
-                    "id": id,
-                    "type": kind,
-                    "allow": allow.bits().to_string(),
-                    "deny": deny.bits().to_string(),
-                }))
+            }
+            if allow.is_empty() && deny.is_empty() {
+                return None;
+            }
+            let (id, kind) = match target {
+                ChannelOverwriteTarget::Everyone => (guild_id.get(), DiscordPermissionOverwriteType::Role),
+                ChannelOverwriteTarget::Role(id) => (id.get(), DiscordPermissionOverwriteType::Role),
+                ChannelOverwriteTarget::Member(id) => (id.get(), DiscordPermissionOverwriteType::Member),
+            };
+            Some(DiscordPermissionOverwrite {
+                id: DiscordSnowflake(id),
+                kind,
+                allow: DiscordPermissionBits(allow.bits()),
+                deny: DiscordPermissionBits(deny.bits()),
             })
-            .collect(),
-    )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn payload_json<T: Serialize>(payload: &T) -> serde_json::Value {
+        serde_json::to_value(payload).expect("payload は必ず JSON に直列化できます")
+    }
+
+    fn expected_json(value: &str) -> serde_json::Value {
+        serde_json::from_str(value).expect("テストの JSON literal は妥当です")
+    }
 
     #[test]
     fn manage_roles_precheck_accepts_manage_roles_or_administrator() {
@@ -441,26 +577,32 @@ mod tests {
         let mut overwrites = BTreeMap::new();
         overwrites.insert(
             ChannelOverwriteTarget::Everyone,
-            BTreeMap::from([(permission, OverwriteValue::Deny)]),
+            ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Deny)])),
         );
         let payload = edit_channel_payload(
             &GuildId::new(100),
             &ChannelUpdate {
-                parent_id: Some(None),
-                topic: Some(None),
+                parent_id: ChannelUpdateValue::Clear,
+                topic: ChannelUpdateValue::Clear,
                 overwrites: Some(overwrites),
                 ..ChannelUpdate::default()
             },
         );
 
-        assert_eq!(payload["parent_id"], Value::Null);
-        assert_eq!(payload["topic"], Value::Null);
-        assert_eq!(payload["permission_overwrites"][0]["id"], json!(100));
-        assert_eq!(payload["permission_overwrites"][0]["type"], json!(0));
-        assert_eq!(payload["permission_overwrites"][0]["allow"], json!("0"));
         assert_eq!(
-            payload["permission_overwrites"][0]["deny"],
-            json!(Permissions::VIEW_CHANNEL.bits().to_string())
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "parent_id": null,
+                    "topic": null,
+                    "permission_overwrites": [{
+                        "id": "100",
+                        "type": 0,
+                        "allow": "0",
+                        "deny": "1024"
+                    }]
+                }"#,
+            )
         );
     }
 
@@ -481,12 +623,21 @@ mod tests {
             },
         );
 
-        assert_eq!(payload["type"], json!(0));
-        assert_eq!(payload["parent_id"], json!(200));
-        assert_eq!(payload["topic"], json!("案内"));
-        assert_eq!(payload["rate_limit_per_user"], json!(5));
-        assert_eq!(payload["default_auto_archive_duration"], json!(4320));
-        assert_eq!(payload["default_thread_rate_limit_per_user"], json!(10));
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "name": "rules",
+                    "type": 0,
+                    "parent_id": "200",
+                    "topic": "案内",
+                    "nsfw": false,
+                    "rate_limit_per_user": 5,
+                    "default_auto_archive_duration": 4320,
+                    "default_thread_rate_limit_per_user": 10
+                }"#,
+            )
+        );
     }
 
     #[test]
@@ -508,30 +659,47 @@ mod tests {
                 default_thread_slowmode_seconds: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
-                    BTreeMap::from([(permission, OverwriteValue::Clear)]),
+                    ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Clear)])),
                 )]),
             },
         );
 
-        assert!(payload.get("permission_overwrites").is_none());
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+            "name": "rules",
+            "type": 0,
+            "nsfw": false,
+            "rate_limit_per_user": 0
+        }"#
+            )
+        );
     }
 
     #[test]
-    fn edit_payload_uses_null_for_optional_thread_defaults_and_category_sends_nsfw() {
+    fn edit_payload_uses_null_for_optional_values_and_category_omits_text_attributes() {
         let payload = edit_channel_payload(
             &GuildId::new(100),
             &ChannelUpdate {
                 nsfw: Some(true),
                 slowmode_seconds: Some(0),
-                default_auto_archive_minutes: Some(None),
-                default_thread_slowmode_seconds: Some(None),
+                default_auto_archive_minutes: ChannelUpdateValue::Clear,
+                default_thread_slowmode_seconds: ChannelUpdateValue::Clear,
                 ..ChannelUpdate::default()
             },
         );
-        assert_eq!(payload["nsfw"], json!(true));
-        assert_eq!(payload["rate_limit_per_user"], json!(0));
-        assert_eq!(payload["default_auto_archive_duration"], Value::Null);
-        assert_eq!(payload["default_thread_rate_limit_per_user"], Value::Null);
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "nsfw": true,
+                    "rate_limit_per_user": 0,
+                    "default_auto_archive_duration": null,
+                    "default_thread_rate_limit_per_user": 0
+                }"#,
+            )
+        );
 
         let category = create_channel_payload(
             &GuildId::new(100),
@@ -547,36 +715,135 @@ mod tests {
                 overwrites: BTreeMap::new(),
             },
         );
-        assert_eq!(category["type"], json!(4));
-        assert_eq!(category["nsfw"], json!(true));
-        assert!(category.get("rate_limit_per_user").is_none());
-    }
-
-    #[test]
-    fn permission_overwrite_delete_targets_map_to_discord_types() {
-        let guild_id = GuildId::new(100);
         assert_eq!(
-            permission_overwrite_type(&guild_id, &ChannelOverwriteTarget::Everyone),
-            PermissionOverwriteType::Role(SerenityRoleId::new(100))
-        );
-        assert_eq!(
-            permission_overwrite_type(&guild_id, &ChannelOverwriteTarget::Role(RoleId::new(200))),
-            PermissionOverwriteType::Role(SerenityRoleId::new(200))
-        );
-        assert_eq!(
-            permission_overwrite_type(&guild_id, &ChannelOverwriteTarget::Member(MemberId::new(300))),
-            PermissionOverwriteType::Member(UserId::new(300))
+            payload_json(&category),
+            expected_json(
+                r#"{
+            "name": "案内",
+            "type": 4
+        }"#
+            )
         );
     }
 
     #[test]
-    fn all_clear_update_skips_empty_permission_overwrites_patch() {
+    fn channel_snapshot_keeps_permission_bits_unknown_to_the_vocabulary() {
+        let permission = permission_vocabulary()
+            .known_permissions()
+            .find(|permission| permission.as_str() == "VIEW_CHANNEL")
+            .expect("Serenity の権限語彙に VIEW_CHANNEL が含まれます");
+        let known = super::super::role::serenity_permission(&permission);
+        let unknown_allow = 1_u64 << 60;
+        let unknown_deny = 1_u64 << 61;
+        let overwrite = PermissionOverwrite {
+            allow: known | Permissions::from_bits_retain(unknown_allow),
+            deny: Permissions::from_bits_retain(unknown_deny),
+            kind: PermissionOverwriteType::Role(SerenityRoleId::new(400)),
+        };
+
+        let (_, permissions) = overwrite_snapshot(
+            &overwrite,
+            &GuildId::new(100),
+            std::slice::from_ref(&permission),
+            known_permission_mask(std::slice::from_ref(&permission)),
+        )
+        .expect("Role overwrite は snapshot 対象です")
+        .expect("Role overwrite の target は解決できます");
+
+        assert_eq!(permissions.known, BTreeMap::from([(permission, OverwriteValue::Allow)]));
+        assert_eq!(permissions.allow_unknown, PermissionBits::new(unknown_allow));
+        assert_eq!(permissions.deny_unknown, PermissionBits::new(unknown_deny));
+    }
+
+    #[test]
+    fn edit_payload_merges_unknown_bits_and_serializes_every_overwrite_target() {
+        let view_channel = permission_vocabulary()
+            .known_permissions()
+            .find(|permission| permission.as_str() == "VIEW_CHANNEL")
+            .expect("Serenity の権限語彙に VIEW_CHANNEL が含まれます");
+        let send_messages = permission_vocabulary()
+            .known_permissions()
+            .find(|permission| permission.as_str() == "SEND_MESSAGES")
+            .expect("Serenity の権限語彙に SEND_MESSAGES が含まれます");
+        let mut overwrites = BTreeMap::new();
+        overwrites.insert(
+            ChannelOverwriteTarget::Everyone,
+            ChannelOverwritePermissions {
+                known: BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)]),
+                allow_unknown: PermissionBits::new(1_u64 << 60),
+                deny_unknown: PermissionBits::new(1_u64 << 61),
+            },
+        );
+        overwrites.insert(
+            ChannelOverwriteTarget::Role(RoleId::new(200)),
+            ChannelOverwritePermissions {
+                known: BTreeMap::new(),
+                allow_unknown: PermissionBits::new(1_u64 << 62),
+                deny_unknown: PermissionBits::default(),
+            },
+        );
+        overwrites.insert(
+            ChannelOverwriteTarget::Member(MemberId::new(300)),
+            ChannelOverwritePermissions {
+                known: BTreeMap::from([(send_messages, OverwriteValue::Deny)]),
+                allow_unknown: PermissionBits::default(),
+                deny_unknown: PermissionBits::new(1_u64 << 60),
+            },
+        );
+
+        let payload = edit_channel_payload(
+            &GuildId::new(100),
+            &ChannelUpdate {
+                overwrites: Some(overwrites),
+                ..ChannelUpdate::default()
+            },
+        );
+
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "permission_overwrites": [
+                        {
+                            "id": "100",
+                            "type": 0,
+                            "allow": "1152921504606848000",
+                            "deny": "2305843009213693952"
+                        },
+                        {
+                            "id": "200",
+                            "type": 0,
+                            "allow": "4611686018427387904",
+                            "deny": "0"
+                        },
+                        {
+                            "id": "300",
+                            "type": 1,
+                            "allow": "0",
+                            "deny": "1152921504606849024"
+                        }
+                    ]
+                }"#,
+            )
+        );
+    }
+
+    #[test]
+    fn empty_permission_overwrites_are_sent_as_a_full_replacement() {
         let update = ChannelUpdate {
             overwrites: Some(BTreeMap::new()),
-            permission_overwrites_to_delete: std::collections::BTreeSet::from([ChannelOverwriteTarget::Everyone]),
             ..ChannelUpdate::default()
         };
 
-        assert!(!channel_edit_is_required(&update));
+        assert!(channel_edit_is_required(&update));
+        let payload = edit_channel_payload(&GuildId::new(100), &update);
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+            "permission_overwrites": []
+        }"#
+            )
+        );
     }
 }
