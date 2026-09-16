@@ -85,7 +85,8 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
         }
         RoleApplyStatus::Failed(error) => format!("Role の変更中に失敗したため停止しました: {error}"),
         RoleApplyStatus::ResponseUnknown => {
-            "Role 更新の応答を確認できず、再取得した値も希望値と一致しないため停止しました。".to_owned()
+            "Role 更新の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
     };
     format!(
@@ -117,7 +118,8 @@ fn render_channel_apply_result(result: &ChannelApplyResult) -> String {
         }
         ChannelApplyStatus::Failed(error) => format!("Channel の変更中に失敗したため停止しました: {error}"),
         ChannelApplyStatus::ResponseUnknown => {
-            "Channel 更新の応答を確認できず、再取得した値も希望値と一致しないため停止しました。".to_owned()
+            "Channel 更新の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
     };
     format!(
