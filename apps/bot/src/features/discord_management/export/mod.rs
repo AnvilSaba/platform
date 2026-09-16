@@ -314,9 +314,8 @@ pub(super) async fn export_channels<S: ChannelSource>(
             if let Some(minutes) = channel.default_auto_archive_minutes {
                 attributes.default_auto_archive_minutes = Some(ChannelValue::Value(minutes));
             }
-            if let Some(seconds) = channel.default_thread_slowmode_seconds {
-                attributes.default_thread_slowmode_seconds = Some(ChannelValue::Value(seconds));
-            }
+            attributes.default_thread_slowmode_seconds =
+                Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
         }
         attributes.overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
         definitions.insert(
