@@ -109,6 +109,7 @@ impl DefinitionFile {
                     .map(|channel| (logical_id, channel))
             })
             .collect::<Result<_, _>>()?;
+        validate_order(order.as_ref(), &roles, &channels)?;
         Ok(Self {
             settings_sets,
             roles,
@@ -174,7 +175,13 @@ fn validate_message_set_definition(value: &RawMessageSetDefinition) -> Result<()
         return Ok(());
     }
 
-    validate_message_ids(value.body.as_deref().unwrap_or_default())
+    if value.channel.is_none() {
+        return Err(validation_error("required", "管理メッセージ群には channel が必要です"));
+    }
+    let Some(body) = value.body.as_deref() else {
+        return Err(validation_error("required", "管理メッセージ群には body が必要です"));
+    };
+    validate_message_ids(body)
 }
 
 fn validate_thread_definition(value: &RawThreadDefinition) -> Result<(), ValidationError> {
@@ -288,6 +295,129 @@ where
                 format!("order の {resource_kind} {value} が重複しています"),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_order(
+    order: Option<&RawOrderDefinition>,
+    roles: &BTreeMap<RoleLogicalId, RoleDefinition>,
+    channels: &BTreeMap<ChannelLogicalId, ChannelDefinition>,
+) -> Result<(), ManagementError> {
+    let Some(order) = order else {
+        return Ok(());
+    };
+
+    for logical_id in &order.roles {
+        let Some(role) = roles.get(logical_id) else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.roles の Role {logical_id} が宣言されていません"
+            )));
+        };
+        if role.is_absent() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.roles の Role {logical_id} は削除宣言のため順序指定できません"
+            )));
+        }
+    }
+
+    for logical_id in &order.categories {
+        let Some(channel) = channels.get(logical_id) else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.categories の Channel {logical_id} が宣言されていません"
+            )));
+        };
+        validate_order_category(logical_id, channel)?;
+    }
+
+    let mut child_parents = BTreeMap::new();
+    for (parent_id, children) in &order.children {
+        let Some(parent) = channels.get(parent_id) else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の親 Channel {parent_id} が宣言されていません"
+            )));
+        };
+        validate_order_category(parent_id, parent)?;
+
+        for child_id in children {
+            if child_id == parent_id {
+                return Err(ManagementError::InvalidDefinition(format!(
+                    "order.children の Channel {child_id} は自身を親にできません"
+                )));
+            }
+            if let Some(previous_parent) = child_parents.insert(child_id, parent_id) {
+                return Err(ManagementError::InvalidDefinition(format!(
+                    "order.children の Channel {child_id} が親 {previous_parent} と {parent_id} に重複指定されています"
+                )));
+            }
+            let Some(child) = channels.get(child_id) else {
+                return Err(ManagementError::InvalidDefinition(format!(
+                    "order.children の子 Channel {child_id} が宣言されていません"
+                )));
+            };
+            validate_order_child(parent_id, child_id, child)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_order_category(logical_id: &ChannelLogicalId, channel: &ChannelDefinition) -> Result<(), ManagementError> {
+    if channel.is_absent() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order の Category {logical_id} は削除宣言のため順序指定できません"
+        )));
+    }
+    if channel.is_reference() {
+        return Ok(());
+    }
+    match channel.attributes().kind {
+        Some(ChannelKind::Category) => Ok(()),
+        Some(ChannelKind::Text) => Err(ManagementError::InvalidDefinition(format!(
+            "order の Category {logical_id} に Text Channel を指定できません"
+        ))),
+        None => Err(ManagementError::InvalidDefinition(format!(
+            "order の Category {logical_id} には type = \"category\" が必要です"
+        ))),
+        Some(ChannelKind::Unsupported) => unreachable!("定義ファイルから Unsupported Channel は生成されません"),
+    }
+}
+
+fn validate_order_child(
+    parent_id: &ChannelLogicalId,
+    child_id: &ChannelLogicalId,
+    child: &ChannelDefinition,
+) -> Result<(), ManagementError> {
+    if child.is_absent() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.children の子 Channel {child_id} は削除宣言のため指定できません"
+        )));
+    }
+    if child.is_reference() {
+        return Ok(());
+    }
+
+    let attributes = child.attributes();
+    match attributes.kind {
+        Some(ChannelKind::Category) => {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の子 Channel {child_id} は Category のため指定できません"
+            )));
+        }
+        Some(ChannelKind::Text) => {}
+        None => {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の子 Channel {child_id} には type が必要です"
+            )));
+        }
+        Some(ChannelKind::Unsupported) => unreachable!("定義ファイルから Unsupported Channel は生成されません"),
+    }
+
+    let actual_parent = attributes.parent.as_ref().and_then(ChannelValue::as_value);
+    if actual_parent != Some(parent_id) {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.children の子 Channel {child_id} の親が {parent_id} と一致しません"
+        )));
     }
     Ok(())
 }
