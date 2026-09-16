@@ -135,19 +135,19 @@ struct DiscordPermissionOverwrite {
 ///
 /// `Keep` はフィールド自体を省略し、`Clear` は JSON null を送ります。
 #[derive(Debug)]
-enum NullableChannelField<T> {
+enum NullablePatchField<T> {
     Keep,
     Set(T),
     Clear,
 }
 
-impl<T> NullableChannelField<T> {
+impl<T> NullablePatchField<T> {
     fn is_keep(&self) -> bool {
         matches!(self, Self::Keep)
     }
 }
 
-impl<T: Serialize> Serialize for NullableChannelField<T> {
+impl<T: Serialize> Serialize for NullablePatchField<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -200,16 +200,16 @@ struct CreateCategoryChannelRequest {
 struct ModifyChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
-    parent_id: NullableChannelField<DiscordSnowflake>,
-    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
-    topic: NullableChannelField<String>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    parent_id: NullablePatchField<DiscordSnowflake>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    topic: NullablePatchField<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nsfw: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rate_limit_per_user: Option<DiscordSeconds>,
-    #[serde(skip_serializing_if = "NullableChannelField::is_keep")]
-    default_auto_archive_duration: NullableChannelField<DiscordMinutes>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    default_auto_archive_duration: NullablePatchField<DiscordMinutes>,
     #[serde(skip_serializing_if = "Option::is_none")]
     default_thread_rate_limit_per_user: Option<DiscordSeconds>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -487,11 +487,11 @@ fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateCh
 fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyChannelRequest {
     ModifyChannelRequest {
         name: update.name.clone(),
-        parent_id: nullable_channel_field(&update.parent_id, |id| DiscordSnowflake(id.get())),
-        topic: nullable_channel_field(&update.topic, Clone::clone),
+        parent_id: nullable_patch_field(&update.parent_id, |id| DiscordSnowflake(id.get())),
+        topic: nullable_patch_field(&update.topic, Clone::clone),
         nsfw: update.nsfw,
         rate_limit_per_user: update.slowmode_seconds.map(DiscordSeconds),
-        default_auto_archive_duration: nullable_channel_field(&update.default_auto_archive_minutes, |minutes| {
+        default_auto_archive_duration: nullable_patch_field(&update.default_auto_archive_minutes, |minutes| {
             DiscordMinutes(*minutes)
         }),
         default_thread_rate_limit_per_user: match &update.default_thread_slowmode_seconds {
@@ -507,11 +507,11 @@ fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyCha
     }
 }
 
-fn nullable_channel_field<T, U>(value: &ChannelUpdateValue<T>, map: impl FnOnce(&T) -> U) -> NullableChannelField<U> {
+fn nullable_patch_field<T, U>(value: &ChannelUpdateValue<T>, map: impl FnOnce(&T) -> U) -> NullablePatchField<U> {
     match value {
-        ChannelUpdateValue::Keep => NullableChannelField::Keep,
-        ChannelUpdateValue::Set(value) => NullableChannelField::Set(map(value)),
-        ChannelUpdateValue::Clear => NullableChannelField::Clear,
+        ChannelUpdateValue::Keep => NullablePatchField::Keep,
+        ChannelUpdateValue::Set(value) => NullablePatchField::Set(map(value)),
+        ChannelUpdateValue::Clear => NullablePatchField::Clear,
     }
 }
 
