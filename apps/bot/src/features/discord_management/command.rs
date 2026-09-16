@@ -14,7 +14,7 @@ use tracing::warn;
 use crate::app::{AppContext, AppError, BotDataExt};
 
 use super::{
-    adapter::SerenityRoleSource,
+    adapter::SerenityManagementAdapter,
     apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
     bind::BindWorkflow,
     confirmation::{ConfirmationError, ConfirmationStore},
@@ -171,7 +171,7 @@ pub async fn bind(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
 
     match BindWorkflow::new(&source, &vocabulary)
@@ -221,7 +221,7 @@ pub async fn role_export(
         None => None,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
 
     match export_roles(&source, guild_id, state_text.as_deref()).await {
         Ok(files) => {
@@ -261,7 +261,7 @@ pub async fn role_plan(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
 
     match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
@@ -301,7 +301,7 @@ pub async fn role_apply(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
     let plan = match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => plan,
@@ -392,7 +392,7 @@ pub async fn role_apply(
             }
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
-                let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+                let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
                 let bot_data = ctx.bot_data();
                 let apply_lock = bot_data.discord_management_apply_lock();
                 let workflow = RoleApplyWorkflow::new(apply_lock, &source, &vocabulary);
@@ -471,7 +471,7 @@ pub async fn channel_export(
         None => None,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
 
     match export_channels(&source, guild_id, state_text.as_deref()).await {
         Ok(files) => {
@@ -511,7 +511,7 @@ pub async fn channel_plan(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
 
     match plan_channels(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
@@ -551,7 +551,7 @@ pub async fn channel_apply(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
     let vocabulary = source.permission_vocabulary();
     let plan = match plan_channels(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => plan,
@@ -642,7 +642,7 @@ pub async fn channel_apply(
             }
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
-                let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
+                let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
                 let bot_data = ctx.bot_data();
                 let apply_lock = bot_data.discord_management_apply_lock();
                 let workflow = ChannelApplyWorkflow::new(apply_lock, &source, &vocabulary);
