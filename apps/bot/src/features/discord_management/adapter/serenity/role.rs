@@ -12,7 +12,7 @@ use crate::features::discord_management::port::{
     RoleUpdate, RoleUpdateOutcome, RoleUpdater,
 };
 
-use super::resource::SerenityRoleSource;
+use super::resource::SerenityManagementAdapter;
 
 pub(crate) fn permission_vocabulary() -> PermissionVocabulary {
     PermissionVocabulary::from_names(Permissions::all().iter_names().map(|(name, _)| name.to_owned()))
@@ -38,7 +38,7 @@ impl From<RoleId> for SerenityRoleId {
     }
 }
 
-impl RoleSource for SerenityRoleSource<'_> {
+impl RoleSource for SerenityManagementAdapter<'_> {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
         let guild_id = SerenityGuildId::from(*guild_id);
         let roles = guild_id.roles(self.http).await.map_err(map_role_catalog_error)?;
@@ -128,7 +128,7 @@ fn map_role_catalog_error(error: SerenityError) -> ManagementError {
     }
 }
 
-impl RoleUpdater for SerenityRoleSource<'_> {
+impl RoleUpdater for SerenityManagementAdapter<'_> {
     async fn update_role(
         &self,
         guild_id: &GuildId,
@@ -172,7 +172,7 @@ impl RoleUpdater for SerenityRoleSource<'_> {
     }
 }
 
-impl RoleLifecycleTarget for SerenityRoleSource<'_> {
+impl RoleLifecycleTarget for SerenityManagementAdapter<'_> {
     async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let mut edit = EditRole::new()
             .name(create.name)

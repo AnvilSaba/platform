@@ -22,7 +22,7 @@ use crate::features::discord_management::{
     },
 };
 
-use super::{resource::SerenityRoleSource, role::permission_vocabulary};
+use super::{resource::SerenityManagementAdapter, role::permission_vocabulary};
 
 #[cfg(test)]
 use serenity::all::RoleId as SerenityRoleId;
@@ -216,7 +216,7 @@ struct ModifyChannelRequest {
     permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
 }
 
-impl ChannelSource for SerenityRoleSource<'_> {
+impl ChannelSource for SerenityManagementAdapter<'_> {
     async fn channel_catalog(&self, guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         let serenity_guild_id = SerenityGuildId::from(*guild_id);
         let channels = serenity_guild_id
@@ -247,7 +247,10 @@ impl ChannelSource for SerenityRoleSource<'_> {
     }
 }
 
-async fn bot_permissions(source: &SerenityRoleSource<'_>, guild_id: &GuildId) -> Result<Permissions, ManagementError> {
+async fn bot_permissions(
+    source: &SerenityManagementAdapter<'_>,
+    guild_id: &GuildId,
+) -> Result<Permissions, ManagementError> {
     let serenity_guild_id = SerenityGuildId::from(*guild_id);
     let roles = serenity_guild_id
         .roles(source.http)
@@ -361,7 +364,7 @@ fn known_permission_mask(known_permissions: &[KnownPermission]) -> Permissions {
     })
 }
 
-impl ChannelUpdater for SerenityRoleSource<'_> {
+impl ChannelUpdater for SerenityManagementAdapter<'_> {
     async fn update_channel(
         &self,
         guild_id: &GuildId,
@@ -414,7 +417,7 @@ fn map_channel_update_error(error: SerenityError) -> Result<ChannelUpdateOutcome
     }
 }
 
-impl ChannelLifecycleTarget for SerenityRoleSource<'_> {
+impl ChannelLifecycleTarget for SerenityManagementAdapter<'_> {
     async fn create_channel(
         &self,
         guild_id: &GuildId,

@@ -2,4 +2,4 @@
 
 pub(super) mod serenity;
 
-pub(crate) use serenity::SerenityRoleSource;
+pub(crate) use serenity::SerenityManagementAdapter;
