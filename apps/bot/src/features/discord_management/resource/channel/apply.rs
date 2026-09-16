@@ -389,13 +389,16 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         .channels
                         .get(&logical_id)
                         .expect("作成対象 Channel は definition に存在します");
-                    let create = desired_channel_create_with_catalog(
+                    let create = match desired_channel_create_with_catalog(
                         desired,
                         &logical_id,
                         &session.state,
                         &session.definition,
                         Some(&session.catalog),
-                    )?;
+                    ) {
+                        Ok(create) => create,
+                        Err(error) => return session.into_result(ChannelApplyStatus::Failed(error.to_string())),
+                    };
                     let outcome = match tokio::time::timeout(
                         processing_deadline.saturating_duration_since(Instant::now()),
                         self.source.create_channel(&guild_id, create),
@@ -415,7 +418,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         .values()
                         .any(|existing_id| *existing_id == channel_id)
                     {
-                        return Err(ManagementError::InvalidState(format!(
+                        return session.into_result(ChannelApplyStatus::Failed(format!(
                             "新しく作成した Channel {channel_id} は既存の対応と衝突しています"
                         )));
                     }
