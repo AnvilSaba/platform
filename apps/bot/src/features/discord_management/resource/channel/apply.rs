@@ -1,9 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::{
-    AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, compose_attributes,
-    desired_channel_create_with_catalog,
-};
+use super::{AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, compose_attributes};
 use crate::features::discord_management::{
     apply::guild_lock::{GuildApplyLock, GuildApplyPermit},
     configuration::{ChannelKind, PermissionVocabulary, PlanInput, StateFile, serialize_state},
@@ -384,18 +381,17 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(ChannelApplyStatus::DeadlineExceeded);
                     }
-                    let desired = session
-                        .definition
-                        .channels
+                    let create = match session
+                        .pending
+                        .create_desired
                         .get(&logical_id)
-                        .expect("作成対象 Channel は definition に存在します");
-                    let create = match desired_channel_create_with_catalog(
-                        desired,
-                        &logical_id,
-                        &session.state,
-                        &session.definition,
-                        Some(&session.catalog),
-                    ) {
+                        .ok_or_else(|| {
+                            ManagementError::InvalidState(format!(
+                                "作成対象 Channel {logical_id} の payload が plan にありません"
+                            ))
+                        })
+                        .and_then(|desired| desired.payload_for_apply(&session.state, &session.catalog, &logical_id))
+                    {
                         Ok(create) => create,
                         Err(error) => return session.into_result(ChannelApplyStatus::Failed(error.to_string())),
                     };
