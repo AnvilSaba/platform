@@ -145,14 +145,6 @@ impl StateFile {
             pending_channel_updates: raw.pending_channel_updates,
         })
     }
-
-    pub(crate) fn into_role_mappings(self) -> BTreeMap<RoleLogicalId, RoleId> {
-        self.roles
-    }
-
-    pub(crate) fn into_channel_mappings(self) -> BTreeMap<ChannelLogicalId, ChannelId> {
-        self.channels
-    }
 }
 
 fn deserialize_unique_mappings<'de, D, LogicalIdType, DiscordIdType>(

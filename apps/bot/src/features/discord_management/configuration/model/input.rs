@@ -14,16 +14,12 @@ impl PlanInput {
     ) -> Result<Self, ManagementError> {
         let definition = DefinitionFile::parse(definition_toml, vocabulary)?;
         let state = StateFile::parse_for_guild(state_json, guild_id)?;
-        validate_references(&definition, &state, vocabulary)?;
+        validate_references(&definition, &state)?;
         Ok(Self { definition, state })
     }
 }
 
-fn validate_references(
-    definition: &DefinitionFile,
-    state: &StateFile,
-    vocabulary: &PermissionVocabulary,
-) -> Result<(), ManagementError> {
+fn validate_references(definition: &DefinitionFile, state: &StateFile) -> Result<(), ManagementError> {
     for (logical_id, role) in &definition.roles {
         if *logical_id != everyone_logical_id() && role.is_reference() && !state.roles.contains_key(logical_id) {
             return Err(ManagementError::InvalidState(format!(
@@ -64,15 +60,10 @@ fn validate_references(
         validate_channel_container_reference("管理スレッド", name, thread, definition, state)?;
     }
 
-    for (name, settings_set) in &definition.settings_sets.channel {
-        let settings_set_attributes = ChannelAttributes::parse(
-            &ChannelLogicalId::parse(format!("settings_set_{name}")).expect("設定セット検証用の論理 ID は常に有効です"),
-            settings_set.attributes.clone(),
-            vocabulary,
-        )?;
+    for (name, settings_set_attributes) in &definition.settings_sets.channel {
         validate_channel_references(
             &ChannelLogicalId::parse(format!("settings_set_{name}")).expect("設定セット検証用の論理 ID は常に有効です"),
-            &settings_set_attributes,
+            settings_set_attributes,
             definition,
             state,
         )?;
@@ -84,29 +75,25 @@ fn validate_references(
 fn validate_channel_container_reference(
     resource_kind: &str,
     resource_name: &str,
-    value: &toml::Value,
+    value: &RawResourceDefinition,
     definition: &DefinitionFile,
     state: &StateFile,
 ) -> Result<(), ManagementError> {
-    let Some(table) = value.as_table() else {
+    if !value.is_table() {
         return Err(ManagementError::InvalidDefinition(format!(
             "{resource_kind} {resource_name} はテーブルで指定してください"
         )));
-    };
-    if table
-        .get("ensure")
-        .and_then(toml::Value::as_str)
-        .is_some_and(|ensure| ensure == "absent")
-    {
+    }
+    if value.is_absent() {
         return Ok(());
     }
 
-    let Some(channel) = table.get("channel") else {
+    if !value.has_channel() {
         return Err(ManagementError::InvalidDefinition(format!(
             "{resource_kind} {resource_name} の channel がありません"
         )));
-    };
-    let Some(channel) = channel.as_str() else {
+    }
+    let Some(channel) = value.channel_name() else {
         return Err(ManagementError::InvalidDefinition(format!(
             "{resource_kind} {resource_name} の channel は Channel 論理 ID で指定してください"
         )));
@@ -130,10 +117,8 @@ fn validate_channel_references(
     definition: &DefinitionFile,
     state: &StateFile,
 ) -> Result<(), ManagementError> {
-    if let Some(parent) = &attributes.parent {
-        if let ChannelValue::Value(parent_id) = parent {
-            require_channel_reference(parent_id, definition, state, &format!("Channel {channel_id} の親"))?;
-        }
+    if let Some(ChannelValue::Value(parent_id)) = &attributes.parent {
+        require_channel_reference(parent_id, definition, state, &format!("Channel {channel_id} の親"))?;
     }
 
     for subject in attributes.overwrites.keys() {

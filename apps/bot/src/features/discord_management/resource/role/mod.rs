@@ -350,10 +350,8 @@ fn render_create_attributes(attributes: &RoleAttributes, output: &mut String) {
     if let Some(name) = &attributes.name {
         render_create_value(output, "name", name);
     }
-    if let Some(color) = &attributes.color {
-        if let ManagedValue::Value(color) = color {
-            output.push_str(&format!("    color: {}\n", color.get()));
-        }
+    if let Some(ManagedValue::Value(color)) = &attributes.color {
+        output.push_str(&format!("    color: {}\n", color.get()));
     }
     if let Some(hoist) = &attributes.hoist {
         render_create_value(output, "hoist", hoist);

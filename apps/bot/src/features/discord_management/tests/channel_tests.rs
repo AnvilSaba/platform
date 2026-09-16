@@ -263,16 +263,45 @@ async fn channel_plan_reports_text_attribute_changes() {
         .and_then(ChannelChange::attributes)
         .expect("属性差分が一つの Channel 更新へまとまります");
     assert_eq!(attributes.name().unwrap().desired(), "ルール");
-    assert_eq!(attributes.topic().unwrap().desired().as_deref(), Some("案内"));
+    assert_eq!(attributes.topic().unwrap().desired().map(String::as_str), Some("案内"));
     assert_eq!(attributes.nsfw().unwrap().desired(), &true);
     assert_eq!(attributes.slowmode_seconds().unwrap().desired(), &5);
     assert_eq!(
         attributes.default_auto_archive_minutes().unwrap().desired(),
-        &Some(4320)
+        Some(&4320)
     );
     assert_eq!(
         attributes.default_thread_slowmode_seconds().unwrap().desired(),
-        &Some(10)
+        Some(&10)
+    );
+}
+
+/// Category は Text 専用の nsfw 属性を公開 plan seam で拒否する。
+#[tokio::test]
+async fn category_rejects_nsfw_in_public_plan() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "案内"
+        nsfw = true
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .expect_err("Category の nsfw は Text 専用属性として拒否されます");
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Category") && message.contains("Text 専用属性"))
     );
 }
 
@@ -340,11 +369,14 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
                 overwrites: BTreeMap::from([
                     (
                         ChannelOverwriteTarget::Role(RoleId::new(400)),
-                        BTreeMap::from([(permission.clone(), OverwriteValue::Allow)]),
+                        ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                            permission.clone(),
+                            OverwriteValue::Allow,
+                        )])),
                     ),
                     (
                         ChannelOverwriteTarget::Member(MemberId::new(500)),
-                        BTreeMap::from([(permission, OverwriteValue::Deny)]),
+                        ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Deny)])),
                     ),
                 ]),
             }],
@@ -849,7 +881,7 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
     );
 }
 
-/// Overwrite の全権限解除は空の PATCH ではなく対象単位の削除操作として適用する。
+/// Overwrite の全権限解除は完成形の空配列として一回の PATCH で適用する。
 #[tokio::test]
 async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cleared() {
     let view_channel = known_permission("VIEW_CHANNEL");
@@ -867,7 +899,10 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
             default_thread_slowmode_seconds: Some(0),
             overwrites: BTreeMap::from([(
                 ChannelOverwriteTarget::Everyone,
-                BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)]),
+                ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                    view_channel.clone(),
+                    OverwriteValue::Allow,
+                )])),
             )]),
         }],
     });
@@ -903,11 +938,124 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
     let updates = source.updates.lock().unwrap();
     assert_eq!(updates.len(), 1);
     assert!(updates[0].overwrites.as_ref().is_some_and(BTreeMap::is_empty));
-    assert_eq!(
-        updates[0].permission_overwrites_to_delete,
-        BTreeSet::from([ChannelOverwriteTarget::Everyone])
-    );
     assert!(source.catalog.lock().unwrap().channels[0].overwrites.is_empty());
+}
+
+/// overwrite の完成形更新は、変更対象以外と SDK 未知 bit を保持し、空になった target だけを除外する。
+#[tokio::test]
+async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_overwrite_replacement() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let mut overwrites = BTreeMap::new();
+    overwrites.insert(
+        ChannelOverwriteTarget::Everyone,
+        ChannelOverwritePermissions {
+            known: BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)]),
+            allow_unknown: PermissionBits::new(1_u64 << 60),
+            deny_unknown: PermissionBits::default(),
+        },
+    );
+    overwrites.insert(
+        ChannelOverwriteTarget::Role(RoleId::new(400)),
+        ChannelOverwritePermissions {
+            known: BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)]),
+            allow_unknown: PermissionBits::default(),
+            deny_unknown: PermissionBits::new(1_u64 << 61),
+        },
+    );
+    overwrites.insert(
+        ChannelOverwriteTarget::Member(MemberId::new(500)),
+        ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)])),
+    );
+    overwrites.insert(
+        ChannelOverwriteTarget::Role(RoleId::new(401)),
+        ChannelOverwritePermissions {
+            known: BTreeMap::new(),
+            allow_unknown: PermissionBits::new(1_u64 << 62),
+            deny_unknown: PermissionBits::default(),
+        },
+    );
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![ChannelSnapshot {
+            id: "300".parse().unwrap(),
+            kind: ChannelKind::Text,
+            manageable: true,
+            name: "ルール".to_owned(),
+            parent_id: None,
+            topic: None,
+            nsfw: false,
+            slowmode_seconds: 0,
+            default_auto_archive_minutes: Some(1440),
+            default_thread_slowmode_seconds: Some(0),
+            overwrites,
+        }],
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        mode = "reference"
+        [roles.observer]
+        mode = "reference"
+        [members.alice]
+        mode = "reference"
+        [channels.rules]
+        type = "text"
+        [channels.rules.overwrites.everyone]
+        VIEW_CHANNEL = "clear"
+        [channels.rules.overwrites."role:moderator"]
+        VIEW_CHANNEL = "deny"
+        [channels.rules.overwrites."member:alice"]
+        VIEW_CHANNEL = "clear"
+    "#;
+    let state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "400", "observer": "401"},
+        "members": {"alice": "500"},
+        "channels": {"rules": "300"}
+    }"#;
+    let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        &plan,
+        Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.updates.lock().unwrap();
+    assert_eq!(updates.len(), 1);
+    let final_overwrites = updates[0]
+        .overwrites
+        .as_ref()
+        .expect("permission overwrite は完成形で送信されます");
+    assert_eq!(final_overwrites.len(), 3);
+    let everyone = final_overwrites
+        .get(&ChannelOverwriteTarget::Everyone)
+        .expect("Everyone target は未知 bit があるため保持されます");
+    assert!(everyone.known.is_empty());
+    assert_eq!(everyone.allow_unknown, PermissionBits::new(1_u64 << 60));
+    let moderator = final_overwrites
+        .get(&ChannelOverwriteTarget::Role(RoleId::new(400)))
+        .expect("変更対象 Role は保持されます");
+    assert_eq!(moderator.known.get(&view_channel), Some(&OverwriteValue::Deny));
+    assert_eq!(moderator.deny_unknown, PermissionBits::new(1_u64 << 61));
+    assert_eq!(
+        final_overwrites.get(&ChannelOverwriteTarget::Role(RoleId::new(401))),
+        Some(&ChannelOverwritePermissions {
+            known: BTreeMap::new(),
+            allow_unknown: PermissionBits::new(1_u64 << 62),
+            deny_unknown: PermissionBits::default(),
+        })
+    );
+    assert!(!final_overwrites.contains_key(&ChannelOverwriteTarget::Member(MemberId::new(500))));
+    assert_eq!(source.catalog.lock().unwrap().channels[0].overwrites, *final_overwrites);
 }
 
 /// Category 削除前に子 Channel の parent clear を適用し、削除済み状態を保存する。
@@ -1028,7 +1176,7 @@ async fn channel_apply_moves_an_existing_text_under_a_planned_category() {
     assert_eq!(source.creates.lock().unwrap().len(), 1);
     assert_eq!(
         source.updates.lock().unwrap()[0].parent_id,
-        Some(Some(ChannelId::new(500)))
+        ChannelUpdateValue::Set(ChannelId::new(500))
     );
     assert_eq!(
         source
@@ -1219,7 +1367,7 @@ async fn channel_plan_and_apply_recreate_category_before_moving_a_child() {
     assert_eq!(source.updates.lock().unwrap().len(), 1);
     assert_eq!(
         source.updates.lock().unwrap()[0].parent_id,
-        Some(Some(ChannelId::new(500)))
+        ChannelUpdateValue::Set(ChannelId::new(500))
     );
     assert_eq!(
         source
