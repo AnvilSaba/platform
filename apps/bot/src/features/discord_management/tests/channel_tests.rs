@@ -544,6 +544,18 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
     );
     assert!(files.definition_toml.contains("role:role_400"));
     assert!(files.definition_toml.contains("member:member_500"));
+    assert!(
+        files.definition_toml.contains("parent = { clear = true }"),
+        "{}",
+        files.definition_toml
+    );
+    assert!(files.definition_toml.contains("topic = { clear = true }"));
+    assert!(
+        files
+            .definition_toml
+            .contains("[channels.channel_300.overwrites.\"role:role_400\"]")
+    );
+    assert!(!files.definition_toml.contains("overwrites = {"));
 
     let plan = plan_channels(
         &source,
