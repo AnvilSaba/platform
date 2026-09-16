@@ -484,7 +484,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {
-                    if let Some(status) = apply_attribute_changes(
+                    match apply_attribute_changes(
                         self.source,
                         &guild_id,
                         &logical_id,
@@ -493,9 +493,13 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                         &mut session,
                         processing_deadline,
                     )
-                    .await?
+                    .await
                     {
-                        return session.into_result(status);
+                        Ok(Some(status)) => return session.into_result(status),
+                        Ok(None) => {}
+                        Err(error) => {
+                            return session.into_result(RoleApplyStatus::Failed(error.to_string()));
+                        }
                     }
                 }
             }

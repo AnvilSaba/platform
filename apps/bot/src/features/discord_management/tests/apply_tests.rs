@@ -42,6 +42,7 @@ struct LifecycleFakeRoleSource {
     delete_outcome: RoleDeleteOutcome,
     delete_permission_denied: bool,
     apply_delete: bool,
+    create_remove_role: Option<RoleId>,
     catalog_error_on_call: Option<usize>,
     catalog_permission_denied: bool,
 }
@@ -95,6 +96,9 @@ impl RoleLifecycleTarget for LifecycleFakeRoleSource {
                 mentionable: create.mentionable,
                 permissions: create.permissions,
             });
+            if let Some(remove_id) = self.create_remove_role {
+                catalog.roles.retain(|role| role.id != remove_id);
+            }
         }
         Ok(self.create_outcome)
     }
@@ -124,6 +128,7 @@ fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
         delete_outcome: RoleDeleteOutcome::Deleted,
         delete_permission_denied: false,
         apply_delete: true,
+        create_remove_role: None,
         catalog_error_on_call: None,
         catalog_permission_denied: false,
     }
@@ -161,6 +166,59 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
     assert_eq!(returned_state["roles"]["moderator"], "300");
     assert_eq!(source.creates.lock().unwrap().len(), 1);
     assert_eq!(source.creates.lock().unwrap()[0].name, "運営");
+}
+
+/// 先行する Role 作成後に後続更新の対象が消えた場合も、作成済み mapping を返して停止する。
+#[tokio::test]
+async fn mixed_role_apply_returns_confirmed_create_when_later_update_target_is_missing() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone"), role("200", "更新前")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.create_remove_role = Some(role_id("200"));
+    let definition = r#"
+        schema_version = 1
+        [roles.a_create]
+        name = "新規"
+        [roles.b_update]
+        name = "更新後"
+    "#;
+    let state_json = state("100", r#"{"b_update":"200"}"#);
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+    assert!(matches!(plan.get(&logical_id("a_create")), Some(Change::Create)));
+    assert!(plan.get(&logical_id("b_update")).is_some_and(Change::is_update));
+
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("b_update") && message.contains("存在しません"))
+    );
+    assert!(matches!(
+        result.applied.get(&logical_id("a_create")),
+        Some(Change::Create)
+    ));
+    assert!(
+        result
+            .pending
+            .get(&logical_id("b_update"))
+            .is_some_and(Change::is_update)
+    );
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["a_create"], "300");
+    assert_eq!(returned_state["roles"]["b_update"], "200");
 }
 
 /// 先行する Role 作成成功を state に残したまま、後続作成の失敗で停止することを保証する。
