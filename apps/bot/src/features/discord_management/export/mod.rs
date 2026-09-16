@@ -7,13 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     configuration::{
-        ChannelKind, ManagedValue, OverwriteValue, PermissionName, RawChannelDefinition, RawDefinitionFile,
-        RawRoleAttributes, RawRoleDefinition, RawSettingsSets, RawStateFile, RoleEnsure, RoleMode, StateFile,
-        everyone_logical_id,
+        ChannelKind, ChannelValue, ManagedValue, OverwriteValue, PermissionName, RawChannelAttributes,
+        RawChannelDefinition, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets, RawStateFile,
+        RoleEnsure, RoleMode, StateFile, everyone_logical_id,
     },
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
-    port::{ChannelOverwriteTarget, ChannelSource, RoleSource},
+    port::{ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSource, RoleSource},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -82,13 +82,14 @@ pub(super) async fn export_roles<S: RoleSource>(
             }
             generated
         };
-        if !is_everyone && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id) {
-            if existing_id != role.id {
-                return Err(ManagementError::InvalidState(format!(
-                    "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
-                    role.id
-                )));
-            }
+        if !is_everyone
+            && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id)
+            && existing_id != role.id
+        {
+            return Err(ManagementError::InvalidState(format!(
+                "論理 ID {logical_id} が Role {existing_id} と {} で衝突しています",
+                role.id
+            )));
         }
         definitions.insert(
             logical_id.clone(),
@@ -263,13 +264,13 @@ pub(super) async fn export_channels<S: ChannelSource>(
             }
             generated
         };
-        if let Some(existing_id) = mappings.insert(logical_id.clone(), channel.id) {
-            if existing_id != channel.id {
-                return Err(ManagementError::InvalidState(format!(
-                    "論理 ID {logical_id} が Channel {existing_id} と {} で衝突しています",
-                    channel.id
-                )));
-            }
+        if let Some(existing_id) = mappings.insert(logical_id.clone(), channel.id)
+            && existing_id != channel.id
+        {
+            return Err(ManagementError::InvalidState(format!(
+                "論理 ID {logical_id} が Channel {existing_id} と {} で衝突しています",
+                channel.id
+            )));
         }
         logical_ids.insert(channel.id, logical_id);
     }
@@ -332,9 +333,12 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .get(&channel.id)
             .expect("論理 ID は先行する対応付けで生成されています")
             .clone();
-        let mut attributes = BTreeMap::new();
-        attributes.insert("type".to_owned(), toml::Value::String(channel.kind.as_str().to_owned()));
-        attributes.insert("name".to_owned(), toml::Value::String(channel.name));
+        let kind = channel.kind;
+        let mut attributes = RawChannelAttributes {
+            kind: Some(kind.as_str().to_owned()),
+            name: Some(ChannelValue::Value(channel.name)),
+            ..RawChannelAttributes::default()
+        };
         match channel.parent_id {
             Some(parent_id) => {
                 let parent = logical_ids.get(&parent_id).ok_or_else(|| {
@@ -342,47 +346,32 @@ pub(super) async fn export_channels<S: ChannelSource>(
                         "Channel {logical_id} の親 Channel {parent_id} が export 対象に含まれていません"
                     ))
                 })?;
-                attributes.insert("parent".to_owned(), toml::Value::String(parent.to_string()));
+                attributes.parent = Some(ChannelValue::Value(parent.clone()));
             }
-            None if channel.kind == ChannelKind::Text => {
-                attributes.insert("parent".to_owned(), marker_value("clear"));
+            None if kind == ChannelKind::Text => {
+                attributes.parent = Some(ChannelValue::Clear);
             }
             None => {}
         }
-        if channel.kind == ChannelKind::Text {
+        if kind == ChannelKind::Text {
             match channel.topic {
                 Some(topic) => {
-                    attributes.insert("topic".to_owned(), toml::Value::String(topic));
+                    attributes.topic = Some(ChannelValue::Value(topic));
                 }
                 None => {
-                    attributes.insert("topic".to_owned(), marker_value("clear"));
+                    attributes.topic = Some(ChannelValue::Clear);
                 }
             }
-            attributes.insert("nsfw".to_owned(), toml::Value::Boolean(channel.nsfw));
-            attributes.insert(
-                "slowmode_seconds".to_owned(),
-                toml::Value::Integer(i64::from(channel.slowmode_seconds)),
-            );
+            attributes.nsfw = Some(ChannelValue::Value(channel.nsfw));
+            attributes.slowmode_seconds = Some(ChannelValue::Value(channel.slowmode_seconds));
             if let Some(minutes) = channel.default_auto_archive_minutes {
-                attributes.insert(
-                    "default_auto_archive_minutes".to_owned(),
-                    toml::Value::Integer(i64::from(minutes)),
-                );
+                attributes.default_auto_archive_minutes = Some(ChannelValue::Value(minutes));
             }
             if let Some(seconds) = channel.default_thread_slowmode_seconds {
-                attributes.insert(
-                    "default_thread_slowmode_seconds".to_owned(),
-                    toml::Value::Integer(i64::from(seconds)),
-                );
+                attributes.default_thread_slowmode_seconds = Some(ChannelValue::Value(seconds));
             }
         }
-        if channel.kind == ChannelKind::Category {
-            attributes.insert("nsfw".to_owned(), toml::Value::Boolean(channel.nsfw));
-        }
-        let overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
-        if !overwrites.is_empty() {
-            attributes.insert("overwrites".to_owned(), toml::Value::Table(overwrites));
-        }
+        attributes.overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
         definitions.insert(
             logical_id,
             RawChannelDefinition {
@@ -460,12 +449,6 @@ pub(super) async fn export_channels<S: ChannelSource>(
     })
 }
 
-fn marker_value(name: &str) -> toml::Value {
-    let mut marker = toml::map::Map::new();
-    marker.insert(name.to_owned(), toml::Value::Boolean(true));
-    toml::Value::Table(marker)
-}
-
 fn register_role_overwrite_target(
     discord_id: RoleId,
     role_ids: &mut BTreeMap<RoleId, RoleLogicalId>,
@@ -505,11 +488,11 @@ fn register_member_overwrite_target(
 }
 
 fn export_overwrites(
-    overwrites: &BTreeMap<ChannelOverwriteTarget, BTreeMap<super::configuration::KnownPermission, OverwriteValue>>,
+    overwrites: &BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
     role_ids: &BTreeMap<RoleId, RoleLogicalId>,
     member_ids: &BTreeMap<MemberId, super::ids::MemberLogicalId>,
-) -> Result<toml::map::Map<String, toml::Value>, ManagementError> {
-    let mut result = toml::map::Map::new();
+) -> Result<BTreeMap<String, BTreeMap<PermissionName, OverwriteValue>>, ManagementError> {
+    let mut result = BTreeMap::new();
     for (target, permissions) in overwrites {
         let subject = match target {
             ChannelOverwriteTarget::Everyone => "everyone".to_owned(),
@@ -530,16 +513,13 @@ fn export_overwrites(
                 format!("member:{logical_id}")
             }
         };
-        let mut values = toml::map::Map::new();
-        for (permission, value) in permissions {
-            let value = match value {
-                OverwriteValue::Allow => "allow",
-                OverwriteValue::Deny => "deny",
-                OverwriteValue::Clear => "clear",
-            };
-            values.insert(permission.as_str().to_owned(), toml::Value::String(value.to_owned()));
+        let mut values = BTreeMap::new();
+        for (permission, value) in &permissions.known {
+            let permission =
+                PermissionName::parse(permission.as_str().to_owned()).expect("Known permission は構文的に妥当です");
+            values.insert(permission, *value);
         }
-        result.insert(subject, toml::Value::Table(values));
+        result.insert(subject, values);
     }
     Ok(result)
 }

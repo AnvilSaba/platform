@@ -147,7 +147,47 @@ pub(super) struct ChannelSnapshot {
     pub slowmode_seconds: u16,
     pub default_auto_archive_minutes: Option<u16>,
     pub default_thread_slowmode_seconds: Option<u16>,
-    pub overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
+    pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
+}
+
+/// Discord が追加した権限や、現在の SDK が名前を持たない権限 bit を保持します。
+///
+/// 管理設定から指定できる既知権限とは分離し、読み取った bit を更新時にもそのまま
+/// 送り返せるようにします。値の意味は adapter に解釈させず、ここでは opaque な mask
+/// として扱います。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct PermissionBits(u64);
+
+impl PermissionBits {
+    pub(super) const fn new(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    pub(super) const fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub(super) const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// 一つの permission overwrite の既知部分と opaque な未知 bit です。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct ChannelOverwritePermissions {
+    pub known: BTreeMap<KnownPermission, OverwriteValue>,
+    pub allow_unknown: PermissionBits,
+    pub deny_unknown: PermissionBits,
+}
+
+impl ChannelOverwritePermissions {
+    #[cfg(test)]
+    pub(super) fn from_known(known: BTreeMap<KnownPermission, OverwriteValue>) -> Self {
+        Self {
+            known,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,7 +233,7 @@ pub(super) struct ChannelCreate {
     pub slowmode_seconds: u16,
     pub default_auto_archive_minutes: Option<u16>,
     pub default_thread_slowmode_seconds: Option<u16>,
-    pub overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
+    pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,40 +251,48 @@ pub(super) enum ChannelDeleteOutcome {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ChannelUpdate {
     pub name: Option<String>,
-    pub parent_id: Option<Option<ChannelId>>,
-    pub topic: Option<Option<String>>,
+    pub parent_id: ChannelUpdateValue<ChannelId>,
+    pub topic: ChannelUpdateValue<String>,
     pub nsfw: Option<bool>,
     pub slowmode_seconds: Option<u16>,
-    pub default_auto_archive_minutes: Option<Option<u16>>,
-    pub default_thread_slowmode_seconds: Option<Option<u16>>,
-    pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>>,
-    /// Discord の `delete_permission` API で対象ごとに全解除する override です。
-    pub permission_overwrites_to_delete: BTreeSet<ChannelOverwriteTarget>,
+    pub default_auto_archive_minutes: ChannelUpdateValue<u16>,
+    pub default_thread_slowmode_seconds: ChannelUpdateValue<u16>,
+    pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
+}
+
+/// Channel の optional 属性を更新する要求です。
+///
+/// `Keep` は API payload から省略し、`Set` は具体値を設定し、`Clear` は
+/// Discord の null 相当へ戻します。ネストした `Option` でこの三値を表現しません。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum ChannelUpdateValue<T> {
+    #[default]
+    Keep,
+    Set(T),
+    Clear,
+}
+
+impl<T> ChannelUpdateValue<T> {
+    pub(super) fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
 }
 
 impl ChannelUpdate {
-    pub(super) fn is_empty(&self) -> bool {
-        self.name.is_none()
-            && self.parent_id.is_none()
-            && self.topic.is_none()
-            && self.nsfw.is_none()
-            && self.slowmode_seconds.is_none()
-            && self.default_auto_archive_minutes.is_none()
-            && self.default_thread_slowmode_seconds.is_none()
-            && self.overwrites.is_none()
-            && self.permission_overwrites_to_delete.is_empty()
-    }
-
     #[cfg(test)]
     pub(crate) fn apply_to(&self, channel: &mut ChannelSnapshot) {
         if let Some(name) = &self.name {
             channel.name.clone_from(name);
         }
-        if let Some(parent_id) = self.parent_id {
-            channel.parent_id = parent_id;
+        match &self.parent_id {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(parent_id) => channel.parent_id = Some(*parent_id),
+            ChannelUpdateValue::Clear => channel.parent_id = None,
         }
-        if let Some(topic) = &self.topic {
-            channel.topic.clone_from(topic);
+        match &self.topic {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(topic) => channel.topic = Some(topic.clone()),
+            ChannelUpdateValue::Clear => channel.topic = None,
         }
         if let Some(nsfw) = self.nsfw {
             channel.nsfw = nsfw;
@@ -252,17 +300,18 @@ impl ChannelUpdate {
         if let Some(slowmode_seconds) = self.slowmode_seconds {
             channel.slowmode_seconds = slowmode_seconds;
         }
-        if let Some(default_auto_archive_minutes) = self.default_auto_archive_minutes {
-            channel.default_auto_archive_minutes = default_auto_archive_minutes;
+        match &self.default_auto_archive_minutes {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(minutes) => channel.default_auto_archive_minutes = Some(*minutes),
+            ChannelUpdateValue::Clear => channel.default_auto_archive_minutes = None,
         }
-        if let Some(default_thread_slowmode_seconds) = self.default_thread_slowmode_seconds {
-            channel.default_thread_slowmode_seconds = default_thread_slowmode_seconds;
+        match &self.default_thread_slowmode_seconds {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(seconds) => channel.default_thread_slowmode_seconds = Some(*seconds),
+            ChannelUpdateValue::Clear => channel.default_thread_slowmode_seconds = None,
         }
         if let Some(overwrites) = &self.overwrites {
             channel.overwrites.clone_from(overwrites);
-        }
-        for target in &self.permission_overwrites_to_delete {
-            channel.overwrites.remove(target);
         }
     }
 }
