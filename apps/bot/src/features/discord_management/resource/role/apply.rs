@@ -382,12 +382,15 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     let desired = desired_attributes
                         .get(&logical_id)
                         .expect("作成対象 Role は definition に存在します");
-                    let create = build_role_create(
+                    let create = match build_role_create(
                         desired,
                         &session.catalog.permission_names,
                         &session.catalog.default_permissions,
                         &logical_id,
-                    )?;
+                    ) {
+                        Ok(create) => create,
+                        Err(error) => return session.into_result(RoleApplyStatus::Failed(error.to_string())),
+                    };
                     let outcome = match tokio::time::timeout(
                         processing_deadline.saturating_duration_since(Instant::now()),
                         self.source.create_role(&guild_id, create),
@@ -402,7 +405,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                         return session.into_result(RoleApplyStatus::CreationResponseUnknown);
                     };
                     if session.state.roles.values().any(|existing_id| *existing_id == role_id) {
-                        return Err(ManagementError::InvalidState(format!(
+                        return session.into_result(RoleApplyStatus::Failed(format!(
                             "新しく作成した Role {role_id} は既存の対応と衝突しています"
                         )));
                     }

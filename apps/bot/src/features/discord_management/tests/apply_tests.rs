@@ -256,6 +256,49 @@ async fn create_failure_returns_successful_mappings_only() {
     assert!(returned_state["roles"].get("second").is_none());
 }
 
+/// 先行する Role 作成成功後に後続作成の ID が既存対応と衝突しても、確定済み mapping を返して停止する。
+#[tokio::test]
+async fn create_id_collision_returns_successful_mappings_only() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "先行"
+        [roles.second]
+        name = "後続"
+    "#;
+    let state_json = state("100", "{}");
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("衝突")));
+    assert!(matches!(result.applied.get(&logical_id("first")), Some(Change::Create)));
+    assert!(matches!(
+        result.pending.get(&logical_id("second")),
+        Some(Change::Create)
+    ));
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["first"], "300");
+    assert!(returned_state["roles"].get("second").is_none());
+}
+
 /// 作成応答不明時に重複作成せず、入力 state を変更せず返すことを保証する。
 #[tokio::test]
 async fn unknown_create_response_leaves_mapping_unchanged() {
