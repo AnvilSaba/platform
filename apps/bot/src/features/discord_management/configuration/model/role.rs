@@ -1,3 +1,5 @@
+use validator::ValidationError;
+
 pub(crate) fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
     for (logical_id, member) in &definition.members {
         if !matches!(member.mode, RoleMode::Reference) {
@@ -134,6 +136,7 @@ impl RoleMode {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawRoleAttributes {
+    #[validate(custom(function = "validate_role_name"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<ManagedValue<String>>,
 
@@ -148,6 +151,19 @@ pub(crate) struct RawRoleAttributes {
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) permissions: BTreeMap<PermissionName, ManagedValue<bool>>,
+}
+
+fn validate_role_name(value: &ManagedValue<String>) -> Result<(), ValidationError> {
+    let ManagedValue::Value(value) = value else {
+        return Ok(());
+    };
+    if value.is_empty() {
+        return Err(validation_error("length", "name は1文字以上で指定してください"));
+    }
+    if value.chars().count() > 100 {
+        return Err(validation_error("length", "name は100文字以内で指定してください"));
+    }
+    Ok(())
 }
 
 impl RawRoleAttributes {
@@ -227,6 +243,39 @@ impl RoleAttributes {
 pub(crate) enum ManagedValue<T> {
     Value(T),
     Default,
+}
+
+impl<T> ManagedValue<T> {
+    pub(crate) fn as_value(&self) -> Option<&T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Default => None,
+        }
+    }
+
+    pub(crate) fn into_value(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Default => None,
+        }
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+
+    pub(crate) fn resolve(&self, default: T) -> T
+    where
+        T: Clone,
+    {
+        if self.is_default() {
+            default
+        } else {
+            self.clone()
+                .into_value()
+                .expect("Default 以外の ManagedValue は Value です")
+        }
+    }
 }
 
 #[derive(Deserialize)]
