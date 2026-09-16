@@ -8,11 +8,11 @@ use super::{
     configuration::{PermissionVocabulary, PlanInput},
     domain::ManagementError,
     port::RoleSource,
-    resource::role::{RolePlan, build_plan, reconcile_pending_updates as reconcile_pending_role_updates},
+    resource::role::{RolePlan, build_plan},
 };
 
 use super::port::ChannelSource;
-use super::resource::channel::{ChannelPlan, build_channel_plan_with_capabilities, reconcile_pending_updates};
+use super::resource::channel::{ChannelPlan, build_channel_plan_with_capabilities};
 
 /// 希望構成と実構成を比較し、全体管理計画の Role 部分を返します。
 pub(super) async fn plan_roles<S: RoleSource>(
@@ -24,9 +24,7 @@ pub(super) async fn plan_roles<S: RoleSource>(
 ) -> Result<RolePlan, ManagementError> {
     let input = PlanInput::parse(definition_toml, state_json, guild_id, vocabulary)?;
     let catalog = source.role_catalog(&guild_id).await?;
-    let mut state = input.state;
-    reconcile_pending_role_updates(&input.definition, &mut state, &catalog)?;
-    build_plan(&input.definition, &state, &catalog)
+    build_plan(&input.definition, &input.state, &catalog)
 }
 
 /// 希望構成と実構成を比較し、Category/Text Channel 部分の変更計画を返します。
@@ -40,7 +38,5 @@ pub(super) async fn plan_channels<S: ChannelSource>(
     let input = PlanInput::parse(definition_toml, state_json, guild_id, vocabulary)?;
     let catalog = source.channel_catalog(&guild_id).await?;
     let can_manage_roles = source.can_manage_roles(&guild_id).await?;
-    let mut state = input.state;
-    reconcile_pending_updates(&input.definition, &mut state, &catalog, can_manage_roles)?;
-    build_channel_plan_with_capabilities(&input.definition, &state, &catalog, can_manage_roles)
+    build_channel_plan_with_capabilities(&input.definition, &input.state, &catalog, can_manage_roles)
 }
