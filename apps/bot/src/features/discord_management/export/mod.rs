@@ -28,7 +28,7 @@ pub(super) async fn export_roles<S: RoleSource>(
     guild_id: GuildId,
     previous_state_json: Option<&str>,
 ) -> Result<ExportFiles, ManagementError> {
-    let mut previous_state = previous_state_json
+    let previous_state = previous_state_json
         .map(|contents| StateFile::parse_for_guild(contents, guild_id))
         .transpose()?;
 
@@ -42,11 +42,6 @@ pub(super) async fn export_roles<S: RoleSource>(
         .collect::<BTreeMap<_, _>>();
     let catalog = source.role_catalog(&guild_id).await?;
     let catalog_ids = catalog.roles.iter().map(|role| role.id).collect::<BTreeSet<_>>();
-    if let Some(previous_state) = previous_state.as_mut() {
-        previous_state
-            .pending_role_updates
-            .retain(|_, pending| !catalog_ids.contains(&pending.discord_id));
-    }
     if let Some(previous_state) = previous_state.as_ref() {
         for (logical_id, discord_id) in &previous_mappings {
             if catalog_ids.contains(discord_id) {
@@ -169,10 +164,6 @@ pub(super) async fn export_roles<S: RoleSource>(
             .as_ref()
             .map(|state| state.pending_deletions.clone())
             .unwrap_or_default(),
-        pending_role_updates: previous_state
-            .as_ref()
-            .map(|state| state.pending_role_updates.clone())
-            .unwrap_or_default(),
         deleted_channels: previous_state
             .as_ref()
             .map(|state| state.deleted_channels.clone())
@@ -184,10 +175,6 @@ pub(super) async fn export_roles<S: RoleSource>(
         pending_channel_deletions: previous_state
             .as_ref()
             .map(|state| state.pending_channel_deletions.clone())
-            .unwrap_or_default(),
-        pending_channel_updates: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_updates.clone())
             .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
@@ -204,7 +191,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
     guild_id: GuildId,
     previous_state_json: Option<&str>,
 ) -> Result<ExportFiles, ManagementError> {
-    let mut previous_state = previous_state_json
+    let previous_state = previous_state_json
         .map(|contents| StateFile::parse_for_guild(contents, guild_id))
         .transpose()?;
     let previous_mappings = previous_state
@@ -221,11 +208,6 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .iter()
         .map(|channel| channel.id)
         .collect::<BTreeSet<_>>();
-    if let Some(previous_state) = previous_state.as_mut() {
-        previous_state
-            .pending_channel_updates
-            .retain(|_, pending| !catalog_ids.contains(&pending.discord_id));
-    }
     if let Some(previous_state) = previous_state.as_ref() {
         for (logical_id, discord_id) in &previous_mappings {
             if catalog_ids.contains(discord_id) {
@@ -420,10 +402,6 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .as_ref()
             .map(|state| state.pending_deletions.clone())
             .unwrap_or_default(),
-        pending_role_updates: previous_state
-            .as_ref()
-            .map(|state| state.pending_role_updates.clone())
-            .unwrap_or_default(),
         deleted_channels: previous_state
             .as_ref()
             .map(|state| state.deleted_channels.clone())
@@ -435,10 +413,6 @@ pub(super) async fn export_channels<S: ChannelSource>(
         pending_channel_deletions: previous_state
             .as_ref()
             .map(|state| state.pending_channel_deletions.clone())
-            .unwrap_or_default(),
-        pending_channel_updates: previous_state
-            .as_ref()
-            .map(|state| state.pending_channel_updates.clone())
             .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;

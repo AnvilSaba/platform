@@ -2,11 +2,11 @@ use std::time::{Duration, Instant};
 
 use super::{
     AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, compose_attributes,
-    desired_channel_create_with_catalog, reconcile_pending_updates,
+    desired_channel_create_with_catalog,
 };
 use crate::features::discord_management::{
     apply::guild_lock::{GuildApplyLock, GuildApplyPermit},
-    configuration::{ChannelKind, PendingChannelUpdate, PermissionVocabulary, PlanInput, StateFile, serialize_state},
+    configuration::{ChannelKind, PermissionVocabulary, PlanInput, StateFile, serialize_state},
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, GuildId},
     port::{
@@ -162,8 +162,7 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
         confirmed_plan: &ChannelPlan,
         processing_deadline: Instant,
     ) -> Result<ApplyPreparation, ManagementError> {
-        let PlanInput { definition, mut state } =
-            PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
+        let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
         let Some(permit) = self.apply_lock.try_acquire(guild_id) else {
             return Ok(ApplyPreparation::Finished(ChannelApplyResult {
                 status: ChannelApplyStatus::GuildBusy,
@@ -228,7 +227,6 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
                 }));
             }
         };
-        reconcile_pending_updates(&definition, &mut state, &catalog, can_manage_roles)?;
         let current_plan = build_channel_plan_with_capabilities(&definition, &state, &catalog, can_manage_roles)?;
         if current_plan != *confirmed_plan {
             return Ok(ApplyPreparation::Finished(ChannelApplyResult {
@@ -285,19 +283,10 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
         Ok(Err(error)) => return Ok(Some(ChannelApplyStatus::Failed(error.to_string()))),
         Err(_) => ChannelUpdateOutcome::ResponseUnknown,
     };
-    if outcome == ChannelUpdateOutcome::ResponseUnknown {
-        session.state.pending_channel_updates.insert(
-            logical_id.clone(),
-            PendingChannelUpdate {
-                discord_id: channel_id,
-                intent: "update".to_owned(),
-                fingerprint: attributes.intent_fingerprint(),
-            },
-        );
-    }
     if outcome == ChannelUpdateOutcome::Applied {
-        session.state.pending_channel_updates.remove(logical_id);
         session.mark_applied(logical_id);
+    } else {
+        return Ok(Some(ChannelApplyStatus::ResponseUnknown));
     }
     let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
     session.catalog = match tokio::time::timeout(
@@ -328,10 +317,6 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
         } else {
             ChannelApplyStatus::Failed(format!("Channel {logical_id} の更新後の値が希望値と一致しません"))
         }));
-    }
-    if outcome == ChannelUpdateOutcome::ResponseUnknown {
-        session.state.pending_channel_updates.remove(logical_id);
-        session.mark_applied(logical_id);
     }
     Ok(None)
 }
@@ -444,7 +429,6 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     session.state.channels.insert(logical_id.clone(), channel_id);
                     session.state.deleted_channels.remove(&logical_id);
                     session.state.pending_channel_creations.remove(&logical_id);
-                    session.state.pending_channel_updates.remove(&logical_id);
                     session.mark_applied(&logical_id);
                     match refresh_catalog(self.source, &guild_id, processing_deadline).await {
                         Ok(catalog) => session.catalog = catalog,
@@ -510,7 +494,6 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     session.state.deleted_channels.remove(&logical_id);
                     session.state.pending_channel_deletions.remove(&logical_id);
                     session.state.pending_channel_creations.remove(&logical_id);
-                    session.state.pending_channel_updates.remove(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {
