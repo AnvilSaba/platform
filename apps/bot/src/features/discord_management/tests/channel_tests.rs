@@ -230,7 +230,7 @@ fn channel_snapshot(id: &str, kind: ChannelKind, name: &str, parent_id: Option<&
         nsfw: false,
         slowmode_seconds: 0,
         default_auto_archive_minutes: Some(1440),
-        default_thread_slowmode_seconds: Some(0),
+        default_thread_slowmode_seconds: 0,
         overwrites: BTreeMap::new(),
     }
 }
@@ -282,10 +282,7 @@ async fn channel_plan_reports_text_attribute_changes() {
         attributes.default_auto_archive_minutes().unwrap().desired(),
         Some(&4320)
     );
-    assert_eq!(
-        attributes.default_thread_slowmode_seconds().unwrap().desired(),
-        Some(&10)
-    );
+    assert_eq!(attributes.default_thread_slowmode_seconds().unwrap().desired(), &10);
 }
 
 /// 先行する Channel 作成後に後続更新の対象が消えた場合も、作成済み mapping を返して停止する。
@@ -465,7 +462,7 @@ async fn channel_export_round_trip_is_idempotent() {
                     nsfw: true,
                     slowmode_seconds: 5,
                     default_auto_archive_minutes: Some(4320),
-                    default_thread_slowmode_seconds: Some(10),
+                    default_thread_slowmode_seconds: 10,
                     overwrites: BTreeMap::new(),
                 },
             ],
@@ -508,7 +505,7 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
                 nsfw: false,
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
-                default_thread_slowmode_seconds: Some(0),
+                default_thread_slowmode_seconds: 0,
                 overwrites: BTreeMap::from([
                     (
                         ChannelOverwriteTarget::Role(RoleId::new(400)),
@@ -654,7 +651,149 @@ async fn channel_create_plan_renders_desired_attributes() {
     assert!(rendered.contains("parent: information"));
     assert!(!rendered.contains("TaggedLogicalId"));
     assert!(!rendered.contains("PhantomData"));
+    assert!(rendered.contains("nsfw: false"));
     assert!(rendered.contains("slowmode_seconds: 5"));
+    assert!(rendered.contains("default_auto_archive_minutes: 1440"));
+    assert!(rendered.contains("default_thread_slowmode_seconds: 0"));
+}
+
+/// Text の topic に空文字を指定した場合、解除ではなく空文字の設定として扱う。
+#[tokio::test]
+async fn channel_topic_empty_string_is_set_and_round_trips_without_a_plan() {
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        topic = ""
+    "#;
+    let state_json = channel_state(r#"{"rules":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+    let attributes = plan
+        .get(&ChannelLogicalId::parse("rules").unwrap())
+        .and_then(ChannelChange::attributes)
+        .expect("空文字 topic の差分が plan に含まれます");
+    assert_eq!(attributes.topic().unwrap().desired(), Some(&String::new()));
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    assert_eq!(source.catalog.lock().unwrap().channels[0].topic.as_deref(), Some(""));
+
+    assert!(
+        plan_channels(
+            &source,
+            &test_permission_vocabulary(),
+            guild_id(100),
+            definition,
+            &result.state_json,
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+/// Channel の変更計画は overwrite の対象を snowflake の安定した表記で表示する。
+#[tokio::test]
+async fn channel_plan_renders_overwrite_targets_readably() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        mode = "reference"
+        [members.alice]
+        mode = "reference"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        [channels.rules.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+        [channels.rules.overwrites."role:moderator"]
+        VIEW_CHANNEL = "allow"
+        [channels.rules.overwrites."member:alice"]
+        VIEW_CHANNEL = "deny"
+    "#;
+    let state = r#"
+        {
+            "schema_version": 1,
+            "guild_id": "100",
+            "roles": {"moderator": "400"},
+            "members": {"alice": "500"},
+            "channels": {"rules": "300"}
+        }
+    "#;
+    let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .unwrap();
+
+    let rendered = plan.render();
+    assert!(rendered.contains("overwrites.everyone.VIEW_CHANNEL"));
+    assert!(rendered.contains("overwrites.role:400.VIEW_CHANNEL"));
+    assert!(rendered.contains("overwrites.member:500.VIEW_CHANNEL"));
+    assert!(!rendered.contains("ChannelOverwriteTarget"));
+    assert!(!rendered.contains("PhantomData"));
+}
+
+/// Discord が Thread の既定 slowmode を省略して返しても、0 として扱い再計画しない。
+#[tokio::test]
+async fn channel_default_thread_slowmode_zero_is_canonical_after_apply() {
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![ChannelSnapshot {
+            id: "300".parse().unwrap(),
+            kind: ChannelKind::Text,
+            manageable: true,
+            name: "ルール".to_owned(),
+            parent_id: None,
+            topic: None,
+            nsfw: false,
+            slowmode_seconds: 0,
+            default_auto_archive_minutes: Some(1440),
+            default_thread_slowmode_seconds: 0,
+            overwrites: BTreeMap::new(),
+        }],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        default_thread_slowmode_seconds = { default = true }
+    "#;
+    let state_json = channel_state(r#"{"rules":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty(), "canonical な 0 に対して不要な更新を計画しません");
 }
 
 /// 新規作成の plan は default/clear を apply と同じ Discord API の具体値へ解決して表示する。
@@ -692,7 +831,7 @@ async fn channel_create_plan_resolves_default_and_clear_values() {
     assert!(rendered.contains("nsfw: false"));
     assert!(rendered.contains("slowmode_seconds: 0"));
     assert!(rendered.contains("default_auto_archive_minutes: None"));
-    assert!(rendered.contains("default_thread_slowmode_seconds: Some(0)"));
+    assert!(rendered.contains("default_thread_slowmode_seconds: 0"));
     assert!(!rendered.contains("Default"));
     assert!(!rendered.contains("Clear"));
 }
@@ -1037,7 +1176,7 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
             nsfw: false,
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
-            default_thread_slowmode_seconds: Some(0),
+            default_thread_slowmode_seconds: 10,
             overwrites: BTreeMap::new(),
         }],
     });
@@ -1050,6 +1189,7 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
         topic = { clear = true }
         nsfw = true
         slowmode_seconds = 10
+        default_thread_slowmode_seconds = { clear = true }
     "#;
     let state_json = channel_state(r#"{"rules":"300"}"#);
     let plan = plan_channels(
@@ -1081,6 +1221,7 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
         assert_eq!(channel.topic, None);
         assert!(channel.nsfw);
         assert_eq!(channel.slowmode_seconds, 10);
+        assert_eq!(channel.default_thread_slowmode_seconds, 0);
     }
     assert!(
         plan_channels(
@@ -1111,7 +1252,7 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
             nsfw: false,
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
-            default_thread_slowmode_seconds: Some(0),
+            default_thread_slowmode_seconds: 0,
             overwrites: BTreeMap::from([(
                 ChannelOverwriteTarget::Everyone,
                 ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -1200,7 +1341,7 @@ async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_over
             nsfw: false,
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
-            default_thread_slowmode_seconds: Some(0),
+            default_thread_slowmode_seconds: 0,
             overwrites,
         }],
     });
@@ -1289,7 +1430,7 @@ async fn channel_apply_unparents_children_before_category_deletion() {
                 nsfw: false,
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
-                default_thread_slowmode_seconds: Some(0),
+                default_thread_slowmode_seconds: 0,
                 overwrites: BTreeMap::new(),
             },
         ],

@@ -306,7 +306,10 @@ fn channel_snapshot(
         nsfw: channel.nsfw,
         slowmode_seconds: channel.base.rate_limit_per_user.map_or(0, |seconds| seconds.get()),
         default_auto_archive_minutes: channel.default_auto_archive_duration.and_then(auto_archive_minutes),
-        default_thread_slowmode_seconds: channel.default_thread_rate_limit_per_user.map(|seconds| seconds.get()),
+        // Discord は未設定を返すことがあるが、構成上の canonical 値は 0。
+        default_thread_slowmode_seconds: channel
+            .default_thread_rate_limit_per_user
+            .map_or(0, |seconds| seconds.get()),
         overwrites,
     })
 }
@@ -395,7 +398,7 @@ fn channel_edit_is_required(update: &ChannelUpdate) -> bool {
         || update.nsfw.is_some()
         || update.slowmode_seconds.is_some()
         || !update.default_auto_archive_minutes.is_keep()
-        || !update.default_thread_slowmode_seconds.is_keep()
+        || update.default_thread_slowmode_seconds.is_some()
         || update.overwrites.is_some()
 }
 
@@ -475,7 +478,7 @@ fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateCh
             nsfw: create.nsfw,
             rate_limit_per_user: Some(DiscordSeconds(create.slowmode_seconds)),
             default_auto_archive_duration: create.default_auto_archive_minutes.map(DiscordMinutes),
-            default_thread_rate_limit_per_user: create.default_thread_slowmode_seconds.map(DiscordSeconds),
+            default_thread_rate_limit_per_user: Some(DiscordSeconds(create.default_thread_slowmode_seconds)),
             permission_overwrites,
         }),
         ChannelKind::Category => CreateChannelRequest::Category(CreateCategoryChannelRequest {
@@ -497,12 +500,7 @@ fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyCha
         default_auto_archive_duration: nullable_patch_field(&update.default_auto_archive_minutes, |minutes| {
             DiscordMinutes(*minutes)
         }),
-        default_thread_rate_limit_per_user: match &update.default_thread_slowmode_seconds {
-            ChannelUpdateValue::Keep => None,
-            ChannelUpdateValue::Set(seconds) => Some(DiscordSeconds(*seconds)),
-            // Discord の仕様上、この属性を無効化する値は 0 です。
-            ChannelUpdateValue::Clear => Some(DiscordSeconds(0)),
-        },
+        default_thread_rate_limit_per_user: update.default_thread_slowmode_seconds.map(DiscordSeconds),
         permission_overwrites: update
             .overwrites
             .as_ref()
@@ -621,7 +619,7 @@ mod tests {
                 nsfw: false,
                 slowmode_seconds: 5,
                 default_auto_archive_minutes: Some(4320),
-                default_thread_slowmode_seconds: Some(10),
+                default_thread_slowmode_seconds: 10,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -644,6 +642,38 @@ mod tests {
     }
 
     #[test]
+    fn create_payload_preserves_an_empty_topic() {
+        let payload = create_channel_payload(
+            &GuildId::new(100),
+            ChannelCreate {
+                kind: ChannelKind::Text,
+                name: "rules".to_owned(),
+                parent_id: None,
+                topic: Some(String::new()),
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: None,
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "name": "rules",
+                    "type": 0,
+                    "topic": "",
+                    "nsfw": false,
+                    "rate_limit_per_user": 0,
+                    "default_thread_rate_limit_per_user": 0
+                }"#,
+            )
+        );
+    }
+
+    #[test]
     fn create_payload_omits_overwrite_entries_that_only_clear_permissions() {
         let permission = permission_vocabulary()
             .known_permissions()
@@ -659,7 +689,7 @@ mod tests {
                 nsfw: false,
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: None,
-                default_thread_slowmode_seconds: None,
+                default_thread_slowmode_seconds: 0,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Clear)])),
@@ -674,7 +704,8 @@ mod tests {
             "name": "rules",
             "type": 0,
             "nsfw": false,
-            "rate_limit_per_user": 0
+            "rate_limit_per_user": 0,
+            "default_thread_rate_limit_per_user": 0
         }"#
             )
         );
@@ -688,7 +719,7 @@ mod tests {
                 nsfw: Some(true),
                 slowmode_seconds: Some(0),
                 default_auto_archive_minutes: ChannelUpdateValue::Clear,
-                default_thread_slowmode_seconds: ChannelUpdateValue::Clear,
+                default_thread_slowmode_seconds: Some(0),
                 ..ChannelUpdate::default()
             },
         );
@@ -714,7 +745,7 @@ mod tests {
                 nsfw: true,
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: None,
-                default_thread_slowmode_seconds: None,
+                default_thread_slowmode_seconds: 0,
                 overwrites: BTreeMap::new(),
             },
         );
