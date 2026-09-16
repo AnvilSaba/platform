@@ -67,13 +67,16 @@ fn validate_references(definition: &DefinitionFile, state: &StateFile) -> Result
     Ok(())
 }
 
-fn validate_channel_container_reference(
+fn validate_channel_container_reference<T>(
     resource_kind: &str,
     resource_name: &str,
-    value: &RawResourceDefinition,
+    value: &T,
     definition: &DefinitionFile,
     state: &StateFile,
-) -> Result<(), ManagementError> {
+) -> Result<(), ManagementError>
+where
+    T: RawResourceReference,
+{
     if value.is_absent() {
         return Ok(());
     }

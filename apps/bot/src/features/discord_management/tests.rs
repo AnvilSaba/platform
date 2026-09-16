@@ -679,6 +679,7 @@ async fn plan_rejects_a_thread_channel_reference_without_a_binding() {
         [threads.details]
         channel = "information"
         name = "詳細"
+        body = []
     "#;
     let state = r#"{
         "schema_version": 1,
@@ -830,8 +831,11 @@ async fn bound_state_can_be_passed_to_the_next_plan() {
 fn management_sample_accepts_resource_declarations() {
     let sample = include_str!("../../../../../docs/examples/discord-management.base.toml");
     let definition = parse_definition(sample).unwrap();
-    assert_eq!(definition.message_sets["guidelines"].body.len(), 2);
-    assert_eq!(definition.threads["basic_details"].body.len(), 1);
+    assert_eq!(
+        definition.message_sets["guidelines"].body.as_ref().map_or(0, Vec::len),
+        2
+    );
+    assert_eq!(definition.threads["basic_details"].body.as_ref().map_or(0, Vec::len), 1);
 }
 
 /// 同名Roleが複数あっても、名前ではなくSnowflake由来の論理IDで一意にexportできることを保証する。
@@ -1962,6 +1966,59 @@ fn resource_definitions_are_validated_as_typed_models() {
         ManagementError::InvalidDefinition(message) if message.contains("name")
     ));
 
+    let missing_thread_body = parse_definition(
+        r#"
+            schema_version = 1
+            [threads.details]
+            channel = "rules"
+            name = "詳細"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_thread_body,
+        ManagementError::InvalidDefinition(message) if message.contains("body")
+    ));
+
+    let present_thread_ensure = parse_definition(
+        r#"
+            schema_version = 1
+            [threads.details]
+            ensure = "present"
+            channel = "rules"
+            name = "詳細"
+            body = []
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        present_thread_ensure,
+        ManagementError::InvalidDefinition(message) if message.contains("present") && message.contains("ensure")
+    ));
+
+    let present_message_set = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            ensure = "present"
+        "#,
+    )
+    .unwrap();
+    assert!(present_message_set.message_sets["guidelines"].body.is_none());
+
+    let thread_only_name = parse_definition(
+        r#"
+            schema_version = 1
+            [message_sets.guidelines]
+            name = "案内"
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        thread_only_name,
+        ManagementError::InvalidDefinition(message) if message.contains("name")
+    ));
+
     let empty_body = parse_definition(
         r#"
             schema_version = 1
@@ -2047,6 +2104,76 @@ fn resource_definitions_are_validated_as_typed_models() {
     )
     .unwrap_err();
     assert!(matches!(unknown_key, ManagementError::InvalidDefinition(message) if message.contains("typo")));
+}
+
+/// order の論理 ID 型付け、重複検証、定義モデルでの保持を保証する。
+#[test]
+fn order_definition_is_typed_and_validated() {
+    let valid = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            roles = ["moderator"]
+            categories = ["information"]
+            [order.children]
+            information = ["rules"]
+        "#,
+    )
+    .unwrap();
+    assert!(valid.order.is_some());
+
+    let duplicate_roles = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            roles = ["moderator", "moderator"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate_roles,
+        ManagementError::InvalidDefinition(message) if message.contains("order") && message.contains("重複")
+    ));
+
+    let duplicate_categories = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            categories = ["information", "information"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate_categories,
+        ManagementError::InvalidDefinition(message) if message.contains("order") && message.contains("重複")
+    ));
+
+    let duplicate_children = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            [order.children]
+            information = ["rules", "rules"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate_children,
+        ManagementError::InvalidDefinition(message) if message.contains("order") && message.contains("重複")
+    ));
+
+    let invalid_role_id = parse_definition(
+        r#"
+            schema_version = 1
+            [order]
+            roles = ["invalid.id"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_role_id,
+        ManagementError::InvalidDefinition(message) if message.contains("論理 ID")
+    ));
 }
 
 #[cfg(test)]
