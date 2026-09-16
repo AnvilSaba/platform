@@ -86,6 +86,7 @@ struct ApplyingFakeChannelSource {
     deletes: Arc<Mutex<Vec<ChannelId>>>,
     next_id: Arc<Mutex<u64>>,
     create_outcome: ChannelCreateOutcome,
+    create_remove_channel: Option<ChannelId>,
     delete_outcome: ChannelDeleteOutcome,
     apply_delete: bool,
 }
@@ -133,7 +134,8 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
         };
         if let ChannelCreateOutcome::Created(channel_id) = outcome {
             let parent_id = create.parent_id;
-            self.catalog.lock().unwrap().channels.push(ChannelSnapshot {
+            let mut catalog = self.catalog.lock().unwrap();
+            catalog.channels.push(ChannelSnapshot {
                 id: channel_id,
                 kind: create.kind,
                 manageable: true,
@@ -146,6 +148,9 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
                 default_thread_slowmode_seconds: create.default_thread_slowmode_seconds,
                 overwrites: create.overwrites,
             });
+            if let Some(remove_id) = self.create_remove_channel {
+                catalog.channels.retain(|channel| channel.id != remove_id);
+            }
         }
         Ok(outcome)
     }
@@ -208,6 +213,7 @@ fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSourc
         deletes: Arc::new(Mutex::new(Vec::new())),
         next_id: Arc::new(Mutex::new(500)),
         create_outcome: ChannelCreateOutcome::Created(ChannelId::new(500)),
+        create_remove_channel: None,
         delete_outcome: ChannelDeleteOutcome::Deleted,
         apply_delete: true,
     }
@@ -280,6 +286,75 @@ async fn channel_plan_reports_text_attribute_changes() {
         attributes.default_thread_slowmode_seconds().unwrap().desired(),
         Some(&10)
     );
+}
+
+/// 先行する Channel 作成後に後続更新の対象が消えた場合も、作成済み mapping を返して停止する。
+#[tokio::test]
+async fn mixed_channel_apply_returns_confirmed_create_when_later_update_target_is_missing() {
+    let mut source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![channel_snapshot("300", ChannelKind::Text, "更新前", None)],
+    });
+    source.create_remove_channel = Some(ChannelId::new(300));
+    let definition = r#"
+        schema_version = 1
+        [channels.a_create]
+        type = "text"
+        name = "新規"
+        [channels.b_update]
+        type = "text"
+        name = "更新後"
+    "#;
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {},
+        "channels": {"b_update": "300"}
+    }"#;
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        state_json,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("a_create").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    assert!(
+        plan.get(&ChannelLogicalId::parse("b_update").unwrap())
+            .is_some_and(ChannelChange::is_update)
+    );
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(result.status, ChannelApplyStatus::Failed(message) if message.contains("b_update") && message.contains("存在しません"))
+    );
+    assert!(matches!(
+        result.applied.get(&ChannelLogicalId::parse("a_create").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    assert!(
+        result
+            .pending
+            .get(&ChannelLogicalId::parse("b_update").unwrap())
+            .is_some_and(ChannelChange::is_update)
+    );
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["channels"]["a_create"], "500");
+    assert_eq!(returned_state["channels"]["b_update"], "300");
 }
 
 /// Category は Text 専用の nsfw 属性を公開 plan seam で拒否する。
