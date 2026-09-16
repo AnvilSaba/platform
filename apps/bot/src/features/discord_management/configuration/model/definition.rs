@@ -1,5 +1,4 @@
 #[derive(Debug, Deserialize, Serialize, Validate)]
-#[validate(schema(function = "validate_definition"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawDefinitionFile {
     #[validate(range(
@@ -26,32 +25,21 @@ pub(crate) struct RawDefinitionFile {
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
 
     #[validate(nested)]
-    #[validate(custom(function = "validate_resource_names"))]
+    #[validate(custom(function = "validate_message_set_names"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) message_sets: BTreeMap<String, RawResourceDefinition>,
+    pub(crate) message_sets: BTreeMap<String, RawMessageSetDefinition>,
 
     #[validate(nested)]
-    #[validate(custom(function = "validate_resource_names"))]
+    #[validate(custom(function = "validate_thread_names"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
+    pub(crate) threads: BTreeMap<String, RawThreadDefinition>,
 
+    #[validate(nested)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) order: Option<RawOrderDefinition>,
 }
 
-fn validate_definition(definition: &RawDefinitionFile) -> Result<(), ValidationError> {
-    for (name, thread) in &definition.threads {
-        if !thread.is_absent() && thread.name.is_none() {
-            return Err(validation_error(
-                "required",
-                format!("管理スレッド {name} には name が必要です"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_resource_names(resources: &BTreeMap<String, RawResourceDefinition>) -> Result<(), ValidationError> {
+fn validate_resource_names<T>(resources: &BTreeMap<String, T>) -> Result<(), ValidationError> {
     for name in resources.keys() {
         if name.is_empty()
             || !name
@@ -67,14 +55,25 @@ fn validate_resource_names(resources: &BTreeMap<String, RawResourceDefinition>) 
     Ok(())
 }
 
+fn validate_message_set_names<T>(resources: &BTreeMap<String, T>) -> Result<(), ValidationError> {
+    validate_resource_names(resources)
+}
+
+fn validate_thread_names<T>(resources: &BTreeMap<String, T>) -> Result<(), ValidationError> {
+    validate_resource_names(resources)
+}
+
 #[derive(Debug)]
 pub(crate) struct DefinitionFile {
     pub(crate) settings_sets: SettingsSets,
     pub(crate) roles: BTreeMap<RoleLogicalId, RoleDefinition>,
     pub(crate) channels: BTreeMap<ChannelLogicalId, ChannelDefinition>,
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
-    pub(crate) message_sets: BTreeMap<String, RawResourceDefinition>,
-    pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
+    pub(crate) message_sets: BTreeMap<String, RawMessageSetDefinition>,
+    pub(crate) threads: BTreeMap<String, RawThreadDefinition>,
+    // order は parse/validate 済みの定義を保持し、並べ替え機能実装時に利用します。
+    #[allow(dead_code)]
+    pub(crate) order: Option<RawOrderDefinition>,
 }
 
 impl DefinitionFile {
@@ -91,7 +90,8 @@ impl DefinitionFile {
             members,
             message_sets,
             threads,
-            ..
+            order,
+            schema_version: _,
         } = raw;
         let settings_sets = raw_settings_sets.resolve(vocabulary)?;
 
@@ -116,28 +116,43 @@ impl DefinitionFile {
             members,
             message_sets,
             threads,
+            order,
         })
     }
 }
 
-/// 管理メッセージ群・管理スレッドの入力を保持する typed model です。
+/// 管理メッセージ群の入力を保持する typed model です。
 ///
-/// これらの実装はまだ別Featureですが、設定モデルから自由形式の
-/// `toml::Value` を引き回さないため、現在のスキーマに対応する範囲だけを型付けします。
-#[derive(Debug, Serialize, Validate)]
-#[validate(schema(function = "validate_resource_definition"))]
+/// message_set と thread は schema 上の許可される属性が異なるため、共通の
+/// 自由形式モデルにせず、それぞれの入力境界で型付けと検証を行います。
+#[derive(Debug, Deserialize, Serialize, Validate)]
+#[validate(schema(function = "validate_message_set_definition"))]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RawResourceDefinition {
+pub(crate) struct RawMessageSetDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ensure: Option<Ensure>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) channel: Option<ChannelLogicalId>,
+    #[validate(nested)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) body: Option<Vec<RawMessageDefinition>>,
+}
+
+/// 独立した管理スレッドの入力を保持する typed model です。
+#[derive(Debug, Deserialize, Serialize, Validate)]
+#[validate(schema(function = "validate_thread_definition"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawThreadDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ensure: Option<Ensure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) channel: Option<ChannelLogicalId>,
     #[validate(length(min = 1, max = 100, message = "name は1文字以上100文字以内で指定してください"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
     #[validate(nested)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) body: Vec<RawMessageDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) body: Option<Vec<RawMessageDefinition>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Validate)]
@@ -148,23 +163,52 @@ pub(crate) struct RawMessageDefinition {
     pub(crate) body: String,
 }
 
-fn validate_resource_definition(value: &RawResourceDefinition) -> Result<(), ValidationError> {
+fn validate_message_set_definition(value: &RawMessageSetDefinition) -> Result<(), ValidationError> {
     if value.is_absent() {
-        if value.channel.is_some() || value.name.is_some() || !value.body.is_empty() {
+        if value.channel.is_some() || value.body.is_some() {
             return Err(validation_error(
                 "exclusive",
-                "ensure = \"absent\" の管理リソースには channel、name、body を指定できません",
+                "ensure = \"absent\" の管理メッセージ群には channel、body を指定できません",
             ));
         }
         return Ok(());
     }
 
-    if value.channel.is_none() {
-        return Err(validation_error("required", "管理リソースには channel が必要です"));
+    validate_message_ids(value.body.as_deref().unwrap_or_default())
+}
+
+fn validate_thread_definition(value: &RawThreadDefinition) -> Result<(), ValidationError> {
+    if value.is_absent() {
+        if value.channel.is_some() || value.name.is_some() || value.body.is_some() {
+            return Err(validation_error(
+                "exclusive",
+                "ensure = \"absent\" の管理スレッドには channel、name、body を指定できません",
+            ));
+        }
+        return Ok(());
     }
 
+    if matches!(value.ensure, Some(Ensure::Present)) {
+        return Err(validation_error(
+            "exclusive",
+            "管理スレッドの present には ensure を指定できません",
+        ));
+    }
+    if value.channel.is_none() {
+        return Err(validation_error("required", "管理スレッドには channel が必要です"));
+    }
+    if value.name.is_none() {
+        return Err(validation_error("required", "管理スレッドには name が必要です"));
+    }
+    let Some(body) = value.body.as_deref() else {
+        return Err(validation_error("required", "管理スレッドには body が必要です"));
+    };
+    validate_message_ids(body)
+}
+
+fn validate_message_ids(messages: &[RawMessageDefinition]) -> Result<(), ValidationError> {
     let mut ids = BTreeSet::new();
-    for message in &value.body {
+    for message in messages {
         if !ids.insert(&message.id) {
             return Err(validation_error(
                 "duplicate",
@@ -175,65 +219,77 @@ fn validate_resource_definition(value: &RawResourceDefinition) -> Result<(), Val
     Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawOrderDefinition {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) roles: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) categories: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) children: BTreeMap<String, Vec<String>>,
+pub(crate) trait RawResourceReference {
+    fn is_absent(&self) -> bool;
+
+    fn channel(&self) -> Option<&ChannelLogicalId>;
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawResourceDefinitionWire {
-    #[serde(default)]
-    ensure: Option<Ensure>,
-    #[serde(default)]
-    channel: Option<ChannelLogicalId>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    body: Vec<RawMessageDefinition>,
-}
-
-impl From<RawResourceDefinitionWire> for RawResourceDefinition {
-    fn from(value: RawResourceDefinitionWire) -> Self {
-        Self {
-            ensure: value.ensure,
-            channel: value.channel,
-            name: value.name,
-            body: value.body,
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for RawResourceDefinition {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = toml::Value::deserialize(deserializer)?;
-        if !value.is_table() {
-            return Err(de::Error::custom("管理リソース定義はテーブルで指定してください"));
-        }
-        let wire = value
-            .try_into::<RawResourceDefinitionWire>()
-            .map_err(de::Error::custom)?;
-        Ok(wire.into())
-    }
-}
-
-impl RawResourceDefinition {
-    pub(crate) fn is_absent(&self) -> bool {
+impl RawResourceReference for RawMessageSetDefinition {
+    fn is_absent(&self) -> bool {
         matches!(self.ensure, Some(Ensure::Absent))
     }
 
-    pub(crate) fn channel(&self) -> Option<&ChannelLogicalId> {
+    fn channel(&self) -> Option<&ChannelLogicalId> {
         self.channel.as_ref()
     }
+}
+
+impl RawResourceReference for RawThreadDefinition {
+    fn is_absent(&self) -> bool {
+        matches!(self.ensure, Some(Ensure::Absent))
+    }
+
+    fn channel(&self) -> Option<&ChannelLogicalId> {
+        self.channel.as_ref()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawOrderDefinition {
+    #[validate(custom(function = "validate_unique_role_order"))]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) roles: Vec<RoleLogicalId>,
+    #[validate(custom(function = "validate_unique_channel_order"))]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) categories: Vec<ChannelLogicalId>,
+    #[validate(custom(function = "validate_unique_children_order"))]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) children: BTreeMap<ChannelLogicalId, Vec<ChannelLogicalId>>,
+}
+
+fn validate_unique_role_order(values: &[RoleLogicalId]) -> Result<(), ValidationError> {
+    validate_unique_order(values, "Role")
+}
+
+fn validate_unique_channel_order(values: &[ChannelLogicalId]) -> Result<(), ValidationError> {
+    validate_unique_order(values, "Channel")
+}
+
+fn validate_unique_children_order(
+    values: &BTreeMap<ChannelLogicalId, Vec<ChannelLogicalId>>,
+) -> Result<(), ValidationError> {
+    for (parent, children) in values {
+        validate_unique_order(children, &format!("Channel {parent} の子"))?;
+    }
+    Ok(())
+}
+
+fn validate_unique_order<T>(values: &[T], resource_kind: &str) -> Result<(), ValidationError>
+where
+    T: Ord + fmt::Display,
+{
+    let mut seen = BTreeSet::new();
+    for value in values {
+        if !seen.insert(value) {
+            return Err(validation_error(
+                "duplicate",
+                format!("order の {resource_kind} {value} が重複しています"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
