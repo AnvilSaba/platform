@@ -829,7 +829,9 @@ async fn bound_state_can_be_passed_to_the_next_plan() {
 #[test]
 fn management_sample_accepts_resource_declarations() {
     let sample = include_str!("../../../../../docs/examples/discord-management.base.toml");
-    parse_definition(sample).unwrap();
+    let definition = parse_definition(sample).unwrap();
+    assert_eq!(definition.message_sets["guidelines"].body.len(), 2);
+    assert_eq!(definition.threads["basic_details"].body.len(), 1);
 }
 
 /// 同名Roleが複数あっても、名前ではなくSnowflake由来の論理IDで一意にexportできることを保証する。
@@ -1846,6 +1848,47 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
     let error = parse_definition(definition).unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("参照専用 Channel rules")));
+}
+
+/// raw 属性の単項目制約は resolve の手書き判定へ渡す前に validator で診断する。
+#[test]
+fn definition_validates_raw_attribute_values_with_validator() {
+    let empty_role_name = parse_definition(
+        "schema_version = 1\n[roles.moderator]\nname = \"\"\n",
+    )
+    .unwrap_err();
+    assert!(matches!(empty_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("1文字")));
+
+    let long_role_name = "a".repeat(101);
+    let long_role_name = parse_definition(&format!(
+        "schema_version = 1\n[roles.moderator]\nname = \"{long_role_name}\"\n",
+    ))
+    .unwrap_err();
+    assert!(matches!(long_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100")));
+
+    let invalid_auto_archive = parse_definition(
+        "schema_version = 1\n[channels.rules]\ntype = \"text\"\ndefault_auto_archive_minutes = 61\n",
+    )
+    .unwrap_err();
+    assert!(matches!(invalid_auto_archive, ManagementError::InvalidDefinition(message) if message.contains("default_auto_archive_minutes") && message.contains("60")));
+
+    let clear_nsfw = parse_definition(
+        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nnsfw = { clear = true }\n",
+    )
+    .unwrap_err();
+    assert!(matches!(clear_nsfw, ManagementError::InvalidDefinition(message) if message.contains("nsfw") && message.contains("解除")));
+
+    let default_parent = parse_definition(
+        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nparent = { default = true }\n",
+    )
+    .unwrap_err();
+    assert!(matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default")));
+
+    let invalid_kind = parse_definition(
+        "schema_version = 1\n[channels.rules]\ntype = \"voice\"\n",
+    )
+    .unwrap_err();
+    assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("voice")));
 }
 
 #[cfg(test)]
