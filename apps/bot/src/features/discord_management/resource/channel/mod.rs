@@ -15,6 +15,8 @@ use super::super::{
 
 pub(crate) mod apply;
 
+use super::{display_quoted_string, render_change_line};
+
 const DEFAULT_CHANNEL_NSFW: bool = false;
 const DEFAULT_SLOWMODE_SECONDS: u16 = 0;
 const DEFAULT_AUTO_ARCHIVE_MINUTES: Option<u16> = Some(1440);
@@ -278,8 +280,8 @@ impl AttributeChanges {
                 logical_id,
                 discord_id,
                 "name",
-                display_string(change.current()),
-                display_string(change.desired()),
+                display_quoted_string(change.current()),
+                display_quoted_string(change.desired()),
             );
         }
         if let Some(change) = &self.parent {
@@ -377,30 +379,15 @@ fn nullable_update<T: Clone>(change: Option<&NullableValueChange<T>>) -> Channel
     }
 }
 
-fn render_change_line<C: std::fmt::Display, D: std::fmt::Display>(
-    output: &mut String,
-    logical_id: &ChannelLogicalId,
-    discord_id: &ChannelId,
-    attribute: &str,
-    current: C,
-    desired: D,
-) {
-    output.push_str(&format!(
-        "- {} ({}) {}: {} -> {}\n",
-        logical_id, discord_id, attribute, current, desired
-    ));
-}
-
-fn display_string(value: &str) -> String {
-    serde_json::to_string(value).expect("文字列は JSON へ直列化できます")
-}
-
 fn display_nullable<T: std::fmt::Display>(value: Option<&T>) -> String {
     value.map_or_else(|| "None".to_owned(), ToString::to_string)
 }
 
 fn display_nullable_string(value: Option<&String>) -> String {
-    value.map_or_else(|| "None".to_owned(), |value| format!("Some({})", display_string(value)))
+    value.map_or_else(
+        || "None".to_owned(),
+        |value| format!("Some({})", display_quoted_string(value)),
+    )
 }
 
 fn display_overwrite_value(value: &OverwriteValue) -> &'static str {
@@ -529,7 +516,7 @@ fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
     let payload = &desired.payload;
     output.push_str("  desired:\n");
     output.push_str(&format!("    type: {}\n", payload.kind.as_str()));
-    output.push_str(&format!("    name: {}\n", display_string(&payload.name)));
+    output.push_str(&format!("    name: {}\n", display_quoted_string(&payload.name)));
     let parent = match (desired.parent_logical_id.as_ref(), payload.parent_id) {
         (Some(logical_id), Some(discord_id)) => format!("{logical_id} ({discord_id})"),
         (Some(logical_id), None) => logical_id.to_string(),
