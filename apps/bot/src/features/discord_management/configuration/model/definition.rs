@@ -26,13 +26,13 @@ pub(crate) struct RawDefinitionFile {
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) message_sets: BTreeMap<String, toml::Value>,
+    pub(crate) message_sets: BTreeMap<String, RawResourceDefinition>,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) threads: BTreeMap<String, toml::Value>,
+    pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) order: Option<toml::Value>,
+    pub(crate) order: Option<RawResourceDefinition>,
 }
 
 #[derive(Debug)]
@@ -41,8 +41,8 @@ pub(crate) struct DefinitionFile {
     pub(crate) roles: BTreeMap<RoleLogicalId, RoleDefinition>,
     pub(crate) channels: BTreeMap<ChannelLogicalId, ChannelDefinition>,
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
-    pub(crate) message_sets: BTreeMap<String, toml::Value>,
-    pub(crate) threads: BTreeMap<String, toml::Value>,
+    pub(crate) message_sets: BTreeMap<String, RawResourceDefinition>,
+    pub(crate) threads: BTreeMap<String, RawResourceDefinition>,
 }
 
 impl DefinitionFile {
@@ -88,6 +88,40 @@ impl DefinitionFile {
     }
 }
 
+/// 未実装の message set / thread 定義を TOML adapter 内に保持します。
+///
+/// Channel の設定モデルへ自由形式の `toml::Value` を渡さないための隔離 seam です。
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub(crate) struct RawResourceDefinition(toml::Value);
+
+impl RawResourceDefinition {
+    pub(crate) fn is_table(&self) -> bool {
+        self.0.is_table()
+    }
+
+    pub(crate) fn is_absent(&self) -> bool {
+        self.table()
+            .and_then(|table| table.get("ensure"))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|ensure| ensure == "absent")
+    }
+
+    pub(crate) fn has_channel(&self) -> bool {
+        self.table().is_some_and(|table| table.contains_key("channel"))
+    }
+
+    pub(crate) fn channel_name(&self) -> Option<&str> {
+        self.table()
+            .and_then(|table| table.get("channel"))
+            .and_then(toml::Value::as_str)
+    }
+
+    fn table(&self) -> Option<&toml::map::Map<String, toml::Value>> {
+        self.0.as_table()
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawSettingsSets {
@@ -114,17 +148,26 @@ impl RawSettingsSets {
                     .map(|attributes| (name, attributes))
             })
             .collect::<Result<_, _>>()?;
-        Ok(SettingsSets {
-            role,
-            channel: self.channel,
-        })
+        let channel = self
+            .channel
+            .into_iter()
+            .map(|(name, settings)| {
+                let logical_id = ChannelLogicalId::parse(format!("settings_set_{name}"))
+                    .expect("設定セット検証用の論理 ID は常に有効です");
+                settings
+                    .attributes
+                    .resolve(&logical_id, vocabulary)
+                    .map(|attributes| (name, attributes))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(SettingsSets { role, channel })
     }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SettingsSets {
     pub(crate) role: BTreeMap<RoleSettingsSetId, RoleAttributes>,
-    pub(crate) channel: BTreeMap<ChannelSettingsSetId, ChannelSettingsSet>,
+    pub(crate) channel: BTreeMap<ChannelSettingsSetId, ChannelAttributes>,
 }
 
 use super::*;

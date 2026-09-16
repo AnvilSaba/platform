@@ -6,8 +6,8 @@ use std::{
 use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes, reconcile_pending_updates};
 use crate::features::discord_management::apply::guild_lock::{GuildApplyLock, GuildApplyPermit};
 use crate::features::discord_management::configuration::{
-    Color, DefinitionFile, KnownPermission, ManagedValue, PendingRoleUpdate, PermissionVocabulary, PlanInput,
-    RoleAttributes, StateFile, serialize_state,
+    DefinitionFile, KnownPermission, ManagedValue, PendingRoleUpdate, PermissionVocabulary, PlanInput, RoleAttributes,
+    StateFile, serialize_state,
 };
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId};
@@ -610,7 +610,7 @@ fn build_role_create(
             ManagedValue::Value(value) => Some(*value),
             ManagedValue::Default => None,
         })
-        .unwrap_or_else(Color::default);
+        .unwrap_or_default();
     let hoist = resolved
         .hoist
         .as_ref()

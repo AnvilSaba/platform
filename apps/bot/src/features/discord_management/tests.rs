@@ -1772,7 +1772,7 @@ fn channel_rejects_duplicate_settings_sets_while_parsing() {
     );
 }
 
-/// Channel の設定セット参照順を型付きIDとして保持する。
+/// Channel の設定セット参照順に従い、後段の設定セットが前段の属性を上書きする。
 #[test]
 fn channel_parses_ordered_settings_sets() {
     let definition = r#"
@@ -1787,13 +1787,13 @@ fn channel_parses_ordered_settings_sets() {
     "#;
 
     let definition = parse_definition(definition).unwrap();
-    let settings_sets = definition.channels[&ChannelLogicalId::parse("rules").unwrap()]
-        .settings_sets()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-
-    assert_eq!(settings_sets, ["readonly", "writable"]);
+    assert_eq!(
+        definition.channels[&ChannelLogicalId::parse("rules").unwrap()]
+            .attributes()
+            .name
+            .as_ref(),
+        Some(&ChannelValue::Value("書き込み可能".to_owned()))
+    );
 }
 
 /// 参照専用 Channel は設定セットを持てず、属性管理との区別を型変換時に確立する。
