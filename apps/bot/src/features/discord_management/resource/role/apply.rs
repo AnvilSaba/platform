@@ -1,18 +1,12 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use super::{AttributeChanges, Change, Plan, RolePlan, build_plan, compose_attributes};
+use super::{AttributeChanges, Change, Plan, RolePlan, build_plan};
 use crate::features::discord_management::apply::guild_lock::{GuildApplyLock, GuildApplyPermit};
-use crate::features::discord_management::configuration::{
-    DefinitionFile, KnownPermission, ManagedValue, PermissionVocabulary, PlanInput, RoleAttributes, StateFile,
-    serialize_state,
-};
+use crate::features::discord_management::configuration::{PermissionVocabulary, PlanInput, StateFile, serialize_state};
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId};
 use crate::features::discord_management::port::{
-    RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleUpdate,
+    RoleCatalog, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleUpdate,
     RoleUpdateOutcome, RoleUpdater,
 };
 
@@ -48,7 +42,6 @@ pub(crate) struct RoleApplyResult {
 struct ApplySession {
     _permit: GuildApplyPermit,
     state: StateFile,
-    definition: DefinitionFile,
     catalog: RoleCatalog,
     applied: Plan,
     pending: Plan,
@@ -216,7 +209,6 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
         Ok(ApplyPreparation::Ready(Box::new(ApplySession {
             _permit: permit,
             state,
-            definition,
             catalog,
             applied,
             pending,
@@ -367,7 +359,6 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
             return session.into_result(RoleApplyStatus::DeletionPermissionRequired);
         }
 
-        let desired_attributes = desired_role_attributes(&session.definition);
         let changes = session
             .pending
             .iter()
@@ -379,15 +370,11 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(RoleApplyStatus::DeadlineExceeded);
                     }
-                    let desired = desired_attributes
-                        .get(&logical_id)
-                        .expect("作成対象 Role は definition に存在します");
-                    let create = match build_role_create(
-                        desired,
-                        &session.catalog.permission_names,
-                        &session.catalog.default_permissions,
-                        &logical_id,
-                    ) {
+                    let create = match session.pending.create_desired.get(&logical_id).cloned().ok_or_else(|| {
+                        ManagementError::InvalidState(format!(
+                            "作成対象 Role {logical_id} の payload が plan にありません"
+                        ))
+                    }) {
                         Ok(create) => create,
                         Err(error) => return session.into_result(RoleApplyStatus::Failed(error.to_string())),
                     };
@@ -523,76 +510,6 @@ fn result(
         applied,
         pending,
         state_json: serialize_state(state)?,
-    })
-}
-
-fn desired_role_attributes(definition: &DefinitionFile) -> BTreeMap<RoleLogicalId, RoleAttributes> {
-    definition
-        .roles
-        .iter()
-        .map(|(logical_id, role_definition)| {
-            (
-                logical_id.clone(),
-                compose_attributes(role_definition, &definition.settings_sets.role),
-            )
-        })
-        .collect()
-}
-
-fn build_role_create(
-    desired: &RoleAttributes,
-    permission_names: &BTreeSet<KnownPermission>,
-    default_permissions: &BTreeMap<KnownPermission, bool>,
-    logical_id: &RoleLogicalId,
-) -> Result<RoleCreate, ManagementError> {
-    let resolved = super::resolve_role_create_attributes(desired, default_permissions);
-    let name = resolved
-        .name
-        .as_ref()
-        .and_then(|value| match value {
-            ManagedValue::Value(value) => Some(value.clone()),
-            ManagedValue::Default => None,
-        })
-        .ok_or_else(|| ManagementError::InvalidDefinition(format!("新しい Role {logical_id} には name が必要です")))?;
-    let color = resolved
-        .color
-        .as_ref()
-        .and_then(|value| match value {
-            ManagedValue::Value(value) => Some(*value),
-            ManagedValue::Default => None,
-        })
-        .unwrap_or_default();
-    let hoist = resolved
-        .hoist
-        .as_ref()
-        .and_then(|value| match value {
-            ManagedValue::Value(value) => Some(*value),
-            ManagedValue::Default => None,
-        })
-        .unwrap_or(false);
-    let mentionable = resolved
-        .mentionable
-        .as_ref()
-        .and_then(|value| match value {
-            ManagedValue::Value(value) => Some(*value),
-            ManagedValue::Default => None,
-        })
-        .unwrap_or(false);
-    let mut permissions = permission_names
-        .iter()
-        .map(|permission| (permission.clone(), false))
-        .collect::<BTreeMap<_, _>>();
-    for (permission, value) in &resolved.permissions {
-        if let ManagedValue::Value(value) = value {
-            permissions.insert(permission.clone(), *value);
-        }
-    }
-    Ok(RoleCreate {
-        name,
-        color,
-        hoist,
-        mentionable,
-        permissions,
     })
 }
 
