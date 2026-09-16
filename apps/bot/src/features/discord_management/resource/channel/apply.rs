@@ -30,10 +30,8 @@ pub(crate) enum ChannelApplyStatus {
     DeadlineExceeded,
     DeletionPermissionRequired,
     DeletionPermissionDenied(String),
-    DeletionVerificationPermissionDenied(String),
     CreationResponseUnknown,
     DeletionResponseUnknown,
-    DeletionVerificationIndeterminate(String),
     Failed(String),
     ResponseUnknown,
 }
@@ -133,7 +131,7 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
                 Change::Update { discord_id, attributes } => {
                     Some((logical_id.clone(), *discord_id, attributes.clone()))
                 }
-                Change::Create { .. } | Change::Release { .. } | Change::Delete { .. } => None,
+                Change::Create | Change::Release { .. } | Change::Delete { .. } => None,
             })
             .collect::<Vec<_>>();
         for (logical_id, discord_id, attributes) in updates {
@@ -382,7 +380,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
         let changes = ordered_changes(&session.pending, &session.definition);
         for (logical_id, change) in changes {
             match change {
-                Change::Create { .. } => {
+                Change::Create => {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(ChannelApplyStatus::DeadlineExceeded);
                     }
@@ -398,7 +396,6 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         &session.definition,
                         Some(&session.catalog),
                     )?;
-                    session.state.pending_channel_creations.insert(logical_id.clone());
                     let outcome = match tokio::time::timeout(
                         processing_deadline.saturating_duration_since(Instant::now()),
                         self.source.create_channel(&guild_id, create),
@@ -406,10 +403,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     .await
                     {
                         Ok(Ok(outcome)) => outcome,
-                        Ok(Err(error)) => {
-                            session.state.pending_channel_creations.remove(&logical_id);
-                            return session.into_result(ChannelApplyStatus::Failed(error.to_string()));
-                        }
+                        Ok(Err(error)) => return session.into_result(ChannelApplyStatus::Failed(error.to_string())),
                         Err(_) => ChannelCreateOutcome::ResponseUnknown,
                     };
                     let ChannelCreateOutcome::Created(channel_id) = outcome else {
@@ -421,14 +415,11 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         .values()
                         .any(|existing_id| *existing_id == channel_id)
                     {
-                        session.state.pending_channel_creations.remove(&logical_id);
                         return Err(ManagementError::InvalidState(format!(
                             "新しく作成した Channel {channel_id} は既存の対応と衝突しています"
                         )));
                     }
                     session.state.channels.insert(logical_id.clone(), channel_id);
-                    session.state.deleted_channels.remove(&logical_id);
-                    session.state.pending_channel_creations.remove(&logical_id);
                     session.mark_applied(&logical_id);
                     match refresh_catalog(self.source, &guild_id, processing_deadline).await {
                         Ok(catalog) => session.catalog = catalog,
@@ -439,11 +430,9 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(ChannelApplyStatus::DeadlineExceeded);
                     }
-                    session.state.pending_channel_deletions.insert(logical_id.clone());
                     let exists = session.catalog.channels.iter().any(|channel| channel.id == discord_id);
                     if !exists {
-                        session.state.pending_channel_deletions.remove(&logical_id);
-                        session.state.deleted_channels.insert(logical_id.clone());
+                        session.state.channels.remove(&logical_id);
                         session.mark_applied(&logical_id);
                         continue;
                     }
@@ -466,34 +455,19 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         Err(_) => ChannelDeleteOutcome::ResponseUnknown,
                     };
                     if outcome == ChannelDeleteOutcome::ResponseUnknown {
-                        session.catalog =
-                            match refresh_catalog_after_deletion(self.source, &guild_id, processing_deadline).await {
-                                Ok(catalog) => catalog,
-                                Err(status) => return session.into_result(status),
-                            };
-                        if session.catalog.channels.iter().any(|channel| channel.id == discord_id) {
-                            return session.into_result(ChannelApplyStatus::DeletionResponseUnknown);
-                        }
-                    } else {
-                        session.catalog = match refresh_catalog(self.source, &guild_id, processing_deadline).await {
-                            Ok(catalog) => catalog,
-                            Err(status) => return session.into_result(status),
-                        };
-                        if session.catalog.channels.iter().any(|channel| channel.id == discord_id) {
-                            return session.into_result(ChannelApplyStatus::Failed(format!(
-                                "Channel {logical_id} の削除後も Discord 上に存在します"
-                            )));
-                        }
+                        return session.into_result(ChannelApplyStatus::DeletionResponseUnknown);
                     }
-                    session.state.pending_channel_deletions.remove(&logical_id);
-                    session.state.deleted_channels.insert(logical_id.clone());
+                    // HTTP 204 は削除完了の確定応答なので、後続の再取得が失敗しても
+                    // 対応表だけは成功結果として確定させます。
+                    session.state.channels.remove(&logical_id);
                     session.mark_applied(&logical_id);
+                    session.catalog = match refresh_catalog(self.source, &guild_id, processing_deadline).await {
+                        Ok(catalog) => catalog,
+                        Err(status) => return session.into_result(status),
+                    };
                 }
                 Change::Release { .. } => {
                     session.state.channels.remove(&logical_id);
-                    session.state.deleted_channels.remove(&logical_id);
-                    session.state.pending_channel_deletions.remove(&logical_id);
-                    session.state.pending_channel_creations.remove(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {
@@ -535,29 +509,6 @@ async fn refresh_catalog<S: ChannelSource>(
     }
 }
 
-async fn refresh_catalog_after_deletion<S: ChannelSource>(
-    source: &S,
-    guild_id: &GuildId,
-    processing_deadline: Instant,
-) -> Result<ChannelCatalog, ChannelApplyStatus> {
-    let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-    match tokio::time::timeout(
-        result_deadline.saturating_duration_since(Instant::now()),
-        source.channel_catalog(guild_id),
-    )
-    .await
-    {
-        Ok(Ok(catalog)) => Ok(catalog),
-        Ok(Err(ManagementError::ChannelCatalogPermissionDenied(message))) => {
-            Err(ChannelApplyStatus::DeletionVerificationPermissionDenied(message))
-        }
-        Ok(Err(error)) => Err(ChannelApplyStatus::DeletionVerificationIndeterminate(error.to_string())),
-        Err(_) => Err(ChannelApplyStatus::DeletionVerificationIndeterminate(
-            "削除後の Channel 存在確認が期限内に完了しませんでした".to_owned(),
-        )),
-    }
-}
-
 fn ordered_changes(
     plan: &ChannelPlan,
     definition: &crate::features::discord_management::configuration::DefinitionFile,
@@ -572,7 +523,7 @@ fn ordered_changes(
             .get(logical_id)
             .and_then(|channel| compose_attributes(channel).kind);
         match change {
-            Change::Create { .. } => match kind {
+            Change::Create => match kind {
                 Some(ChannelKind::Category) => 0,
                 _ => 1,
             },

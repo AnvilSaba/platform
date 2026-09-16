@@ -31,10 +31,8 @@ pub(crate) enum RoleApplyStatus {
     DeadlineExceeded,
     DeletionPermissionRequired,
     DeletionPermissionDenied(String),
-    DeletionVerificationPermissionDenied(String),
     CreationResponseUnknown,
     DeletionResponseUnknown,
-    DeletionVerificationIndeterminate(String),
     Failed(String),
     ResponseUnknown,
 }
@@ -130,7 +128,7 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
                 Change::Update { discord_id, attributes } => {
                     Some((logical_id.clone(), *discord_id, attributes.clone()))
                 }
-                Change::Create { .. } | Change::Release { .. } | Change::Delete { .. } => None,
+                Change::Create | Change::Release { .. } | Change::Delete { .. } => None,
             })
             .collect::<Vec<_>>();
         for (logical_id, discord_id, attributes) in updates {
@@ -377,7 +375,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
             .collect::<Vec<_>>();
         for (logical_id, change) in changes {
             match change {
-                Change::Create { .. } => {
+                Change::Create => {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(RoleApplyStatus::DeadlineExceeded);
                     }
@@ -390,7 +388,6 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                         &session.catalog.default_permissions,
                         &logical_id,
                     )?;
-                    session.state.pending_creations.insert(logical_id.clone());
                     let outcome = match tokio::time::timeout(
                         processing_deadline.saturating_duration_since(Instant::now()),
                         self.source.create_role(&guild_id, create),
@@ -398,24 +395,18 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     .await
                     {
                         Ok(Ok(outcome)) => outcome,
-                        Ok(Err(error)) => {
-                            session.state.pending_creations.remove(&logical_id);
-                            return session.into_result(RoleApplyStatus::Failed(error.to_string()));
-                        }
+                        Ok(Err(error)) => return session.into_result(RoleApplyStatus::Failed(error.to_string())),
                         Err(_) => RoleCreateOutcome::ResponseUnknown,
                     };
                     let RoleCreateOutcome::Created(role_id) = outcome else {
                         return session.into_result(RoleApplyStatus::CreationResponseUnknown);
                     };
                     if session.state.roles.values().any(|existing_id| *existing_id == role_id) {
-                        session.state.pending_creations.remove(&logical_id);
                         return Err(ManagementError::InvalidState(format!(
                             "新しく作成した Role {role_id} は既存の対応と衝突しています"
                         )));
                     }
                     session.state.roles.insert(logical_id.clone(), role_id);
-                    session.state.deleted_roles.remove(&logical_id);
-                    session.state.pending_creations.remove(&logical_id);
                     session.mark_applied(&logical_id);
 
                     let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
@@ -441,11 +432,9 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                     if Instant::now() >= processing_deadline {
                         return session.into_result(RoleApplyStatus::DeadlineExceeded);
                     }
-                    session.state.pending_deletions.insert(logical_id.clone());
                     let exists = session.catalog.roles.iter().any(|role| role.id == discord_id);
                     if !exists {
-                        session.state.pending_deletions.remove(&logical_id);
-                        session.state.deleted_roles.insert(logical_id.clone());
+                        session.state.roles.remove(&logical_id);
                         session.mark_applied(&logical_id);
                         continue;
                     }
@@ -468,35 +457,9 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                         Err(_) => RoleDeleteOutcome::ResponseUnknown,
                     };
                     if outcome == RoleDeleteOutcome::ResponseUnknown {
-                        let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
-                        session.catalog = match tokio::time::timeout(
-                            refresh_deadline.saturating_duration_since(Instant::now()),
-                            self.source.role_catalog(&guild_id),
-                        )
-                        .await
-                        {
-                            Ok(Ok(catalog)) => catalog,
-                            Ok(Err(error)) => {
-                                let status = match error {
-                                    ManagementError::RoleCatalogPermissionDenied(message) => {
-                                        RoleApplyStatus::DeletionVerificationPermissionDenied(message)
-                                    }
-                                    error => RoleApplyStatus::DeletionVerificationIndeterminate(error.to_string()),
-                                };
-                                return session.into_result(status);
-                            }
-                            Err(_) => {
-                                return session.into_result(RoleApplyStatus::DeletionVerificationIndeterminate(
-                                    "削除後の Role 存在確認が期限内に完了しませんでした".to_owned(),
-                                ));
-                            }
-                        };
-                        if session.catalog.roles.iter().any(|role| role.id == discord_id) {
-                            return session.into_result(RoleApplyStatus::DeletionResponseUnknown);
-                        }
+                        return session.into_result(RoleApplyStatus::DeletionResponseUnknown);
                     }
-                    session.state.pending_deletions.remove(&logical_id);
-                    session.state.deleted_roles.insert(logical_id.clone());
+                    session.state.roles.remove(&logical_id);
                     session.mark_applied(&logical_id);
                     if outcome == RoleDeleteOutcome::Deleted {
                         let refresh_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
@@ -518,9 +481,6 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                 }
                 Change::Release { .. } => {
                     session.state.roles.remove(&logical_id);
-                    session.state.deleted_roles.remove(&logical_id);
-                    session.state.pending_deletions.remove(&logical_id);
-                    session.state.pending_creations.remove(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {

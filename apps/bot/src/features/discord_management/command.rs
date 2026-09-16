@@ -75,17 +75,13 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
         RoleApplyStatus::DeletionPermissionDenied(error) => {
             format!("Discord の Role 削除権限が不足しているため停止しました: {error}")
         }
-        RoleApplyStatus::DeletionVerificationPermissionDenied(error) => {
-            format!("削除後の存在確認に必要な権限が不足しているため停止しました: {error}")
-        }
         RoleApplyStatus::CreationResponseUnknown => {
-            "Role 作成の応答を確認できませんでした。重複作成を避けるため、state の確認が必要です。".to_owned()
+            "Role 作成の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         RoleApplyStatus::DeletionResponseUnknown => {
-            "Role 削除の応答を確認できませんでした。既知の ID と削除意図を保持して停止しました。".to_owned()
-        }
-        RoleApplyStatus::DeletionVerificationIndeterminate(error) => {
-            format!("Role 削除後の存在確認が判定不能なため停止しました。削除済みとは扱いません: {error}")
+            "Role 削除の応答を確認できませんでした。対応表は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         RoleApplyStatus::Failed(error) => format!("Role の変更中に失敗したため停止しました: {error}"),
         RoleApplyStatus::ResponseUnknown => {
@@ -111,17 +107,13 @@ fn render_channel_apply_result(result: &ChannelApplyResult) -> String {
         ChannelApplyStatus::DeletionPermissionDenied(error) => {
             format!("Discord の Channel 削除権限が不足しているため停止しました: {error}")
         }
-        ChannelApplyStatus::DeletionVerificationPermissionDenied(error) => {
-            format!("削除後の Channel 存在確認権限が不足しているため停止しました: {error}")
-        }
         ChannelApplyStatus::CreationResponseUnknown => {
-            "Channel 作成の応答を確認できませんでした。重複作成を避けるため、state の確認が必要です。".to_owned()
+            "Channel 作成の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         ChannelApplyStatus::DeletionResponseUnknown => {
-            "Channel 削除の応答を確認できませんでした。既知の ID と削除意図を保持して停止しました。".to_owned()
-        }
-        ChannelApplyStatus::DeletionVerificationIndeterminate(error) => {
-            format!("Channel 削除後の存在確認が判定不能なため停止しました。削除済みとは扱いません: {error}")
+            "Channel 削除の応答を確認できませんでした。対応表は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         ChannelApplyStatus::Failed(error) => format!("Channel の変更中に失敗したため停止しました: {error}"),
         ChannelApplyStatus::ResponseUnknown => {

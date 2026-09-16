@@ -202,9 +202,7 @@ fn render_value_change<T: std::fmt::Display>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Change {
-    Create {
-        recreated: bool,
-    },
+    Create,
     Update {
         discord_id: RoleId,
         attributes: AttributeChanges,
@@ -227,17 +225,9 @@ impl Change {
     }
 
     #[cfg(test)]
-    pub(crate) fn recreated(&self) -> Option<bool> {
-        match self {
-            Self::Create { recreated } => Some(*recreated),
-            Self::Update { .. } | Self::Release { .. } | Self::Delete { .. } => None,
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn discord_id(&self) -> Option<RoleId> {
         match self {
-            Self::Create { .. } => None,
+            Self::Create => None,
             Self::Update { discord_id, .. } | Self::Release { discord_id } | Self::Delete { discord_id } => {
                 Some(*discord_id)
             }
@@ -248,7 +238,7 @@ impl Change {
     pub(crate) fn attributes(&self) -> Option<&AttributeChanges> {
         match self {
             Self::Update { attributes, .. } => Some(attributes),
-            Self::Create { .. } | Self::Release { .. } | Self::Delete { .. } => None,
+            Self::Create | Self::Release { .. } | Self::Delete { .. } => None,
         }
     }
 }
@@ -287,7 +277,7 @@ impl Plan {
     }
 
     fn insert_create(&mut self, logical_id: RoleLogicalId, change: Change, desired: RoleAttributes) {
-        debug_assert!(matches!(change, Change::Create { .. }));
+        debug_assert!(matches!(change, Change::Create));
         debug_assert!(self.changes.insert(logical_id.clone(), change).is_none());
         self.create_desired.insert(logical_id, desired);
     }
@@ -305,9 +295,8 @@ impl Plan {
         let mut output = String::from("Role の変更計画\n\n");
         for (logical_id, change) in &self.changes {
             match change {
-                Change::Create { recreated } => {
-                    let action = if *recreated { "再作成" } else { "新規作成" };
-                    output.push_str(&format!("- {action}: {logical_id}\n"));
+                Change::Create => {
+                    output.push_str(&format!("- 新規作成: {logical_id}\n"));
                     if let Some(desired) = self.create_desired.get(logical_id) {
                         render_create_attributes(desired, &mut output);
                     }
@@ -437,23 +426,6 @@ pub(crate) fn build_plan(
         .collect::<BTreeMap<_, _>>();
     let mut plan = Plan::default();
 
-    if let Some(logical_id) = state.pending_creations.iter().next() {
-        return Err(ManagementError::InvalidState(format!(
-            "Role {logical_id} は作成結果不明のため、同じ定義で状態を確認する必要があります"
-        )));
-    }
-    for logical_id in &state.pending_deletions {
-        let Some(role) = definition.roles.get(logical_id) else {
-            return Err(ManagementError::InvalidState(format!(
-                "Role {logical_id} の削除意図が未解決のため、定義を変更できません"
-            )));
-        };
-        if !role.is_absent() {
-            return Err(ManagementError::InvalidState(format!(
-                "Role {logical_id} の削除意図が未解決です"
-            )));
-        }
-    }
     for (logical_id, desired) in &definition.roles {
         if desired.is_absent() {
             if *logical_id == everyone_logical_id() {
@@ -464,14 +436,6 @@ pub(crate) fn build_plan(
             let Some(discord_id) = state.roles.get(logical_id).copied() else {
                 continue;
             };
-            if state.deleted_roles.contains(logical_id) {
-                continue;
-            }
-            if !state.pending_deletions.contains(logical_id) && !actual_roles.contains_key(&discord_id) {
-                return Err(ManagementError::InvalidState(format!(
-                    "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
-                )));
-            }
             if let Some(actual) = actual_roles.get(&discord_id)
                 && !actual.manageable
             {
@@ -505,22 +469,6 @@ pub(crate) fn build_plan(
             continue;
         }
 
-        if state.deleted_roles.contains(logical_id) {
-            if desired.is_reference() {
-                return Err(ManagementError::InvalidState(format!(
-                    "削除済みの Role {logical_id} は参照専用として利用できません"
-                )));
-            }
-            validate_role_creation(logical_id, desired, &definition.settings_sets.role, catalog)?;
-            let attributes = compose_attributes(desired, &definition.settings_sets.role);
-            plan.insert_create(
-                logical_id.clone(),
-                Change::Create { recreated: true },
-                resolve_role_create_attributes(&attributes, &catalog.default_permissions),
-            );
-            continue;
-        }
-
         let Some(discord_id) = state.roles.get(logical_id).copied() else {
             if desired.is_reference() {
                 return Err(ManagementError::InvalidState(format!(
@@ -531,23 +479,17 @@ pub(crate) fn build_plan(
             let attributes = compose_attributes(desired, &definition.settings_sets.role);
             plan.insert_create(
                 logical_id.clone(),
-                Change::Create { recreated: false },
+                Change::Create,
                 resolve_role_create_attributes(&attributes, &catalog.default_permissions),
             );
             continue;
         };
 
-        if state.pending_deletions.contains(logical_id) {
+        let Some(actual) = actual_roles.get(&discord_id) else {
             return Err(ManagementError::InvalidState(format!(
-                "Role {logical_id} の削除意図が未解決です"
-            )));
-        }
-
-        let actual = actual_roles.get(&discord_id).ok_or_else(|| {
-            ManagementError::InvalidState(format!(
                 "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
-            ))
-        })?;
+            )));
+        };
         let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
         if desired.is_managed() && !actual.manageable {
             return Err(ManagementError::InvalidState(format!(
