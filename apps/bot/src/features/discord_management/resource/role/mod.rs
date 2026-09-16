@@ -12,6 +12,8 @@ use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettin
 
 pub(crate) mod apply;
 
+use super::{display_quoted_string, render_change_line};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
     current: T,
@@ -154,50 +156,56 @@ impl AttributeChanges {
 
     fn render(&self, logical_id: &RoleLogicalId, discord_id: &RoleId, output: &mut String) {
         if let Some(change) = &self.name {
-            render_value_change(output, logical_id, discord_id, "name", change);
-        }
-        if let Some(change) = &self.color {
-            output.push_str(&format!(
-                "- {} ({}) color: {} -> {}\n",
+            render_change_line(
+                output,
                 logical_id,
                 discord_id,
+                "name",
+                display_quoted_string(change.current()),
+                display_quoted_string(change.desired()),
+            );
+        }
+        if let Some(change) = &self.color {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "color",
                 change.current().get(),
-                change.desired().get()
-            ));
+                change.desired().get(),
+            );
         }
         if let Some(change) = &self.hoist {
-            render_value_change(output, logical_id, discord_id, "hoist", change);
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "hoist",
+                change.current(),
+                change.desired(),
+            );
         }
         if let Some(change) = &self.mentionable {
-            render_value_change(output, logical_id, discord_id, "mentionable", change);
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "mentionable",
+                change.current(),
+                change.desired(),
+            );
         }
         for (permission, change) in &self.permissions {
-            render_value_change(
+            render_change_line(
                 output,
                 logical_id,
                 discord_id,
                 &format!("permissions.{permission}"),
-                change,
+                change.current(),
+                change.desired(),
             );
         }
     }
-}
-
-fn render_value_change<T: std::fmt::Display>(
-    output: &mut String,
-    logical_id: &RoleLogicalId,
-    discord_id: &RoleId,
-    attribute: &str,
-    change: &ValueChange<T>,
-) {
-    output.push_str(&format!(
-        "- {} ({}) {}: {} -> {}\n",
-        logical_id,
-        discord_id,
-        attribute,
-        change.current(),
-        change.desired()
-    ));
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,8 +327,8 @@ impl Plan {
 
 fn render_create_attributes(attributes: &RoleAttributes, output: &mut String) {
     output.push_str("  desired:\n");
-    if let Some(name) = &attributes.name {
-        render_create_value(output, "name", name);
+    if let Some(ManagedValue::Value(name)) = &attributes.name {
+        output.push_str(&format!("    name: {}\n", display_quoted_string(name)));
     }
     if let Some(ManagedValue::Value(color)) = &attributes.color {
         output.push_str(&format!("    color: {}\n", color.get()));
@@ -338,16 +346,16 @@ fn render_create_attributes(attributes: &RoleAttributes, output: &mut String) {
                 output.push_str(", ");
             }
             if let ManagedValue::Value(value) = value {
-                output.push_str(&format!("{permission}: {value:?}"));
+                output.push_str(&format!("{permission}: {value}"));
             }
         }
         output.push_str("}\n");
     }
 }
 
-fn render_create_value<T: std::fmt::Debug>(output: &mut String, attribute: &str, value: &ManagedValue<T>) {
+fn render_create_value<T: std::fmt::Display>(output: &mut String, attribute: &str, value: &ManagedValue<T>) {
     if let ManagedValue::Value(value) = value {
-        output.push_str(&format!("    {attribute}: {value:?}\n"));
+        output.push_str(&format!("    {attribute}: {value}\n"));
     }
 }
 
