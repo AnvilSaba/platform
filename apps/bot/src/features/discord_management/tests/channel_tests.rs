@@ -86,6 +86,8 @@ struct ApplyingFakeChannelSource {
     deletes: Arc<Mutex<Vec<ChannelId>>>,
     next_id: Arc<Mutex<u64>>,
     create_outcome: ChannelCreateOutcome,
+    delete_outcome: ChannelDeleteOutcome,
+    apply_delete: bool,
 }
 
 impl ChannelSource for ApplyingFakeChannelSource {
@@ -154,12 +156,14 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
         channel_id: &ChannelId,
     ) -> Result<ChannelDeleteOutcome, ManagementError> {
         self.deletes.lock().unwrap().push(*channel_id);
-        self.catalog
-            .lock()
-            .unwrap()
-            .channels
-            .retain(|channel| channel.id != *channel_id);
-        Ok(ChannelDeleteOutcome::Deleted)
+        if self.apply_delete {
+            self.catalog
+                .lock()
+                .unwrap()
+                .channels
+                .retain(|channel| channel.id != *channel_id);
+        }
+        Ok(self.delete_outcome)
     }
 }
 
@@ -204,6 +208,8 @@ fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSourc
         deletes: Arc::new(Mutex::new(Vec::new())),
         next_id: Arc::new(Mutex::new(500)),
         create_outcome: ChannelCreateOutcome::Created(ChannelId::new(500)),
+        delete_outcome: ChannelDeleteOutcome::Deleted,
+        apply_delete: true,
     }
 }
 
@@ -430,31 +436,6 @@ async fn channel_export_reports_active_disappearance_instead_of_dropping_state()
     );
 }
 
-/// deleted/pending の Channel 対応は、実物が catalog にない場合も再 export で保持する。
-#[tokio::test]
-async fn channel_export_preserves_deleted_and_pending_disappearances() {
-    let source = ChannelCatalogSource {
-        catalog: ChannelCatalog { channels: Vec::new() },
-    };
-    let state_json = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "channels": {"deleted_channel": "300", "pending_delete": "301"},
-        "deleted_channels": ["deleted_channel"],
-        "pending_channel_deletions": ["pending_delete"]
-    }"#;
-
-    let files = export_channels(&source, guild_id(100), Some(state_json)).await.unwrap();
-    let state: serde_json::Value = serde_json::from_str(&files.state_json).unwrap();
-    assert_eq!(state["channels"]["deleted_channel"], "300");
-    assert_eq!(state["channels"]["pending_delete"], "301");
-    assert_eq!(state["deleted_channels"], serde_json::json!(["deleted_channel"]));
-    assert_eq!(
-        state["pending_channel_deletions"],
-        serde_json::json!(["pending_delete"])
-    );
-}
-
 /// 既存 Text の parent は、論理 ID の宣言だけでなく実構成の型も Category に限定する。
 #[tokio::test]
 async fn existing_text_rejects_a_text_parent() {
@@ -560,10 +541,9 @@ async fn channel_create_plan_resolves_default_and_clear_values() {
     assert!(!rendered.contains("Clear"));
 }
 
-/// Channel 作成の応答不明後に所有者が bind した場合、pending を解除して
-/// 新しい対応を次回の plan へ引き継ぐ。
+/// Channel 作成の応答不明後は state を変更せず、所有者の bind で対応を追加できる。
 #[tokio::test]
-async fn binding_unknown_channel_creation_clears_pending_and_allows_resubmit() {
+async fn binding_after_unknown_channel_creation_allows_resubmit() {
     let mut source = lifecycle_channel_source(ChannelCatalog { channels: Vec::new() });
     source.create_outcome = ChannelCreateOutcome::ResponseUnknown;
     let definition = r#"
@@ -594,10 +574,7 @@ async fn binding_unknown_channel_creation_clears_pending_and_allows_resubmit() {
     .unwrap();
     assert_eq!(result.status, ChannelApplyStatus::CreationResponseUnknown);
     let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(
-        returned_state["pending_channel_creations"],
-        serde_json::json!(["rules"])
-    );
+    assert!(returned_state["channels"].is_null());
 
     let bind_source = BindFakeResourceSource {
         resource: ResourceLookup {
@@ -618,7 +595,6 @@ async fn binding_unknown_channel_creation_clears_pending_and_allows_resubmit() {
     .unwrap();
     let bound_state: serde_json::Value = serde_json::from_str(&bound.state_json).unwrap();
     assert_eq!(bound_state["channels"]["rules"], "500");
-    assert!(bound_state.get("pending_channel_creations").is_none());
     assert!(
         plan_channels(
             &ChannelCatalogSource {
@@ -721,6 +697,76 @@ async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definitio
     assert_eq!(resolved_state["guild_id"], input_state["guild_id"]);
     assert_eq!(resolved_state["channels"], input_state["channels"]);
     assert_eq!(second_source.catalog.lock().unwrap().channels[0].name, "ルール");
+}
+
+/// Channel 削除の応答不明時は対応表を維持し、実構成で不在を確認した次回 apply で除去する。
+#[tokio::test]
+async fn unknown_channel_delete_response_keeps_mapping_until_actual_absence() {
+    let mut source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![channel_snapshot("300", ChannelKind::Text, "不要", None)],
+    });
+    source.delete_outcome = ChannelDeleteOutcome::ResponseUnknown;
+    source.apply_delete = false;
+    let definition = "schema_version = 1\n[channels.unused]\nensure = \"absent\"\n";
+    let state_json = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"unused":"300"}}"#.to_owned();
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+
+    let unknown = apply_channels_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        ChannelApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(unknown.status, ChannelApplyStatus::DeletionResponseUnknown);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&unknown.state_json).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&state_json).unwrap()
+    );
+    assert_eq!(source.deletes.lock().unwrap().as_slice(), &[ChannelId::new(300)]);
+
+    source.catalog.lock().unwrap().channels.clear();
+    let rerun = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &unknown.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        rerun.get(&ChannelLogicalId::parse("unused").unwrap()),
+        Some(ChannelChange::Delete { discord_id }) if *discord_id == ChannelId::new(300)
+    ));
+
+    let resolved = apply_channels_with_options(
+        &source,
+        guild_id(100),
+        definition,
+        &unknown.state_json,
+        &rerun,
+        ChannelApplyOptions { allow_deletions: true },
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved.status, ChannelApplyStatus::Complete);
+    let resolved_state: serde_json::Value = serde_json::from_str(&resolved.state_json).unwrap();
+    assert!(resolved_state["channels"].get("unused").is_none());
+    assert_eq!(source.deletes.lock().unwrap().as_slice(), &[ChannelId::new(300)]);
 }
 
 /// apply の can_manage_roles 照会も processing_deadline の契約に従い、期限超過時の state を返す。
@@ -1071,7 +1117,7 @@ async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_over
     assert_eq!(source.catalog.lock().unwrap().channels[0].overwrites, *final_overwrites);
 }
 
-/// Category 削除前に子 Channel の parent clear を適用し、削除済み状態を保存する。
+/// Category 削除前に子 Channel の parent clear を適用し、対応表から除去する。
 #[tokio::test]
 async fn channel_apply_unparents_children_before_category_deletion() {
     let source = lifecycle_channel_source(ChannelCatalog {
@@ -1134,7 +1180,7 @@ async fn channel_apply_unparents_children_before_category_deletion() {
     assert_eq!(result.status, ChannelApplyStatus::Complete);
     assert_eq!(source.deletes.lock().unwrap().as_slice(), &[ChannelId::new(200)]);
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
-    assert_eq!(state["deleted_channels"], serde_json::json!(["information"]));
+    assert!(state["channels"].get("information").is_none());
     assert_eq!(source.catalog.lock().unwrap().channels[0].parent_id, None);
 }
 
@@ -1165,10 +1211,10 @@ async fn channel_apply_moves_an_existing_text_under_a_planned_category() {
     .await
     .unwrap();
 
-    assert!(
-        plan.get(&ChannelLogicalId::parse("information").unwrap())
-            .is_some_and(|change| change.recreated() == Some(false))
-    );
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("information").unwrap()),
+        Some(ChannelChange::Create)
+    ));
     assert!(
         plan.get(&ChannelLogicalId::parse("rules").unwrap())
             .is_some_and(ChannelChange::is_update)
@@ -1201,40 +1247,6 @@ async fn channel_apply_moves_an_existing_text_under_a_planned_category() {
             .find(|channel| channel.id == ChannelId::new(300))
             .and_then(|channel| channel.parent_id),
         Some(ChannelId::new(500))
-    );
-}
-
-/// 削除意図の解決待ちへ定義を切り替えても、Channel overwrite の Role 参照を迂回できない。
-#[tokio::test]
-async fn channel_plan_rejects_an_overwrite_target_with_a_pending_role_deletion() {
-    let source = ChannelCatalogSource {
-        catalog: ChannelCatalog {
-            channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
-        },
-    };
-    let definition = r#"
-        schema_version = 1
-        [roles.moderator]
-        mode = "reference"
-        [channels.rules]
-        type = "text"
-        [channels.rules.overwrites."role:moderator"]
-        VIEW_CHANNEL = "allow"
-    "#;
-    let state = r#"{
-        "schema_version": 1,
-        "guild_id": "100",
-        "roles": {"moderator": "400"},
-        "pending_deletions": ["moderator"],
-        "channels": {"rules": "300"}
-    }"#;
-
-    let error = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
-        .await
-        .unwrap_err();
-
-    assert!(
-        matches!(error, ManagementError::InvalidState(message) if message.contains("Role moderator") && message.contains("削除意図"))
     );
 }
 
@@ -1272,7 +1284,7 @@ async fn channel_plan_rejects_an_everyone_overwrite_when_everyone_is_absent() {
     );
 }
 
-/// 削除済み Category を同じ plan 内で再作成し、後続の子 Channel 作成へ新しい親を渡す。
+/// 対応がない Category を作成し、後続の子 Channel 作成へ新しい親を渡す。
 #[tokio::test]
 async fn channel_plan_and_apply_recreate_category_before_creating_a_child() {
     let source = lifecycle_channel_source(ChannelCatalog { channels: Vec::new() });
@@ -1289,21 +1301,20 @@ async fn channel_plan_and_apply_recreate_category_before_creating_a_child() {
     let state = r#"{
         "schema_version": 1,
         "guild_id": "100",
-        "channels": {"information": "200"},
-        "deleted_channels": ["information"]
+        "channels": {}
     }"#;
     let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
         .await
         .unwrap();
 
-    assert!(
-        plan.get(&ChannelLogicalId::parse("information").unwrap())
-            .is_some_and(|change| change.recreated() == Some(true))
-    );
-    assert!(
-        plan.get(&ChannelLogicalId::parse("rules").unwrap())
-            .is_some_and(|change| change.recreated() == Some(false))
-    );
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("information").unwrap()),
+        Some(ChannelChange::Create)
+    ));
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("rules").unwrap()),
+        Some(ChannelChange::Create)
+    ));
 
     let result = apply_channels(
         &source,
@@ -1325,10 +1336,9 @@ async fn channel_plan_and_apply_recreate_category_before_creating_a_child() {
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(state["channels"]["information"], "500");
     assert_eq!(state["channels"]["rules"], "501");
-    assert!(state.get("deleted_channels").is_none());
 }
 
-/// 削除済み Category を同じ plan 内で再作成し、既存の子 Channel を新しい親へ移動する。
+/// 対応がない Category を作成し、既存の子 Channel を新しい親へ移動する。
 #[tokio::test]
 async fn channel_plan_and_apply_recreate_category_before_moving_a_child() {
     let source = lifecycle_channel_source(ChannelCatalog {
@@ -1347,17 +1357,16 @@ async fn channel_plan_and_apply_recreate_category_before_moving_a_child() {
     let state = r#"{
         "schema_version": 1,
         "guild_id": "100",
-        "channels": {"information": "200", "rules": "300"},
-        "deleted_channels": ["information"]
+        "channels": {"rules": "300"}
     }"#;
     let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
         .await
         .unwrap();
 
-    assert!(
-        plan.get(&ChannelLogicalId::parse("information").unwrap())
-            .is_some_and(|change| change.recreated() == Some(true))
-    );
+    assert!(matches!(
+        plan.get(&ChannelLogicalId::parse("information").unwrap()),
+        Some(ChannelChange::Create)
+    ));
     let rules_change = plan
         .get(&ChannelLogicalId::parse("rules").unwrap())
         .expect("子 Channel の移動 plan が必要です");
@@ -1396,7 +1405,6 @@ async fn channel_plan_and_apply_recreate_category_before_moving_a_child() {
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert_eq!(state["channels"]["information"], "500");
     assert_eq!(state["channels"]["rules"], "300");
-    assert!(state.get("deleted_channels").is_none());
 }
 
 /// Voice/Forum 等の未管理 Channel も catalog に残し、Category 削除時に見落とさない。
@@ -1499,15 +1507,14 @@ async fn channel_plan_rejects_overwrite_updates_without_manage_roles() {
     assert!(matches!(error, ManagementError::ChannelPermissionDenied(message) if message.contains("MANAGE_ROLES")));
 }
 
-/// deleted_channels の対応は定義から省略されると管理解除で state から除かれる。
+/// 定義から Channel を外す管理解除で state から対応が除かれる。
 #[tokio::test]
 async fn deleted_channel_mapping_is_released_when_definition_is_omitted() {
     let source = lifecycle_channel_source(ChannelCatalog { channels: Vec::new() });
     let state_json = r#"{
         "schema_version": 1,
         "guild_id": "100",
-        "channels": {"old": "300"},
-        "deleted_channels": ["old"]
+        "channels": {"old": "300"}
     }"#;
     let definition = "schema_version = 1\n";
     let plan = plan_channels(
@@ -1536,5 +1543,4 @@ async fn deleted_channel_mapping_is_released_when_definition_is_omitted() {
     .unwrap();
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert!(state.get("channels").is_none());
-    assert!(state.get("deleted_channels").is_none());
 }

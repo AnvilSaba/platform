@@ -999,10 +999,7 @@ async fn empty_state_plans_managed_role_creation_without_discord_id() {
         .unwrap();
 
     assert_eq!(plan.len(), 1);
-    assert_eq!(
-        plan.get(&logical_id("moderator")).and_then(Change::recreated),
-        Some(false)
-    );
+    assert!(matches!(plan.get(&logical_id("moderator")), Some(Change::Create)));
     assert!(plan.render().contains("moderator"));
     assert!(plan.render().contains("作成"));
     assert!(!plan.render().contains("Snowflake"));
@@ -1273,9 +1270,9 @@ async fn plan_rejects_an_absent_role_overwrite_target() {
     );
 }
 
-/// state の削除済み Role を Channel overwrite の対象にできないことを plan の入力検証で保証する。
+/// Role overwrite の参照先が実構成から予期せず消えた場合は停止する。
 #[tokio::test]
-async fn plan_rejects_a_deleted_role_overwrite_target() {
+async fn plan_rejects_a_missing_role_overwrite_target() {
     let source = StatefulFakeRoleSource {
         guild_id: "100".to_owned(),
         roles: Vec::new(),
@@ -1293,14 +1290,13 @@ async fn plan_rejects_a_deleted_role_overwrite_target() {
         "schema_version": 1,
         "guild_id": "100",
         "roles": {"admin": "200"},
-        "deleted_roles": ["admin"],
         "channels": {"rules": "300"}
     }"#;
 
     let error = plan_roles(&source, guild_id(100), definition, state).await.unwrap_err();
 
     assert!(
-        matches!(error, ManagementError::InvalidState(message) if message.contains("Role admin") && message.contains("削除済み"))
+        matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失") || message.contains("存在しません"))
     );
 }
 
@@ -1478,6 +1474,45 @@ async fn non_numeric_state_guild_id_is_reported() {
     .unwrap_err();
 
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("Guild ID")));
+}
+
+/// state は論理 ID と Discord ID の対応表だけを保持し、属性や操作途中の情報を含めない。
+#[test]
+fn state_round_trip_contains_only_mappings() {
+    let input = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "channels": {"rules": "300"},
+        "members": {"owner": "400"}
+    }"#;
+    let state = StateFile::parse_for_guild(input, guild_id(100)).unwrap();
+    let serialized = serialize_state(&state).unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&serialized).unwrap(),
+        serde_json::json!({
+            "schema_version": 1,
+            "guild_id": "100",
+            "roles": {"moderator": "200"},
+            "channels": {"rules": "300"},
+            "members": {"owner": "400"}
+        })
+    );
+}
+
+/// 対応表にない state 項目を受け入れず、余計な永続化を防ぐ。
+#[test]
+fn state_rejects_unknown_fields() {
+    let input = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {},
+        "extra": true
+    }"#;
+    let error = StateFile::parse_for_guild(input, guild_id(100)).unwrap_err();
+
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("extra")));
 }
 
 /// 予約論理ID everyoneをstateに保存する旧・不正形式を、stateモデルの検証で拒否することを保証する。

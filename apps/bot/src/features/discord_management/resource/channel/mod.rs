@@ -395,9 +395,7 @@ fn render_optional_value_change<T: std::fmt::Debug>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Change {
-    Create {
-        recreated: bool,
-    },
+    Create,
     Update {
         discord_id: ChannelId,
         attributes: Box<AttributeChanges>,
@@ -423,18 +421,10 @@ impl Change {
     }
 
     #[cfg(test)]
-    pub(crate) fn recreated(&self) -> Option<bool> {
-        match self {
-            Self::Create { recreated } => Some(*recreated),
-            Self::Update { .. } | Self::Release { .. } | Self::Delete { .. } => None,
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn attributes(&self) -> Option<&AttributeChanges> {
         match self {
             Self::Update { attributes, .. } => Some(attributes),
-            Self::Create { .. } | Self::Release { .. } | Self::Delete { .. } => None,
+            Self::Create | Self::Release { .. } | Self::Delete { .. } => None,
         }
     }
 }
@@ -473,7 +463,7 @@ impl Plan {
     }
 
     fn insert_create(&mut self, logical_id: ChannelLogicalId, change: Change, desired: ChannelAttributes) {
-        debug_assert!(matches!(change, Change::Create { .. }));
+        debug_assert!(matches!(change, Change::Create));
         debug_assert!(self.changes.insert(logical_id.clone(), change).is_none());
         self.create_desired.insert(logical_id, desired);
     }
@@ -490,11 +480,8 @@ impl Plan {
         let mut output = String::from("Channel の変更計画\n\n");
         for (logical_id, change) in &self.changes {
             match change {
-                Change::Create { recreated } => {
-                    output.push_str(&format!(
-                        "- {}: {logical_id}\n",
-                        if *recreated { "再作成" } else { "新規作成" }
-                    ));
+                Change::Create => {
+                    output.push_str(&format!("- 新規作成: {logical_id}\n"));
                     if let Some(desired) = self.create_desired.get(logical_id) {
                         render_create_attributes(desired, &mut output);
                     }
@@ -616,7 +603,6 @@ pub(crate) fn build_channel_plan_with_capabilities(
         .iter()
         .map(|channel| (channel.id, channel))
         .collect::<BTreeMap<_, _>>();
-    validate_pending_channel_state(definition, state)?;
     let planned_channel_creations = planned_channel_creations(definition, state);
     let mut plan = Plan::default();
 
@@ -649,22 +635,6 @@ pub(crate) fn build_channel_plan_with_capabilities(
             Some(&actual),
             &planned_channel_creations,
         )?;
-        if state.deleted_channels.contains(logical_id) {
-            validate_channel_creation(
-                logical_id,
-                &attributes,
-                definition,
-                state,
-                Some(&actual),
-                &planned_channel_creations,
-            )?;
-            plan.insert_create(
-                logical_id.clone(),
-                Change::Create { recreated: true },
-                attributes.clone(),
-            );
-            continue;
-        }
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
             validate_channel_creation(
                 logical_id,
@@ -674,19 +644,14 @@ pub(crate) fn build_channel_plan_with_capabilities(
                 Some(&actual),
                 &planned_channel_creations,
             )?;
-            plan.insert_create(
-                logical_id.clone(),
-                Change::Create { recreated: false },
-                attributes.clone(),
-            );
+            plan.insert_create(logical_id.clone(), Change::Create, attributes.clone());
             continue;
         };
-        if state.pending_channel_deletions.contains(logical_id) {
+        let Some(current) = actual.get(&discord_id).copied() else {
             return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の削除意図が未解決です"
+                "Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             )));
-        }
-        let current = ensure_actual_channel(logical_id, discord_id, &actual)?;
+        };
         if current.kind != kind {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Channel {logical_id} の種類変更はサポートしていません（{} -> {}）",
@@ -742,31 +707,9 @@ fn planned_channel_creations(definition: &DefinitionFile, state: &StateFile) -> 
             if !is_managed_category {
                 return None;
             }
-            (state.deleted_channels.contains(logical_id) || !state.channels.contains_key(logical_id))
-                .then_some(logical_id.clone())
+            (!state.channels.contains_key(logical_id)).then_some(logical_id.clone())
         })
         .collect()
-}
-
-fn validate_pending_channel_state(definition: &DefinitionFile, state: &StateFile) -> Result<(), ManagementError> {
-    if let Some(logical_id) = state.pending_channel_creations.iter().next() {
-        return Err(ManagementError::InvalidState(format!(
-            "Channel {logical_id} は作成結果不明のため、同じ定義で状態を確認する必要があります"
-        )));
-    }
-    for logical_id in &state.pending_channel_deletions {
-        let Some(channel) = definition.channels.get(logical_id) else {
-            return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の削除意図が未解決のため、定義を変更できません"
-            )));
-        };
-        if !channel.is_absent() {
-            return Err(ManagementError::InvalidState(format!(
-                "Channel {logical_id} の削除意図が未解決です"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn plan_absent_channel(
@@ -779,14 +722,7 @@ fn plan_absent_channel(
     let Some(discord_id) = state.channels.get(logical_id).copied() else {
         return Ok(());
     };
-    if state.deleted_channels.contains(logical_id) {
-        return Ok(());
-    }
-    let current = if state.pending_channel_deletions.contains(logical_id) {
-        actual.get(&discord_id).copied()
-    } else {
-        Some(ensure_actual_channel(logical_id, discord_id, actual)?)
-    };
+    let current = actual.get(&discord_id).copied();
     if let Some(current) = current {
         if !current.manageable {
             return Err(ManagementError::InvalidState(format!(
