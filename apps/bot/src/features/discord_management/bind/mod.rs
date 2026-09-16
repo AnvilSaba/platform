@@ -161,13 +161,9 @@ impl BoundLogicalId {
         match self {
             Self::Role(logical_id) => {
                 state.roles.insert(logical_id.clone(), RoleId::new(discord_id));
-                state.pending_creations.remove(&logical_id);
-                state.deleted_roles.remove(&logical_id);
             }
             Self::Channel(logical_id) => {
                 state.channels.insert(logical_id.clone(), ChannelId::new(discord_id));
-                state.pending_channel_creations.remove(&logical_id);
-                state.deleted_channels.remove(&logical_id);
             }
             Self::Member(logical_id) => {
                 state.members.insert(logical_id.clone(), MemberId::new(discord_id));
@@ -182,21 +178,16 @@ fn validate_binding_conflicts(
     discord_id: u64,
 ) -> Result<(), ManagementError> {
     match logical_id {
-        BoundLogicalId::Role(logical_id) => validate_mapping_conflict(
-            &state.roles,
-            logical_id,
-            discord_id,
-            "Role",
-            RoleId::get,
-            state.pending_creations.contains(logical_id) && state.deleted_roles.contains(logical_id),
-        ),
+        BoundLogicalId::Role(logical_id) => {
+            validate_mapping_conflict(&state.roles, logical_id, discord_id, "Role", RoleId::get, false)
+        }
         BoundLogicalId::Channel(logical_id) => validate_mapping_conflict(
             &state.channels,
             logical_id,
             discord_id,
             "Channel",
             ChannelId::get,
-            state.pending_channel_creations.contains(logical_id) && state.deleted_channels.contains(logical_id),
+            false,
         ),
         BoundLogicalId::Member(logical_id) => {
             validate_mapping_conflict(&state.members, logical_id, discord_id, "Member", MemberId::get, false)

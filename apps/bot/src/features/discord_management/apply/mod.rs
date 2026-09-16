@@ -1,6 +1,6 @@
 //! Discord 管理の適用 Workflow の入口です。
 //!
-//! Guild 単位の排他状態と、Role 固有の状態機械・Discord 操作をまとめた
+//! Guild 単位の排他状態と、Role 固有の適用処理・Discord 操作をまとめた
 //! Workflow を公開します。
 
 pub(super) mod guild_lock;

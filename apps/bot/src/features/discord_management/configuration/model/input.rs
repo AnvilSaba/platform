@@ -123,7 +123,7 @@ fn validate_channel_references(
 
     for subject in attributes.overwrites.keys() {
         if subject == "everyone" {
-            validate_role_overwrite_reference(channel_id, &everyone_logical_id(), definition, state)?;
+            validate_role_overwrite_reference(channel_id, &everyone_logical_id(), definition)?;
             continue;
         }
         if let Some(logical_id) = subject.strip_prefix("role:") {
@@ -131,7 +131,7 @@ fn validate_channel_references(
                 ManagementError::InvalidDefinition(format!("Channel {channel_id} の {subject} が不正です: {error}"))
             })?;
             if logical_id == everyone_logical_id() {
-                validate_role_overwrite_reference(channel_id, &logical_id, definition, state)?;
+                validate_role_overwrite_reference(channel_id, &logical_id, definition)?;
                 continue;
             }
             if !definition.roles.contains_key(&logical_id) {
@@ -139,7 +139,7 @@ fn validate_channel_references(
                     "Channel {channel_id} の権限対象 Role {logical_id} の宣言がありません"
                 )));
             }
-            validate_role_overwrite_reference(channel_id, &logical_id, definition, state)?;
+            validate_role_overwrite_reference(channel_id, &logical_id, definition)?;
             if logical_id != everyone_logical_id() && !state.roles.contains_key(&logical_id) {
                 return Err(ManagementError::InvalidState(format!(
                     "Channel {channel_id} の権限対象 Role {logical_id} の対応がありません"
@@ -173,7 +173,6 @@ fn validate_role_overwrite_reference(
     channel_id: &ChannelLogicalId,
     logical_id: &RoleLogicalId,
     definition: &DefinitionFile,
-    state: &StateFile,
 ) -> Result<(), ManagementError> {
     if definition
         .roles
@@ -182,16 +181,6 @@ fn validate_role_overwrite_reference(
     {
         return Err(ManagementError::InvalidDefinition(format!(
             "Channel {channel_id} の権限対象 Role {logical_id} は削除宣言です"
-        )));
-    }
-    if state.deleted_roles.contains(logical_id) {
-        return Err(ManagementError::InvalidState(format!(
-            "Channel {channel_id} の権限対象 Role {logical_id} は削除済みです"
-        )));
-    }
-    if state.pending_deletions.contains(logical_id) {
-        return Err(ManagementError::InvalidState(format!(
-            "Channel {channel_id} の権限対象 Role {logical_id} の削除意図が未解決です"
         )));
     }
     Ok(())
