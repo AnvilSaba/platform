@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     configuration::{
-        ChannelKind, ChannelValue, ManagedValue, OverwriteValue, PermissionName, RawChannelAttributes,
-        RawChannelDefinition, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets, RawStateFile,
-        RoleEnsure, RoleMode, StateFile, everyone_logical_id,
+        ChannelKind, ChannelValue, ManagedValue, OverwriteTarget, OverwriteValue, PermissionName, RawChannelAttributes,
+        RawChannelDefinition, RawChannelKind, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets,
+        RawStateFile, RoleEnsure, RoleMode, StateFile, everyone_logical_id,
     },
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
@@ -282,7 +282,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .clone();
         let kind = channel.kind;
         let mut attributes = RawChannelAttributes {
-            kind: Some(kind.as_str().to_owned()),
+            kind: Some(match kind {
+                ChannelKind::Category => RawChannelKind::Category,
+                ChannelKind::Text => RawChannelKind::Text,
+                ChannelKind::Unsupported => unreachable!("Unsupported Channel は export 対象に含まれません"),
+            }),
             name: Some(ChannelValue::Value(channel.name)),
             ..RawChannelAttributes::default()
         };
@@ -442,18 +446,18 @@ fn export_overwrites(
     overwrites: &BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
     role_ids: &BTreeMap<RoleId, RoleLogicalId>,
     member_ids: &BTreeMap<MemberId, super::ids::MemberLogicalId>,
-) -> Result<BTreeMap<String, BTreeMap<PermissionName, OverwriteValue>>, ManagementError> {
+) -> Result<BTreeMap<OverwriteTarget, BTreeMap<PermissionName, OverwriteValue>>, ManagementError> {
     let mut result = BTreeMap::new();
     for (target, permissions) in overwrites {
         let subject = match target {
-            ChannelOverwriteTarget::Everyone => "everyone".to_owned(),
+            ChannelOverwriteTarget::Everyone => OverwriteTarget::Everyone,
             ChannelOverwriteTarget::Role(id) => {
                 let logical_id = role_ids.get(id).ok_or_else(|| {
                     ManagementError::InvalidState(format!(
                         "Channel overwrite の Role {id} に対応する論理 ID が state にありません"
                     ))
                 })?;
-                format!("role:{logical_id}")
+                OverwriteTarget::Role(logical_id.clone())
             }
             ChannelOverwriteTarget::Member(id) => {
                 let logical_id = member_ids.get(id).ok_or_else(|| {
@@ -461,7 +465,7 @@ fn export_overwrites(
                         "Channel overwrite の Member {id} に対応する論理 ID が state にありません"
                     ))
                 })?;
-                format!("member:{logical_id}")
+                OverwriteTarget::Member(logical_id.clone())
             }
         };
         let mut values = BTreeMap::new();

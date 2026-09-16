@@ -1,9 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser::SerializeMap};
+use validator::ValidationError;
 
 use super::{KnownPermission, PermissionName, PermissionVocabulary};
-use crate::features::discord_management::{domain::ManagementError, ids::ChannelLogicalId};
+use crate::features::discord_management::{
+    domain::ManagementError,
+    ids::{ChannelLogicalId, MemberLogicalId, RoleLogicalId},
+};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ChannelKind {
@@ -14,6 +21,27 @@ pub(crate) enum ChannelKind {
     /// catalog から除外すると、管理対象 Category の配下にある Voice/Forum 等を
     /// 削除前検証で見落とすため、読み取り時だけこの種別で保持します。
     Unsupported,
+}
+
+/// 定義ファイルで指定できる Channel 種別です。
+///
+/// `ChannelKind::Unsupported` は Discord のカタログを読むときだけ必要な値なので、
+/// 定義ファイルの raw model には含めません。serde に字句の解釈を任せることで、
+/// resolve 側に種別文字列の手書き判定を残さないようにします。
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RawChannelKind {
+    Category,
+    Text,
+}
+
+impl From<RawChannelKind> for ChannelKind {
+    fn from(kind: RawChannelKind) -> Self {
+        match kind {
+            RawChannelKind::Category => Self::Category,
+            RawChannelKind::Text => Self::Text,
+        }
+    }
 }
 
 impl ChannelKind {
@@ -31,6 +59,114 @@ pub(crate) enum ChannelValue<T> {
     Value(T),
     Default,
     Clear,
+}
+
+impl<T> ChannelValue<T> {
+    pub(crate) fn as_value(&self) -> Option<&T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Default | Self::Clear => None,
+        }
+    }
+
+    pub(crate) fn into_value(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Default | Self::Clear => None,
+        }
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+
+    pub(crate) fn is_clear(&self) -> bool {
+        matches!(self, Self::Clear)
+    }
+
+    /// `Default` と `Clear` を呼び出し側の値へ解決します。
+    ///
+    /// `clear` は属性ごとに意味が異なるため、解決済みの値を呼び出し側が渡します。
+    /// 解除が `None` を意味する属性では `resolve_optional` を使用してください。
+    pub(crate) fn resolve(&self, default: T, clear: T) -> T
+    where
+        T: Clone,
+    {
+        match self {
+            Self::Value(value) => value.clone(),
+            Self::Default => default,
+            Self::Clear => clear,
+        }
+    }
+
+    pub(crate) fn resolve_optional(&self, default: Option<T>) -> Option<T>
+    where
+        T: Clone,
+    {
+        if let Some(value) = self.clone().into_value() {
+            return Some(value);
+        }
+        match self {
+            Self::Default => default,
+            Self::Clear => None,
+            Self::Value(_) => unreachable!("Value は into_value で先に取り出されます"),
+        }
+    }
+}
+
+/// Channel の permission overwrite を設定ファイル上で識別する typed target です。
+///
+/// 論理 ID の字句検証は Deserialize 時に済ませ、state や definition の存在確認は
+/// 外部文脈を持つ `PlanInput` 側で行います。
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum OverwriteTarget {
+    Everyone,
+    Role(RoleLogicalId),
+    Member(MemberLogicalId),
+}
+
+impl fmt::Display for OverwriteTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Everyone => formatter.write_str("everyone"),
+            Self::Role(logical_id) => write!(formatter, "role:{logical_id}"),
+            Self::Member(logical_id) => write!(formatter, "member:{logical_id}"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OverwriteTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == "everyone" {
+            return Ok(Self::Everyone);
+        }
+        if let Some(logical_id) = value.strip_prefix("role:") {
+            return RoleLogicalId::parse(logical_id)
+                .map(Self::Role)
+                .map_err(de::Error::custom);
+        }
+        if let Some(logical_id) = value.strip_prefix("member:") {
+            return MemberLogicalId::parse(logical_id)
+                .map(Self::Member)
+                .map_err(de::Error::custom);
+        }
+        Err(de::Error::custom(format!(
+            "権限対象 {value} は everyone、role:<論理 ID>、member:<論理 ID> のいずれかで指定してください"
+        )))
+    }
+}
+
+impl Serialize for OverwriteTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
 }
 
 #[derive(Deserialize)]
@@ -114,7 +250,7 @@ pub(crate) struct ChannelAttributes {
     pub(crate) slowmode_seconds: Option<ChannelValue<u16>>,
     pub(crate) default_auto_archive_minutes: Option<ChannelValue<u16>>,
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
-    pub(crate) overwrites: BTreeMap<String, BTreeMap<KnownPermission, OverwriteValue>>,
+    pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
 }
 
 impl ChannelAttributes {
@@ -202,23 +338,30 @@ impl ChannelAttributes {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawChannelAttributes {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub(crate) kind: Option<String>,
+    pub(crate) kind: Option<RawChannelKind>,
+    #[validate(custom(function = "validate_channel_name"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<ChannelValue<String>>,
+    #[validate(custom(function = "validate_channel_parent"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) parent: Option<ChannelValue<ChannelLogicalId>>,
+    #[validate(custom(function = "validate_channel_topic"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) topic: Option<ChannelValue<String>>,
+    #[validate(custom(function = "validate_channel_nsfw"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) nsfw: Option<ChannelValue<bool>>,
+    #[validate(custom(function = "validate_channel_slowmode"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slowmode_seconds: Option<ChannelValue<u16>>,
+    #[validate(custom(function = "validate_channel_auto_archive"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_auto_archive_minutes: Option<ChannelValue<u16>>,
+    #[validate(custom(function = "validate_channel_thread_slowmode"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) overwrites: BTreeMap<String, BTreeMap<PermissionName, OverwriteValue>>,
+    pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<PermissionName, OverwriteValue>>,
 }
 
 impl RawChannelAttributes {
@@ -238,33 +381,7 @@ impl RawChannelAttributes {
             default_thread_slowmode_seconds,
             overwrites,
         } = self;
-        let kind = kind
-            .map(|kind| match kind.as_str() {
-                "category" => Ok(ChannelKind::Category),
-                "text" => Ok(ChannelKind::Text),
-                _ => Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {logical_id} の type は category または text で指定してください"
-                ))),
-            })
-            .transpose()?;
-        let name = name
-            .map(|value| validate_string_value(value, logical_id, "name", false, 100))
-            .transpose()?;
-        let topic = topic
-            .map(|value| validate_string_value(value, logical_id, "topic", true, 1024))
-            .transpose()?;
-        let nsfw = nsfw
-            .map(|value| validate_bool_value(value, logical_id, "nsfw"))
-            .transpose()?;
-        let slowmode_seconds = slowmode_seconds
-            .map(|value| validate_u16_value(value, logical_id, "slowmode_seconds", true))
-            .transpose()?;
-        let default_auto_archive_minutes = default_auto_archive_minutes
-            .map(|value| validate_auto_archive_value(value, logical_id))
-            .transpose()?;
-        let default_thread_slowmode_seconds = default_thread_slowmode_seconds
-            .map(|value| validate_u16_value(value, logical_id, "default_thread_slowmode_seconds", true))
-            .transpose()?;
+        let kind = kind.map(ChannelKind::from);
         let overwrites = resolve_overwrites(overwrites, logical_id, vocabulary)?;
         Ok(ChannelAttributes {
             kind,
@@ -280,109 +397,110 @@ impl RawChannelAttributes {
     }
 }
 
-fn validate_string_value(
-    value: ChannelValue<String>,
-    logical_id: &ChannelLogicalId,
-    attribute: &str,
-    allow_clear: bool,
+fn validation_error(code: &'static str, message: impl Into<String>) -> ValidationError {
+    ValidationError::new(code).with_message(message.into().into())
+}
+
+fn validate_channel_name(value: &ChannelValue<String>) -> Result<(), ValidationError> {
+    validate_channel_string(value, "name", 100, false, false, |value| !value.is_empty())
+}
+
+fn validate_channel_topic(value: &ChannelValue<String>) -> Result<(), ValidationError> {
+    validate_channel_string(value, "topic", 1024, true, true, |_| true)
+}
+
+fn validate_channel_string(
+    value: &ChannelValue<String>,
+    attribute: &'static str,
     max_length: usize,
-) -> Result<ChannelValue<String>, ManagementError> {
-    match &value {
-        ChannelValue::Value(value) => {
-            if attribute == "name" && value.is_empty() {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {logical_id} の name は1文字以上で指定してください"
-                )));
-            }
-            if value.chars().count() > max_length {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {logical_id} の {attribute} は{max_length}文字以内で指定してください"
-                )));
-            }
-        }
-        ChannelValue::Clear if !allow_clear => {
-            return Err(ManagementError::InvalidDefinition(format!(
-                "Channel {logical_id} の {attribute} は解除できません"
-            )));
-        }
-        ChannelValue::Default | ChannelValue::Clear => {}
-    }
-    Ok(value)
-}
-
-fn validate_bool_value(
-    value: ChannelValue<bool>,
-    logical_id: &ChannelLogicalId,
-    attribute: &str,
-) -> Result<ChannelValue<bool>, ManagementError> {
-    if matches!(value, ChannelValue::Clear) {
-        return Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の {attribute} は解除できません"
-        )));
-    }
-    Ok(value)
-}
-
-fn validate_u16_value(
-    value: ChannelValue<u16>,
-    logical_id: &ChannelLogicalId,
-    attribute: &str,
+    allow_default: bool,
     allow_clear: bool,
-) -> Result<ChannelValue<u16>, ManagementError> {
+    additional: impl FnOnce(&str) -> bool,
+) -> Result<(), ValidationError> {
     match value {
-        ChannelValue::Value(value) => {
-            if value > 21_600 && matches!(attribute, "slowmode_seconds" | "default_thread_slowmode_seconds") {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {logical_id} の {attribute} は0から21600の範囲で指定してください"
-                )));
-            }
-            Ok(ChannelValue::Value(value))
-        }
-        ChannelValue::Clear if allow_clear => Ok(ChannelValue::Clear),
-        ChannelValue::Clear => Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の {attribute} は解除できません"
-        ))),
-        ChannelValue::Default => Ok(ChannelValue::Default),
+        ChannelValue::Value(value) if !additional(value) => Err(validation_error(
+            "length",
+            format!("{attribute} は1文字以上で指定してください"),
+        )),
+        ChannelValue::Value(value) if value.chars().count() > max_length => Err(validation_error(
+            "length",
+            format!("{attribute} は{max_length}文字以内で指定してください"),
+        )),
+        ChannelValue::Default if !allow_default => Err(validation_error(
+            "invalid_marker",
+            format!("{attribute} に default は指定できません"),
+        )),
+        ChannelValue::Clear if !allow_clear => Err(validation_error(
+            "invalid_marker",
+            format!("{attribute} は解除できません"),
+        )),
+        _ => Ok(()),
     }
 }
 
-fn validate_auto_archive_value(
-    value: ChannelValue<u16>,
-    logical_id: &ChannelLogicalId,
-) -> Result<ChannelValue<u16>, ManagementError> {
+fn validate_channel_parent(value: &ChannelValue<ChannelLogicalId>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "parent", false, true)
+}
+
+fn validate_channel_nsfw(value: &ChannelValue<bool>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "nsfw", true, false)
+}
+
+fn validate_channel_markers<T>(
+    value: &ChannelValue<T>,
+    attribute: &'static str,
+    allow_default: bool,
+    allow_clear: bool,
+) -> Result<(), ValidationError> {
     match value {
-        ChannelValue::Value(value) if matches!(value, 60 | 1440 | 4320 | 10080) => Ok(ChannelValue::Value(value)),
-        ChannelValue::Value(_) => Err(ManagementError::InvalidDefinition(format!(
-            "Channel {logical_id} の default_auto_archive_minutes は60、1440、4320、10080のいずれかで指定してください"
-        ))),
-        ChannelValue::Default => Ok(ChannelValue::Default),
-        ChannelValue::Clear => Ok(ChannelValue::Clear),
+        ChannelValue::Default if !allow_default => Err(validation_error(
+            "invalid_marker",
+            format!("{attribute} に default は指定できません"),
+        )),
+        ChannelValue::Clear if !allow_clear => Err(validation_error(
+            "invalid_marker",
+            format!("{attribute} は解除できません"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn validate_channel_slowmode(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
+    validate_channel_u16(value, "slowmode_seconds")
+}
+
+fn validate_channel_thread_slowmode(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
+    validate_channel_u16(value, "default_thread_slowmode_seconds")
+}
+
+fn validate_channel_u16(value: &ChannelValue<u16>, attribute: &'static str) -> Result<(), ValidationError> {
+    match value {
+        ChannelValue::Value(value) if *value > 21_600 => Err(validation_error(
+            "range",
+            format!("{attribute} は0から21600の範囲で指定してください"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn validate_channel_auto_archive(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
+    match value {
+        ChannelValue::Value(value) if !matches!(value, 60 | 1440 | 4320 | 10080) => Err(validation_error(
+            "allowed_values",
+            "default_auto_archive_minutes は60、1440、4320、10080のいずれかで指定してください",
+        )),
+        _ => Ok(()),
     }
 }
 
 fn resolve_overwrites(
-    overwrites: BTreeMap<String, BTreeMap<PermissionName, OverwriteValue>>,
+    overwrites: BTreeMap<OverwriteTarget, BTreeMap<PermissionName, OverwriteValue>>,
     logical_id: &ChannelLogicalId,
     vocabulary: &PermissionVocabulary,
-) -> Result<BTreeMap<String, BTreeMap<KnownPermission, OverwriteValue>>, ManagementError> {
+) -> Result<BTreeMap<OverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>, ManagementError> {
     overwrites
         .into_iter()
         .map(|(subject, permissions)| {
-            if subject != "everyone" && !(subject.starts_with("role:") || subject.starts_with("member:")) {
-                return Err(ManagementError::InvalidDefinition(format!(
-                    "Channel {logical_id} の権限対象 {subject} は everyone、role:<論理 ID>、member:<論理 ID> のいずれかで指定してください"
-                )));
-            }
-            if let Some(role) = subject.strip_prefix("role:") {
-                crate::features::discord_management::ids::RoleLogicalId::parse(role).map_err(|error| {
-                    ManagementError::InvalidDefinition(format!("Channel {logical_id} の {subject} が不正です: {error}"))
-                })?;
-            }
-            if let Some(member) = subject.strip_prefix("member:") {
-                crate::features::discord_management::ids::MemberLogicalId::parse(member).map_err(|error| {
-                    ManagementError::InvalidDefinition(format!("Channel {logical_id} の {subject} が不正です: {error}"))
-                })?;
-            }
             let permissions = permissions
                 .into_iter()
                 .map(|(permission, value)| {
