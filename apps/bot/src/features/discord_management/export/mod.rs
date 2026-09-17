@@ -281,6 +281,16 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .expect("論理 ID は先行する対応付けで生成されています")
             .clone();
         let kind = channel.kind;
+        let is_permissions_sync = kind == ChannelKind::Text
+            && channel.parent_id.is_some_and(|parent_id| {
+                catalog
+                    .channels
+                    .iter()
+                    .find(|parent| parent.id == parent_id)
+                    .is_some_and(|parent| {
+                        parent.kind == ChannelKind::Category && parent.overwrites == channel.overwrites
+                    })
+            });
         let mut attributes = RawChannelAttributes {
             kind: Some(match kind {
                 ChannelKind::Category => RawChannelKind::Category,
@@ -321,7 +331,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
             attributes.default_thread_slowmode_seconds =
                 Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
         }
-        attributes.overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
+        if is_permissions_sync {
+            attributes.permissions_sync = Some(true);
+        } else {
+            attributes.overwrites = export_overwrites(&channel.overwrites, &role_ids, &member_ids)?;
+        }
         definitions.insert(
             logical_id,
             RawChannelDefinition {
@@ -367,8 +381,8 @@ pub(super) async fn export_channels<S: ChannelSource>(
 }
 
 fn serialize_definition(definition: &RawDefinitionFile) -> Result<String, ManagementError> {
-    let serialized = toml::to_string_pretty(definition)
-        .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
+    let serialized =
+        toml::to_string_pretty(definition).map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
     let mut document = serialized
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| ManagementError::SerializeDefinition(error.to_string()))?;
@@ -384,9 +398,9 @@ fn inline_marker_tables(item: &mut toml_edit::Item) {
             }
             table.fmt();
 
-            let marker = ["default", "clear"].into_iter().find(|key| {
-                table.len() == 1 && table.get(key).and_then(toml_edit::Item::as_bool) == Some(true)
-            });
+            let marker = ["default", "clear"]
+                .into_iter()
+                .find(|key| table.len() == 1 && table.get(key).and_then(toml_edit::Item::as_bool) == Some(true));
             if let Some(marker) = marker {
                 let mut inline = toml_edit::InlineTable::new();
                 inline.insert(marker, true.into());
