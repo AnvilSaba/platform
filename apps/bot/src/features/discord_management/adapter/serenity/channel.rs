@@ -5,7 +5,7 @@ use serenity::{
     Error as SerenityError,
     all::{
         AutoArchiveDuration, ChannelId as SerenityChannelId, ChannelType, GuildId as SerenityGuildId,
-        PermissionOverwrite, PermissionOverwriteType, Permissions, UserId,
+        PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId as SerenityRoleId, UserId,
     },
     http::{HttpError, StatusCode},
     model::channel::GuildChannel,
@@ -23,9 +23,6 @@ use crate::features::discord_management::{
 };
 
 use super::{resource::SerenityManagementAdapter, role::permission_vocabulary};
-
-#[cfg(test)]
-use serenity::all::RoleId as SerenityRoleId;
 
 impl From<SerenityChannelId> for ChannelId {
     fn from(id: SerenityChannelId) -> Self {
@@ -239,6 +236,39 @@ impl ChannelSource for SerenityManagementAdapter<'_> {
             .map(|channel| channel_snapshot(&channel, guild_id, &known_permissions, manageable))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ChannelCatalog { channels })
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        guild_id: &GuildId,
+        role_ids: &[RoleId],
+        member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        let serenity_guild_id = SerenityGuildId::from(*guild_id);
+        let roles = serenity_guild_id
+            .roles(self.http)
+            .await
+            .map_err(map_channel_catalog_error)?;
+        if let Some(role_id) = role_ids
+            .iter()
+            .find(|role_id| !roles.contains_key(&SerenityRoleId::from(**role_id)))
+        {
+            return Err(ManagementError::InvalidState(format!(
+                "Channel overwrite の Role {role_id} が対象 Guild に存在しません"
+            )));
+        }
+        for member_id in member_ids {
+            match serenity_guild_id.member(self.http, UserId::from(*member_id)).await {
+                Ok(_) => {}
+                Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::NOT_FOUND) => {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Channel overwrite の Member {member_id} が対象 Guild に所属していません"
+                    )));
+                }
+                Err(error) => return Err(ManagementError::ChannelSource(error.to_string())),
+            }
+        }
+        Ok(())
     }
 
     async fn can_manage_roles(&self, guild_id: &GuildId) -> Result<bool, ManagementError> {
