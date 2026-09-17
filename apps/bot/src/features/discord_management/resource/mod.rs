@@ -6,7 +6,21 @@
 pub(super) mod channel;
 pub(super) mod role;
 
-use std::{collections::BTreeSet, fmt};
+use std::{cmp::Ordering, collections::BTreeSet, fmt};
+
+/// 同じ position の要素を Snowflake ID で安定して並べる共通 comparator です。
+pub(super) fn compare_position_then_id<P, I>(
+    left_position: &P,
+    right_position: &P,
+    left_id: &I,
+    right_id: &I,
+) -> Ordering
+where
+    P: Ord,
+    I: Ord,
+{
+    left_position.cmp(right_position).then_with(|| left_id.cmp(right_id))
+}
 
 /// リソースの属性変更を同じ形式で表示します。
 pub(super) fn render_change_line(
@@ -32,11 +46,7 @@ pub(super) fn display_quoted_string(value: &str) -> String {
 ///
 /// 参照専用対象は `fixed` に含めます。固定対象の現在位置をまたぐ要求は循環した
 /// 制約になるため、通信前にエラーとして診断できます。
-pub(super) fn stable_relative_order<I>(
-    current: &[I],
-    requested: &[I],
-    fixed: &BTreeSet<I>,
-) -> Result<Vec<I>, ()>
+pub(super) fn stable_relative_order<I>(current: &[I], requested: &[I], fixed: &BTreeSet<I>) -> Result<Vec<I>, ()>
 where
     I: Copy + Ord,
 {
