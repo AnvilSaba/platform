@@ -366,11 +366,9 @@ async fn apply_order_changes<S: RolePositionUpdater>(
 
     let actual_order = ordered_role_ids(&session.catalog, RoleId::new(session.state.guild_id.get()));
     if actual_order != planned_order.expected_order {
-        session.pending.set_order(build_order_plan(
-            &session.definition,
-            &session.state,
-            &session.catalog,
-        )?);
+        session
+            .pending
+            .set_order(build_order_plan(&session.definition, &session.state, &session.catalog)?);
         return Ok(Some(
             position_error.map_or(RoleApplyStatus::ReplanRequired, RoleApplyStatus::Failed),
         ));
@@ -580,8 +578,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
         }
 
         if session.pending.has_order() {
-            if let Some(status) =
-                apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+            if let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
             {
                 return session.into_result(status);
             }

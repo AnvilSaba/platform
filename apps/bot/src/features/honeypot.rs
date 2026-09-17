@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use bot_macros::event_handler;
 use anyhow::Context as _;
+use bot_macros::event_handler;
 use chrono::Duration;
 use serenity::{
     all::prelude::{CacheHttp, Context},
