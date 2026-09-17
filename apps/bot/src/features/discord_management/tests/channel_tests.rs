@@ -23,6 +23,39 @@ struct PermissionAwareChannelSource {
     can_manage_roles: bool,
 }
 
+#[derive(Clone)]
+struct RejectingChannelReferenceSource {
+    catalog: ChannelCatalog,
+}
+
+impl ChannelSource for RejectingChannelReferenceSource {
+    async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
+        Ok(self.catalog.clone())
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Err(ManagementError::InvalidState(
+            "権限対象 Member の Guild 所属を確認できません".to_owned(),
+        ))
+    }
+}
+
+impl ChannelUpdater for RejectingChannelReferenceSource {
+    async fn update_channel(
+        &self,
+        _guild_id: &GuildId,
+        _channel_id: &ChannelId,
+        _update: ChannelUpdate,
+    ) -> Result<ChannelUpdateOutcome, ManagementError> {
+        unreachable!("Channel overwrite の実在検証を通過した場合だけ更新へ進みます")
+    }
+}
+
 impl ChannelSource for PermissionAwareChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
@@ -486,6 +519,63 @@ async fn channel_export_round_trip_is_idempotent() {
     let state: serde_json::Value = serde_json::from_str(&files.state_json).unwrap();
     assert_eq!(state["channels"]["channel_200"], "200");
     assert_eq!(state["channels"]["channel_300"], "300");
+}
+
+/// Category と同じ overwrite を持つ子 Channel は、export で同期指定として表現する。
+#[tokio::test]
+async fn channel_export_preserves_category_permission_sync() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let overwrites = BTreeMap::from([(
+        ChannelOverwriteTarget::Everyone,
+        ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel, OverwriteValue::Deny)])),
+    )]);
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![
+                ChannelSnapshot {
+                    id: "200".parse().unwrap(),
+                    kind: ChannelKind::Category,
+                    manageable: true,
+                    name: "非公開".to_owned(),
+                    parent_id: None,
+                    topic: None,
+                    nsfw: false,
+                    slowmode_seconds: 0,
+                    default_auto_archive_minutes: Some(1440),
+                    default_thread_slowmode_seconds: 0,
+                    overwrites: overwrites.clone(),
+                },
+                ChannelSnapshot {
+                    id: "300".parse().unwrap(),
+                    kind: ChannelKind::Text,
+                    manageable: true,
+                    name: "運営".to_owned(),
+                    parent_id: Some("200".parse().unwrap()),
+                    topic: None,
+                    nsfw: false,
+                    slowmode_seconds: 0,
+                    default_auto_archive_minutes: Some(1440),
+                    default_thread_slowmode_seconds: 0,
+                    overwrites,
+                },
+            ],
+        },
+    };
+
+    let files = export_channels(&source, guild_id(100), None).await.unwrap();
+    assert!(files.definition_toml.contains("permissions_sync = true"));
+    assert!(!files.definition_toml.contains("[channels.channel_300.overwrites"));
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &files.definition_toml,
+        &files.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty());
 }
 
 /// 初回 export でも Overwrite の Role/Member 対象へ決定的な論理 ID を割り当て、
@@ -1761,6 +1851,536 @@ async fn category_deletion_rejects_an_unsupported_child_from_catalog() {
     );
 }
 
+/// 明示した Category 同期は、子 Channel の権限を Category の完成形へ揃える計画を作る。
+#[tokio::test]
+async fn channel_plan_reports_category_permission_sync() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![
+                ChannelSnapshot {
+                    id: "200".parse().unwrap(),
+                    kind: ChannelKind::Category,
+                    manageable: true,
+                    name: "案内".to_owned(),
+                    parent_id: None,
+                    topic: None,
+                    nsfw: false,
+                    slowmode_seconds: 0,
+                    default_auto_archive_minutes: Some(1440),
+                    default_thread_slowmode_seconds: 0,
+                    overwrites: BTreeMap::from([(
+                        ChannelOverwriteTarget::Everyone,
+                        ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                            view_channel.clone(),
+                            OverwriteValue::Allow,
+                        )])),
+                    )]),
+                },
+                ChannelSnapshot {
+                    id: "300".parse().unwrap(),
+                    kind: ChannelKind::Text,
+                    manageable: true,
+                    name: "ルール".to_owned(),
+                    parent_id: Some("200".parse().unwrap()),
+                    topic: None,
+                    nsfw: false,
+                    slowmode_seconds: 0,
+                    default_auto_archive_minutes: Some(1440),
+                    default_thread_slowmode_seconds: 0,
+                    overwrites: BTreeMap::from([(
+                        ChannelOverwriteTarget::Everyone,
+                        ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel, OverwriteValue::Deny)])),
+                    )]),
+                },
+            ],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "案内"
+        [channels.information.overwrites.everyone]
+        VIEW_CHANNEL = "allow"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        parent = "information"
+        permissions_sync = true
+    "#;
+    let state = channel_state(r#"{"information":"200","rules":"300"}"#);
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .expect("Category 同期の定義を plan できます");
+
+    assert!(
+        plan.get(&ChannelLogicalId::parse("rules").unwrap())
+            .is_some_and(ChannelChange::is_update)
+    );
+}
+
+/// Category 同期の apply は、個別権限の差分ではなく Category の全量 overwrite を送る。
+#[tokio::test]
+async fn channel_apply_copies_category_permission_overwrites() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let category_overwrites = BTreeMap::from([(
+        ChannelOverwriteTarget::Everyone,
+        ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel.clone(), OverwriteValue::Allow)])),
+    )]);
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![
+            ChannelSnapshot {
+                id: "200".parse().unwrap(),
+                kind: ChannelKind::Category,
+                manageable: true,
+                name: "案内".to_owned(),
+                parent_id: None,
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: category_overwrites.clone(),
+            },
+            ChannelSnapshot {
+                id: "300".parse().unwrap(),
+                kind: ChannelKind::Text,
+                manageable: true,
+                name: "ルール".to_owned(),
+                parent_id: Some("200".parse().unwrap()),
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::new(),
+            },
+        ],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "案内"
+        [channels.information.overwrites.everyone]
+        VIEW_CHANNEL = "allow"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        parent = "information"
+        permissions_sync = true
+    "#;
+    let state = channel_state(r#"{"information":"200","rules":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.updates.lock().unwrap();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].overwrites, Some(category_overwrites));
+}
+
+/// Category 同期と子 Channel 固有の Overwrite を同時に指定した定義は、競合として拒否する。
+#[tokio::test]
+async fn channel_plan_rejects_category_permission_sync_conflicts() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_snapshot("200", ChannelKind::Category, "案内", None)],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "案内"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        parent = "information"
+        permissions_sync = true
+        [channels.rules.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"information":"200"}"#),
+    )
+    .await
+    .expect_err("Category 同期と個別 Overwrite の併用は競合です");
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("permissions_sync") && message.contains("Overwrite"))
+    );
+}
+
+/// Channel overwrite の Role/Member 対応は、定義と state だけでなく実 Guild の所属も plan 前に検証する。
+#[tokio::test]
+async fn channel_plan_validates_permission_reference_members_before_building() {
+    let source = RejectingChannelReferenceSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [members.alice]
+        mode = "reference"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        [channels.rules.overwrites."member:alice"]
+        VIEW_CHANNEL = "deny"
+    "#;
+    let state = r#"
+        {
+            "schema_version": 1,
+            "guild_id": "100",
+            "members": {"alice": "500"},
+            "channels": {"rules": "300"}
+        }
+    "#;
+
+    let error = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .expect_err("Member overwrite の実在検証に失敗した plan は作成しません");
+
+    assert!(matches!(
+        error,
+        ManagementError::InvalidState(message) if message.contains("Member") && message.contains("所属")
+    ));
+}
+
+/// 確認済み plan の apply でも、実行直前に Channel overwrite の参照を再検証する。
+#[tokio::test]
+async fn channel_apply_revalidates_permission_reference_members_before_updating() {
+    let catalog = ChannelCatalog {
+        channels: vec![channel_snapshot("300", ChannelKind::Text, "ルール", None)],
+    };
+    let definition = r#"
+        schema_version = 1
+        [members.alice]
+        mode = "reference"
+        [channels.rules]
+        type = "text"
+        name = "ルール"
+        [channels.rules.overwrites."member:alice"]
+        VIEW_CHANNEL = "deny"
+    "#;
+    let state = r#"
+        {
+            "schema_version": 1,
+            "guild_id": "100",
+            "members": {"alice": "500"},
+            "channels": {"rules": "300"}
+        }
+    "#;
+    let plan = plan_channels(
+        &ChannelCatalogSource {
+            catalog: catalog.clone(),
+        },
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        state,
+    )
+    .await
+    .unwrap();
+    let source = RejectingChannelReferenceSource { catalog };
+    let lock = GuildApplyLock::default();
+    let result = ChannelApplyWorkflow::new(&lock, &source, &test_permission_vocabulary())
+        .apply_channel_updates(
+            guild_id(100),
+            definition,
+            state,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result.status,
+        ChannelApplyStatus::Failed(message) if message.contains("Member") && message.contains("所属")
+    ));
+}
+
+/// 新規 Category とその子を同時に作る場合も、子の作成 payload は Category の overwrite を引き継ぐ。
+#[tokio::test]
+async fn channel_apply_syncs_new_child_with_new_category() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let source = lifecycle_channel_source(ChannelCatalog { channels: Vec::new() });
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "非公開"
+        [channels.information.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+        [channels.rules]
+        type = "text"
+        name = "運営"
+        parent = "information"
+        permissions_sync = true
+    "#;
+    let state = channel_state("{}");
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .expect("新規 Category と同期する子の plan を作れます");
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let creates = source.creates.lock().unwrap();
+    assert_eq!(creates.len(), 2);
+    assert_eq!(creates[1].overwrites.len(), 1);
+    assert_eq!(
+        creates[1]
+            .overwrites
+            .get(&ChannelOverwriteTarget::Everyone)
+            .and_then(|permissions| permissions.known.get(&view_channel)),
+        Some(&OverwriteValue::Deny)
+    );
+}
+
+/// Category の権限変更と同期子の更新は、同じ plan 内で Category を先に適用する。
+#[tokio::test]
+async fn channel_apply_updates_category_before_syncing_child() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![
+            ChannelSnapshot {
+                id: "200".parse().unwrap(),
+                kind: ChannelKind::Category,
+                manageable: true,
+                name: "非公開".to_owned(),
+                parent_id: None,
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::from([(
+                    ChannelOverwriteTarget::Everyone,
+                    ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                        view_channel.clone(),
+                        OverwriteValue::Allow,
+                    )])),
+                )]),
+            },
+            ChannelSnapshot {
+                id: "300".parse().unwrap(),
+                kind: ChannelKind::Text,
+                manageable: true,
+                name: "運営".to_owned(),
+                parent_id: Some("200".parse().unwrap()),
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::from([(
+                    ChannelOverwriteTarget::Everyone,
+                    ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                        view_channel.clone(),
+                        OverwriteValue::Allow,
+                    )])),
+                )]),
+            },
+        ],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.information]
+        type = "category"
+        name = "非公開"
+        [channels.information.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+        [channels.rules]
+        type = "text"
+        name = "運営"
+        parent = "information"
+        permissions_sync = true
+    "#;
+    let state = channel_state(r#"{"information":"200","rules":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .unwrap();
+    assert!(
+        plan.get(&ChannelLogicalId::parse("information").unwrap())
+            .is_some_and(ChannelChange::is_update)
+    );
+    assert!(
+        plan.get(&ChannelLogicalId::parse("rules").unwrap())
+            .is_some_and(ChannelChange::is_update)
+    );
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.updates.lock().unwrap();
+    assert_eq!(updates.len(), 2);
+    let category_permissions = updates[0]
+        .overwrites
+        .as_ref()
+        .and_then(|overwrites| overwrites.get(&ChannelOverwriteTarget::Everyone))
+        .and_then(|permissions| permissions.known.get(&view_channel));
+    let child_permissions = updates[1]
+        .overwrites
+        .as_ref()
+        .and_then(|overwrites| overwrites.get(&ChannelOverwriteTarget::Everyone))
+        .and_then(|permissions| permissions.known.get(&view_channel));
+    assert_eq!(category_permissions, Some(&OverwriteValue::Deny));
+    assert_eq!(child_permissions, Some(&OverwriteValue::Deny));
+}
+
+/// 論理 ID の辞書順に依存せず、Category の更新を同期対象の子より先に適用する。
+#[tokio::test]
+async fn channel_apply_orders_category_updates_before_child_updates() {
+    let view_channel = known_permission("VIEW_CHANNEL");
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![
+            ChannelSnapshot {
+                id: "200".parse().unwrap(),
+                kind: ChannelKind::Category,
+                manageable: true,
+                name: "旧カテゴリ".to_owned(),
+                parent_id: None,
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::from([(
+                    ChannelOverwriteTarget::Everyone,
+                    ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                        view_channel.clone(),
+                        OverwriteValue::Allow,
+                    )])),
+                )]),
+            },
+            ChannelSnapshot {
+                id: "300".parse().unwrap(),
+                kind: ChannelKind::Text,
+                manageable: true,
+                name: "子".to_owned(),
+                parent_id: Some("200".parse().unwrap()),
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::from([(
+                    ChannelOverwriteTarget::Everyone,
+                    ChannelOverwritePermissions::from_known(BTreeMap::from([(
+                        view_channel.clone(),
+                        OverwriteValue::Allow,
+                    )])),
+                )]),
+            },
+        ],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.a_child]
+        type = "text"
+        name = "子"
+        parent = "z_category"
+        permissions_sync = true
+        [channels.z_category]
+        type = "category"
+        name = "新カテゴリ"
+        [channels.z_category.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+    "#;
+    let state = channel_state(r#"{"z_category":"200","a_child":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.updates.lock().unwrap();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0].name.as_deref(), Some("新カテゴリ"));
+    assert!(updates[1].name.is_none());
+}
+
 /// Discord の name/topic/slowmode 型制約を definition parse 時点で診断する。
 #[test]
 fn channel_definition_rejects_discord_field_limits() {
@@ -1822,6 +2442,35 @@ async fn channel_plan_rejects_overwrite_updates_without_manage_roles() {
         "guild_id": "100",
         "roles": {"moderator": "400"},
         "channels": {"rules": "300"}
+    }"#;
+
+    let error = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ManagementError::ChannelPermissionDenied(message) if message.contains("MANAGE_ROLES")));
+}
+
+/// permission overwrite を持つ新規 Channel も MANAGE_ROLES がない状態で plan を拒否する。
+#[tokio::test]
+async fn channel_plan_rejects_overwrite_creates_without_manage_roles() {
+    let source = PermissionAwareChannelSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+        can_manage_roles: false,
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        mode = "reference"
+        [channels.rules]
+        type = "text"
+        name = "rules"
+        [channels.rules.overwrites."role:moderator"]
+        VIEW_CHANNEL = "allow"
+    "#;
+    let state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "400"}
     }"#;
 
     let error = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)

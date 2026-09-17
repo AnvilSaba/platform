@@ -339,6 +339,19 @@ pub(super) enum ChannelUpdateOutcome {
 pub(super) trait ChannelSource {
     async fn channel_catalog(&self, guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError>;
 
+    /// 権限上書きで参照する Role/Member が対象 Guild に存在するかを確認します。
+    ///
+    /// Fake source や、既に bind 済みの state だけを扱う実装は既定の no-op を
+    /// 利用できます。Discord adapter は実際の Role/Member endpoint で検証します。
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
     /// Channel の permission overwrite を更新できるかを事前に確認します。
     ///
     /// 既存の Port 実装は Channel catalog だけを提供しても動作できるよう、

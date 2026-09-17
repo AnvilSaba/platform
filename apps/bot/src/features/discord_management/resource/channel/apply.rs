@@ -6,6 +6,7 @@ use crate::features::discord_management::{
     configuration::{ChannelKind, PermissionVocabulary, PlanInput, StateFile, serialize_state},
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, GuildId},
+    plan::channel_permission_target_ids,
     port::{
         ChannelCatalog, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget, ChannelSnapshot,
         ChannelSource, ChannelUpdate, ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater,
@@ -121,13 +122,10 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
                 "属性更新専用の apply_channel_updates には Channel の lifecycle 変更を含められません".to_owned(),
             ));
         }
-        let updates = session
-            .pending
-            .iter()
+        let updates = ordered_changes(&session.pending, &session.definition)
+            .into_iter()
             .filter_map(|(logical_id, change)| match change {
-                Change::Update { discord_id, attributes } => {
-                    Some((logical_id.clone(), *discord_id, attributes.clone()))
-                }
+                Change::Update { discord_id, attributes } => Some((logical_id, discord_id, attributes)),
                 Change::Create | Change::Release { .. } | Change::Delete { .. } => None,
             })
             .collect::<Vec<_>>();
@@ -173,6 +171,32 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
                 pending: confirmed_plan.clone(),
                 state_json: serialize_state(&state)?,
             }));
+        }
+        let (role_ids, member_ids) = channel_permission_target_ids(&definition, &state);
+        match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            self.source
+                .validate_channel_permission_targets(&guild_id, &role_ids, &member_ids),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                    status: ChannelApplyStatus::Failed(error.to_string()),
+                    applied: Plan::default(),
+                    pending: confirmed_plan.clone(),
+                    state_json: serialize_state(&state)?,
+                }));
+            }
+            Err(_) => {
+                return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                    status: ChannelApplyStatus::DeadlineExceeded,
+                    applied: Plan::default(),
+                    pending: confirmed_plan.clone(),
+                    state_json: serialize_state(&state)?,
+                }));
+            }
         }
         let catalog = match tokio::time::timeout(
             processing_deadline.saturating_duration_since(Instant::now()),
@@ -528,14 +552,17 @@ fn ordered_changes(
         match change {
             Change::Create => match kind {
                 Some(ChannelKind::Category) => 0,
-                _ => 1,
-            },
-            Change::Delete { .. } => match kind {
-                Some(ChannelKind::Category) => 3,
                 _ => 2,
             },
-            Change::Update { .. } => 1,
-            Change::Release { .. } => 4,
+            Change::Update { .. } => match kind {
+                Some(ChannelKind::Category) => 1,
+                _ => 3,
+            },
+            Change::Delete { .. } => match kind {
+                Some(ChannelKind::Category) => 5,
+                _ => 4,
+            },
+            Change::Release { .. } => 6,
         }
     });
     changes
