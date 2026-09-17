@@ -57,6 +57,7 @@ impl RoleSource for StatefulFakeRoleSource {
 fn role(id: &str, name: &str) -> RoleSnapshot {
     RoleSnapshot {
         id: id.parse().unwrap(),
+        position: 0,
         manageable: true,
         name: name.to_owned(),
         color: Color::default(),
@@ -944,6 +945,30 @@ async fn re_export_preserves_logical_ids_from_input_state() {
     );
     assert_eq!(state.roles[&logical_id("moderator")].get(), 200);
     assert!(!definition.roles.contains_key(&logical_id("role_200")));
+}
+
+/// 再exportで引き継いだ管理不能 Role は、属性を固定せず参照専用として出力する。
+#[tokio::test]
+async fn re_export_keeps_unmanageable_role_reference_only() {
+    let mut external_role = role("200", "外部側の名称");
+    external_role.manageable = false;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![external_role],
+    };
+    let previous_state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": { "external": "200" }
+    }"#;
+
+    let files = export_roles(&source, guild_id(100), Some(previous_state)).await.unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
+    let role_definition = &definition.roles[&logical_id("external")];
+
+    assert!(role_definition.is_reference());
+    assert!(role_definition.attributes().name.is_none());
+    assert!(role_definition.attributes().color.is_none());
 }
 
 /// 同じGuild状態から生成したdefinitionとstateをそのままplanすると差分が生じないことを保証する。
@@ -2291,6 +2316,212 @@ fn order_definition_is_typed_and_validated() {
         invalid_role_id,
         ManagementError::InvalidDefinition(message) if message.contains("論理 ID")
     ));
+}
+
+/// Role export が UI 上から下の相対順序を定義へ出力し、そのまま plan へ再投入しても
+/// 無差分になることを保証する。
+#[tokio::test]
+async fn role_export_order_round_trips_into_an_empty_plan() {
+    let mut top = role("300", "上位");
+    top.position = 3;
+    let mut bottom = role("200", "下位");
+    bottom.position = 2;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![bottom, everyone, top],
+    };
+    let previous_state = state("100", r#"{"top":"300","bottom":"200"}"#);
+
+    let exported = export_roles(&source, guild_id(100), Some(&previous_state))
+        .await
+        .unwrap();
+
+    let exported_definition = parse_definition(&exported.definition_toml).unwrap();
+    assert_eq!(
+        exported_definition.order.as_ref().unwrap().roles,
+        vec![logical_id("top"), logical_id("bottom"), everyone_logical_id()]
+    );
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        &exported.definition_toml,
+        &exported.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty(), "export 結果を再投入した plan は無差分であるべきです");
+}
+
+/// Role の相対順序だけを変更する plan は、UI 順序を保持した位置更新として公開される。
+#[tokio::test]
+async fn role_plan_reports_relative_order_changes() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![first, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("Role の相対順序変更が plan に含まれます");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("300"), role_id("200"), role_id("100")]
+    );
+    assert_eq!(
+        order
+            .updates()
+            .iter()
+            .map(|update| update.role_id)
+            .collect::<Vec<_>>(),
+        vec![role_id("200"), role_id("300")]
+    );
+    assert!(!order.updates().iter().any(|update| update.role_id == role_id("100")));
+}
+
+/// 参照専用 Role を現在位置の固定 anchor として使い、その Role 自身は位置更新対象にしない。
+#[tokio::test]
+async fn role_plan_uses_reference_role_as_a_fixed_anchor() {
+    let mut anchor = role("250", "基準");
+    anchor.position = 3;
+    let mut first = role("200", "最初");
+    first.position = 2;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![anchor, first, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["anchor", "second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"anchor":"250","first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("anchor を基準にした順序変更が plan に含まれます");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("250"), role_id("300"), role_id("200"), role_id("100")]
+    );
+    assert!(!order.updates().iter().any(|update| update.role_id == role_id("250")));
+}
+
+/// 参照専用 Role の現在位置をまたぐ順序は、位置 API を呼ぶ前に診断する。
+#[tokio::test]
+async fn role_plan_rejects_an_order_crossing_a_reference_anchor() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut anchor = role("250", "基準");
+    anchor.position = 2;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![first, anchor, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "anchor", "first"]
+    "#;
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"anchor":"250","first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ManagementError::InvalidDefinition(message) if message.contains("参照専用") && message.contains("両立")
+    ));
+}
+
+/// 同一 position の Role でも Serenity／Discord の ID tie-break を含む実順序を基準に
+/// 変更計画を作る。
+#[tokio::test]
+async fn role_plan_handles_roles_with_the_same_position() {
+    let mut first = role("200", "最初");
+    first.position = 2;
+    let mut second = role("300", "次");
+    second.position = 2;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![second, first, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("同一 position の逆順が差分になります");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("300"), role_id("200"), role_id("100")]
+    );
 }
 
 #[cfg(test)]

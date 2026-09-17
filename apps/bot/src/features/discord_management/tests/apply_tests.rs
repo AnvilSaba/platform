@@ -35,6 +35,8 @@ impl RoleUpdater for ApplyingFakeRoleSource {
 struct LifecycleFakeRoleSource {
     catalog: Arc<Mutex<RoleCatalog>>,
     catalog_calls: Arc<AtomicUsize>,
+    position_updates: Arc<Mutex<Vec<Vec<RolePositionUpdate>>>>,
+    position_outcome: RolePositionUpdateOutcome,
     creates: Arc<Mutex<Vec<RoleCreate>>>,
     deletes: Arc<Mutex<Vec<RoleId>>>,
     create_outcome: RoleCreateOutcome,
@@ -75,6 +77,26 @@ impl RoleUpdater for LifecycleFakeRoleSource {
     }
 }
 
+impl RolePositionUpdater for LifecycleFakeRoleSource {
+    async fn update_role_positions(
+        &self,
+        _guild_id: &GuildId,
+        updates: Vec<RolePositionUpdate>,
+    ) -> Result<RolePositionUpdateOutcome, ManagementError> {
+        self.position_updates.lock().unwrap().push(updates.clone());
+        let mut catalog = self.catalog.lock().unwrap();
+        for update in updates {
+            let role = catalog
+                .roles
+                .iter_mut()
+                .find(|role| role.id == update.role_id)
+                .expect("位置更新対象 Role がカタログに存在します");
+            role.position = update.position;
+        }
+        Ok(self.position_outcome)
+    }
+}
+
 impl RoleLifecycleTarget for LifecycleFakeRoleSource {
     async fn create_role(&self, _guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let call = {
@@ -89,6 +111,7 @@ impl RoleLifecycleTarget for LifecycleFakeRoleSource {
             let mut catalog = self.catalog.lock().unwrap();
             catalog.roles.push(RoleSnapshot {
                 id: role_id,
+                position: 0,
                 manageable: true,
                 name: create.name,
                 color: create.color,
@@ -121,6 +144,8 @@ fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
     LifecycleFakeRoleSource {
         catalog: Arc::new(Mutex::new(catalog)),
         catalog_calls: Arc::new(AtomicUsize::new(0)),
+        position_updates: Arc::new(Mutex::new(Vec::new())),
+        position_outcome: RolePositionUpdateOutcome::Applied,
         creates: Arc::new(Mutex::new(Vec::new())),
         deletes: Arc::new(Mutex::new(Vec::new())),
         create_outcome: RoleCreateOutcome::Created(role_id("300")),
@@ -173,6 +198,143 @@ async fn apply_creates_managed_role_and_returns_new_mapping() {
         Some(&true),
         "未指定権限は @everyone の既定値を継承します",
     );
+}
+
+/// lifecycle／属性更新後に Role の専用位置 API を一括実行し、応答後の実順序を確認する。
+#[tokio::test]
+async fn apply_updates_role_positions_after_other_changes() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![first, second, everyone],
+        permission_names: known_permissions(["VIEW_CHANNEL"]),
+        grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+        default_permissions: known_permission_values([("VIEW_CHANNEL", true)]),
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let state_json = state("100", r#"{"first":"200","second":"300"}"#);
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert_eq!(source.position_updates.lock().unwrap().len(), 1);
+    let catalog = source.catalog.lock().unwrap();
+    let second_position = catalog.roles.iter().find(|role| role.id == role_id("300")).unwrap().position;
+    let first_position = catalog.roles.iter().find(|role| role.id == role_id("200")).unwrap().position;
+    assert!(second_position > first_position);
+}
+
+/// Role 位置 API の応答が不明でも、再取得した実順序が希望値なら成功として確定する。
+#[tokio::test]
+async fn unknown_role_position_response_is_confirmed_by_refetch() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![first, second, everyone],
+        permission_names: known_permissions(["VIEW_CHANNEL"]),
+        grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+        default_permissions: known_permission_values([("VIEW_CHANNEL", true)]),
+    });
+    source.position_outcome = RolePositionUpdateOutcome::ResponseUnknown;
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let state_json = state("100", r#"{"first":"200","second":"300"}"#);
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+}
+
+/// 作成時点では ID が未確定な Role の順序を、lifecycle 完了後の最新 catalog から
+/// 再計画して位置 API へ渡す。
+#[tokio::test]
+async fn apply_resolves_deferred_role_order_after_creation() {
+    let mut existing = role("200", "既存");
+    existing.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![existing, everyone],
+        permission_names: known_permissions(["VIEW_CHANNEL"]),
+        grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+        default_permissions: known_permission_values([("VIEW_CHANNEL", true)]),
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.new_role]
+        name = "新規"
+        [roles.existing]
+        name = "既存"
+        [order]
+        roles = ["new_role", "existing"]
+    "#;
+    let state_json = state("100", r#"{"existing":"200"}"#);
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+    assert!(plan.order().unwrap().updates().is_empty(), "作成前は具体的な位置を解決できません");
+
+    let result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert_eq!(source.position_updates.lock().unwrap().len(), 1);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["new_role"], "300");
 }
 
 /// Role の name は引用符と改行を含んでも plan 上で安全に表示する。

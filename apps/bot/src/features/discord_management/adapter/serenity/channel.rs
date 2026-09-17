@@ -17,8 +17,9 @@ use crate::features::discord_management::{
     ids::{ChannelId, GuildId, MemberId, RoleId},
     port::{
         ChannelCatalog, ChannelCreate, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
-        ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSnapshot, ChannelSource, ChannelUpdate,
-        ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater, PermissionBits,
+        ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelPositionUpdate, ChannelPositionUpdateOutcome,
+        ChannelPositionUpdater, ChannelSnapshot, ChannelSource, ChannelUpdate, ChannelUpdateOutcome,
+        ChannelUpdateValue, ChannelUpdater, PermissionBits,
     },
 };
 
@@ -277,6 +278,33 @@ impl ChannelSource for SerenityManagementAdapter<'_> {
     }
 }
 
+impl ChannelPositionUpdater for SerenityManagementAdapter<'_> {
+    async fn update_channel_positions(
+        &self,
+        guild_id: &GuildId,
+        updates: Vec<ChannelPositionUpdate>,
+    ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
+        match SerenityGuildId::from(*guild_id)
+            .reorder_channels(
+                self.http,
+                updates
+                    .into_iter()
+                    .map(|update| (SerenityChannelId::from(update.channel_id), update.position)),
+            )
+            .await
+        {
+            Ok(()) => Ok(ChannelPositionUpdateOutcome::Applied),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(ChannelPositionUpdateOutcome::ResponseUnknown)
+            }
+            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+                Err(ManagementError::ChannelPermissionDenied(error.to_string()))
+            }
+            Err(error) => Err(ManagementError::ChannelSource(error.to_string())),
+        }
+    }
+}
+
 async fn bot_permissions(
     source: &SerenityManagementAdapter<'_>,
     guild_id: &GuildId,
@@ -328,6 +356,7 @@ fn channel_snapshot(
         .collect::<Result<BTreeMap<_, _>, _>>();
     overwrites.map(|overwrites| ChannelSnapshot {
         id: ChannelId::from(channel.id),
+        position: channel.position,
         kind,
         manageable,
         name: channel.base.name.to_string(),
