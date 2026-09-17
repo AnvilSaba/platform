@@ -102,6 +102,34 @@ fn test_permission_vocabulary() -> PermissionVocabulary {
         .expect("テスト用の権限語彙は字句的に妥当です")
 }
 
+/// 未作成 managed Role も含め、固定 anchor をまたぐ不可能な順序を作成前に診断する。
+#[tokio::test]
+async fn role_order_rejects_uncreated_role_crossing_fixed_anchor_before_create() {
+    let mut anchor = role("200", "固定 anchor");
+    anchor.position = 2;
+    anchor.manageable = false;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![anchor, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.new_role]
+        name = "新規"
+        [order]
+        roles = ["new_role", "anchor"]
+    "#;
+
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", r#"{"anchor":"200"}"#))
+        .await
+        .expect_err("未作成 Role が固定 anchor を越える順序は作成前に拒否します");
+    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("固定位置")));
+}
+
 fn known_permission(name: &str) -> KnownPermission {
     let vocabulary = test_permission_vocabulary();
     let name = PermissionName::parse(name).expect("テスト用の権限名は字句的に妥当です");
@@ -962,7 +990,9 @@ async fn re_export_keeps_unmanageable_role_reference_only() {
         "roles": { "external": "200" }
     }"#;
 
-    let files = export_roles(&source, guild_id(100), Some(previous_state)).await.unwrap();
+    let files = export_roles(&source, guild_id(100), Some(previous_state))
+        .await
+        .unwrap();
     let definition = parse_definition(&files.definition_toml).unwrap();
     let role_definition = &definition.roles[&logical_id("external")];
 
@@ -1883,41 +1913,42 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
 /// raw 属性の単項目制約は resolve の手書き判定へ渡す前に validator で診断する。
 #[test]
 fn definition_validates_raw_attribute_values_with_validator() {
-    let empty_role_name = parse_definition(
-        "schema_version = 1\n[roles.moderator]\nname = \"\"\n",
-    )
-    .unwrap_err();
-    assert!(matches!(empty_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("1文字")));
+    let empty_role_name = parse_definition("schema_version = 1\n[roles.moderator]\nname = \"\"\n").unwrap_err();
+    assert!(
+        matches!(empty_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("1文字"))
+    );
 
     let long_role_name = "a".repeat(101);
     let long_role_name = parse_definition(&format!(
         "schema_version = 1\n[roles.moderator]\nname = \"{long_role_name}\"\n",
     ))
     .unwrap_err();
-    assert!(matches!(long_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100")));
+    assert!(
+        matches!(long_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100"))
+    );
 
-    let invalid_auto_archive = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\ndefault_auto_archive_minutes = 61\n",
-    )
-    .unwrap_err();
-    assert!(matches!(invalid_auto_archive, ManagementError::InvalidDefinition(message) if message.contains("default_auto_archive_minutes") && message.contains("60")));
+    let invalid_auto_archive =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\ndefault_auto_archive_minutes = 61\n")
+            .unwrap_err();
+    assert!(
+        matches!(invalid_auto_archive, ManagementError::InvalidDefinition(message) if message.contains("default_auto_archive_minutes") && message.contains("60"))
+    );
 
-    let clear_nsfw = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nnsfw = { clear = true }\n",
-    )
-    .unwrap_err();
-    assert!(matches!(clear_nsfw, ManagementError::InvalidDefinition(message) if message.contains("nsfw") && message.contains("解除")));
+    let clear_nsfw =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\nnsfw = { clear = true }\n")
+            .unwrap_err();
+    assert!(
+        matches!(clear_nsfw, ManagementError::InvalidDefinition(message) if message.contains("nsfw") && message.contains("解除"))
+    );
 
-    let default_parent = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nparent = { default = true }\n",
-    )
-    .unwrap_err();
-    assert!(matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default")));
+    let default_parent =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\nparent = { default = true }\n")
+            .unwrap_err();
+    assert!(
+        matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default"))
+    );
 
-    let invalid_kind = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"voice\"\n",
-    )
-    .unwrap_err();
+    let invalid_kind = parse_definition("schema_version = 1\n[channels.rules]\ntype = \"voice\"\n").unwrap_err();
     assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("voice")));
 }
 
@@ -2343,14 +2374,9 @@ async fn role_export_order_round_trips_into_an_empty_plan() {
         exported_definition.order.as_ref().unwrap().roles,
         vec![logical_id("top"), logical_id("bottom"), everyone_logical_id()]
     );
-    let plan = plan_roles(
-        &source,
-        guild_id(100),
-        &exported.definition_toml,
-        &exported.state_json,
-    )
-    .await
-    .unwrap();
+    let plan = plan_roles(&source, guild_id(100), &exported.definition_toml, &exported.state_json)
+        .await
+        .unwrap();
     assert!(plan.is_empty(), "export 結果を再投入した plan は無差分であるべきです");
 }
 
@@ -2391,11 +2417,7 @@ async fn role_plan_reports_relative_order_changes() {
         &[role_id("300"), role_id("200"), role_id("100")]
     );
     assert_eq!(
-        order
-            .updates()
-            .iter()
-            .map(|update| update.role_id)
-            .collect::<Vec<_>>(),
+        order.updates().iter().map(|update| update.role_id).collect::<Vec<_>>(),
         vec![role_id("200"), role_id("300")]
     );
     assert!(!order.updates().iter().any(|update| update.role_id == role_id("100")));

@@ -14,6 +14,7 @@ use super::{
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
     port::{ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSource, RoleSource},
+    resource::compare_position_then_id,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,9 +57,7 @@ pub(super) async fn export_roles<S: RoleSource>(
         .roles
         .into_iter()
         .filter(|role| {
-            role.id.get() == guild_id.get()
-                || role.manageable
-                || previous_mappings.values().any(|id| *id == role.id)
+            role.id.get() == guild_id.get() || role.manageable || previous_mappings.values().any(|id| *id == role.id)
         })
         .collect::<Vec<_>>();
     // Discord の Role は position 降順、同値なら Snowflake 昇順が UI 上から下の順です。
@@ -69,10 +68,7 @@ pub(super) async fn export_roles<S: RoleSource>(
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
-            (false, false) => right
-                .position
-                .cmp(&left.position)
-                .then_with(|| left.id.cmp(&right.id)),
+            (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
         }
     });
     let mut definitions = BTreeMap::new();
@@ -263,11 +259,8 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .iter()
         .filter(|channel| channel.kind == ChannelKind::Category)
         .collect::<Vec<_>>();
-    ordered_categories.sort_by(|left, right| {
-        left.position
-            .cmp(&right.position)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    ordered_categories
+        .sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
     let order_categories = ordered_categories
         .iter()
         .map(|channel| logical_ids[&channel.id].clone())
@@ -278,11 +271,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .iter()
             .filter(|channel| channel.parent_id == Some(category.id))
             .collect::<Vec<_>>();
-        children.sort_by(|left, right| {
-            left.position
-                .cmp(&right.position)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        children.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
         if !children.is_empty() {
             order_children.insert(
                 logical_ids[&category.id].clone(),

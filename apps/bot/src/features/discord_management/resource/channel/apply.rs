@@ -359,35 +359,34 @@ async fn apply_order_changes<S: ChannelPositionUpdater>(
         session.applied.set_order(session.pending.take_order());
         return Ok(None);
     };
-    let mut saw_unknown = false;
+    let updates = planned_order
+        .groups
+        .iter()
+        .flat_map(|group| group.updates.iter().copied())
+        .collect::<Vec<_>>();
     let mut position_error = None;
-    for group in &planned_order.groups {
-        if group.updates.is_empty() {
-            continue;
-        }
+    if !updates.is_empty() {
         if Instant::now() >= processing_deadline {
             return Ok(Some(ChannelApplyStatus::DeadlineExceeded));
         }
         let outcome = match tokio::time::timeout(
             processing_deadline.saturating_duration_since(Instant::now()),
-            source.update_channel_positions(guild_id, group.updates.clone()),
+            source.update_channel_positions(guild_id, updates),
         )
         .await
         {
-            Ok(Ok(outcome)) => outcome,
+            Ok(Ok(outcome)) => Some(outcome),
             Ok(Err(error)) => {
                 // Channel の sibling 更新は一回の要求でも部分適用され得るため、
                 // 既知エラーでも最新 catalog を取得してから pending を再計画します。
                 position_error = Some(error.to_string());
-                break;
+                None
             }
-            Err(_) => ChannelPositionUpdateOutcome::ResponseUnknown,
+            Err(_) => Some(ChannelPositionUpdateOutcome::ResponseUnknown),
         };
-        if outcome == ChannelPositionUpdateOutcome::ResponseUnknown {
-            saw_unknown = true;
-            // 応答不明の sibling 更新後に別 group を進めると、実際の反映状態を
-            // 失ったまま追加変更するため、ここで停止して再計画します。
-            break;
+        if outcome == Some(ChannelPositionUpdateOutcome::ResponseUnknown) {
+            // 全 sibling group を一つの要求で送ったため、応答不明時は再取得した
+            // 全 group の実順序だけで反映成否を確定します。
         }
     }
 
@@ -415,7 +414,6 @@ async fn apply_order_changes<S: ChannelPositionUpdater>(
     if let Some(error) = position_error {
         return Ok(Some(ChannelApplyStatus::Failed(error)));
     }
-    let _ = saw_unknown;
     session.applied.set_order(session.pending.take_order());
     Ok(None)
 }
@@ -596,8 +594,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
         }
 
         if session.pending.has_order() {
-            if let Some(status) =
-                apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+            if let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
             {
                 return session.into_result(status);
             }

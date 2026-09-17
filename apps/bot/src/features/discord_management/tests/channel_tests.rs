@@ -400,18 +400,23 @@ async fn channel_plan_reports_category_and_child_order_changes() {
         &test_permission_vocabulary(),
         guild_id(100),
         definition,
-        &channel_state(
-            r#"{"category_a":"200","category_b":"300","child_first":"500","child_second":"600"}"#,
-        ),
+        &channel_state(r#"{"category_a":"200","category_b":"300","child_first":"500","child_second":"600"}"#),
     )
     .await
     .unwrap();
 
-    let order = plan.order().expect("Category と子 Channel の順序変更が plan に含まれます");
+    let order = plan
+        .order()
+        .expect("Category と子 Channel の順序変更が plan に含まれます");
     assert_eq!(order.groups().len(), 2);
     assert_eq!(
         order.groups()[0].expected_order(),
-        &[ChannelId::new(400), ChannelId::new(200), ChannelId::new(300), ChannelId::new(401)]
+        &[
+            ChannelId::new(400),
+            ChannelId::new(200),
+            ChannelId::new(300),
+            ChannelId::new(401)
+        ]
     );
     assert_eq!(
         order.groups()[0]
@@ -419,7 +424,12 @@ async fn channel_plan_reports_category_and_child_order_changes() {
             .iter()
             .map(|update| update.channel_id)
             .collect::<Vec<_>>(),
-        vec![ChannelId::new(400), ChannelId::new(200), ChannelId::new(300), ChannelId::new(401)]
+        vec![
+            ChannelId::new(400),
+            ChannelId::new(200),
+            ChannelId::new(300),
+            ChannelId::new(401)
+        ]
     );
     assert_eq!(
         order.groups()[1].expected_order(),
@@ -473,11 +483,197 @@ async fn apply_updates_channel_positions_after_other_changes() {
     assert_eq!(result.status, ChannelApplyStatus::Complete);
     let updates = source.position_updates.lock().unwrap();
     assert_eq!(updates.len(), 1);
-    assert_eq!(updates[0].iter().map(|update| update.channel_id).collect::<Vec<_>>(), vec![ChannelId::new(200), ChannelId::new(300)]);
+    assert_eq!(
+        updates[0].iter().map(|update| update.channel_id).collect::<Vec<_>>(),
+        vec![ChannelId::new(200), ChannelId::new(300)]
+    );
     let catalog = source.catalog.lock().unwrap();
-    let category_a_position = catalog.channels.iter().find(|channel| channel.id == ChannelId::new(200)).unwrap().position;
-    let category_b_position = catalog.channels.iter().find(|channel| channel.id == ChannelId::new(300)).unwrap().position;
+    let category_a_position = catalog
+        .channels
+        .iter()
+        .find(|channel| channel.id == ChannelId::new(200))
+        .unwrap()
+        .position;
+    let category_b_position = catalog
+        .channels
+        .iter()
+        .find(|channel| channel.id == ChannelId::new(300))
+        .unwrap()
+        .position;
     assert!(category_a_position < category_b_position);
+}
+
+/// 既存 Text Channel の親変更後に、移動先 sibling 集合から相対順序を再計画する。
+#[tokio::test]
+async fn apply_replans_channel_order_after_parent_move() {
+    let destination = channel_snapshot("200", ChannelKind::Category, "移動先", None);
+    let mut moved = channel_snapshot("300", ChannelKind::Text, "移動する", None);
+    moved.position = 0;
+    let mut sibling = channel_snapshot("400", ChannelKind::Text, "既存の子", Some("200"));
+    sibling.position = 1;
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![destination, moved, sibling],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.destination]
+        type = "category"
+        name = "移動先"
+        [channels.moved]
+        type = "text"
+        name = "移動する"
+        parent = "destination"
+        [channels.sibling]
+        type = "text"
+        name = "既存の子"
+        parent = "destination"
+        [order.children]
+        destination = ["sibling", "moved"]
+    "#;
+    let state_json = channel_state(r#"{"destination":"200","moved":"300","sibling":"400"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plan.order().unwrap().groups()[0].expected_order(),
+        &[ChannelId::new(400), ChannelId::new(300)]
+    );
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    assert_eq!(
+        source.position_updates.lock().unwrap()[0]
+            .iter()
+            .map(|update| update.channel_id)
+            .collect::<Vec<_>>(),
+        vec![ChannelId::new(400), ChannelId::new(300)]
+    );
+    assert_eq!(
+        source
+            .catalog
+            .lock()
+            .unwrap()
+            .channels
+            .iter()
+            .find(|channel| channel.id == ChannelId::new(300))
+            .unwrap()
+            .parent_id,
+        Some(ChannelId::new(200))
+    );
+}
+
+/// Category と複数親の子 Channel の位置更新を、一つの batch payload にまとめる。
+#[tokio::test]
+async fn apply_batches_channel_positions_across_sibling_groups() {
+    let mut category_a = channel_snapshot("200", ChannelKind::Category, "A", None);
+    category_a.position = 1;
+    let mut category_b = channel_snapshot("300", ChannelKind::Category, "B", None);
+    category_b.position = 0;
+    let mut child_a_first = channel_snapshot("400", ChannelKind::Text, "A1", Some("200"));
+    child_a_first.position = 0;
+    let mut child_a_second = channel_snapshot("401", ChannelKind::Text, "A2", Some("200"));
+    child_a_second.position = 1;
+    let mut child_b_first = channel_snapshot("500", ChannelKind::Text, "B1", Some("300"));
+    child_b_first.position = 0;
+    let mut child_b_second = channel_snapshot("501", ChannelKind::Text, "B2", Some("300"));
+    child_b_second.position = 1;
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![
+            category_a,
+            category_b,
+            child_a_first,
+            child_a_second,
+            child_b_first,
+            child_b_second,
+        ],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.category_a]
+        type = "category"
+        name = "A"
+        [channels.category_b]
+        type = "category"
+        name = "B"
+        [channels.child_a_first]
+        type = "text"
+        name = "A1"
+        parent = "category_a"
+        [channels.child_a_second]
+        type = "text"
+        name = "A2"
+        parent = "category_a"
+        [channels.child_b_first]
+        type = "text"
+        name = "B1"
+        parent = "category_b"
+        [channels.child_b_second]
+        type = "text"
+        name = "B2"
+        parent = "category_b"
+        [order]
+        categories = ["category_a", "category_b"]
+        [order.children]
+        category_a = ["child_a_second", "child_a_first"]
+        category_b = ["child_b_second", "child_b_first"]
+    "#;
+    let state_json = channel_state(
+        r#"{"category_a":"200","category_b":"300","child_a_first":"400","child_a_second":"401","child_b_first":"500","child_b_second":"501"}"#,
+    );
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let position_updates = source.position_updates.lock().unwrap();
+    assert_eq!(position_updates.len(), 1);
+    assert_eq!(
+        position_updates[0]
+            .iter()
+            .map(|update| (update.channel_id, update.position))
+            .collect::<Vec<_>>(),
+        vec![
+            (ChannelId::new(200), 0),
+            (ChannelId::new(300), 1),
+            (ChannelId::new(401), 0),
+            (ChannelId::new(400), 1),
+            (ChannelId::new(501), 0),
+            (ChannelId::new(500), 1),
+        ]
+    );
 }
 
 /// Channel 位置 API の応答が不明でも、再取得した兄弟順が希望値なら成功として確定する。
@@ -799,7 +995,10 @@ async fn channel_export_order_round_trips_into_an_empty_plan() {
     let order = definition.order.as_ref().unwrap();
     assert_eq!(
         order.categories,
-        vec![ChannelLogicalId::parse("channel_300").unwrap(), ChannelLogicalId::parse("channel_200").unwrap()]
+        vec![
+            ChannelLogicalId::parse("channel_300").unwrap(),
+            ChannelLogicalId::parse("channel_200").unwrap()
+        ]
     );
     assert_eq!(
         order.children.get(&ChannelLogicalId::parse("channel_200").unwrap()),
