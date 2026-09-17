@@ -902,6 +902,8 @@ fn build_order_group(
     let mut requested = Vec::with_capacity(requested_logical_ids.len());
     let mut fixed = BTreeSet::new();
     let mut deferred = false;
+    let mut projected_missing = Vec::new();
+    let mut next_placeholder = u64::MAX - 1;
     for logical_id in requested_logical_ids {
         let channel_definition = definition
             .channels
@@ -913,7 +915,22 @@ fn build_order_group(
                     "order の参照専用 Channel {logical_id} の対応がありません"
                 )));
             }
+            let placeholder = loop {
+                let candidate = ChannelId::new(next_placeholder);
+                next_placeholder = next_placeholder.checked_sub(1).ok_or_else(|| {
+                    ManagementError::InvalidDefinition(
+                        "order の未作成 Channel を投影する ID を確保できません".to_owned(),
+                    )
+                })?;
+                if !catalog.channels.iter().any(|channel| channel.id == candidate)
+                    && !projected_missing.contains(&candidate)
+                {
+                    break candidate;
+                }
+            };
+            projected_missing.push(placeholder);
             deferred = true;
+            requested.push(placeholder);
             continue;
         };
         let Some(channel) = actual.get(&discord_id).copied() else {
@@ -948,9 +965,11 @@ fn build_order_group(
     }
 
     if deferred {
-        // 作成前の managed Channel の位置が未確定でも、既存 sibling だけで
-        // 参照専用 anchor をまたぐ矛盾は、Channel 作成前に診断できます。
-        stable_relative_order(&current, &requested, &fixed).map_err(|()| {
+        // Discord の新規 Channel は対象 sibling の末尾へ作成されるため、その位置へ
+        // 未作成 Channel を投影してから参照専用 anchor との循環を診断します。
+        let mut projected_current = current.clone();
+        projected_current.extend(projected_missing);
+        stable_relative_order(&projected_current, &requested, &fixed).map_err(|()| {
             ManagementError::InvalidDefinition("order の Channel は参照専用対象の固定位置と両立しません".to_owned())
         })?;
         return Ok(Some(OrderGroupPlan {

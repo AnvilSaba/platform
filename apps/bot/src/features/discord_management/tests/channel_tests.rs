@@ -118,6 +118,7 @@ struct ApplyingFakeChannelSource {
     catalog: Arc<Mutex<ChannelCatalog>>,
     updates: Arc<Mutex<Vec<ChannelUpdate>>>,
     position_updates: Arc<Mutex<Vec<Vec<ChannelPositionUpdate>>>>,
+    events: Arc<Mutex<Vec<String>>>,
     position_outcome: ChannelPositionUpdateOutcome,
     creates: Arc<Mutex<Vec<ChannelCreate>>>,
     deletes: Arc<Mutex<Vec<ChannelId>>>,
@@ -141,6 +142,7 @@ impl ChannelUpdater for ApplyingFakeChannelSource {
         channel_id: &ChannelId,
         update: ChannelUpdate,
     ) -> Result<ChannelUpdateOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("update:{channel_id}"));
         self.updates.lock().unwrap().push(update.clone());
         let mut catalog = self.catalog.lock().unwrap();
         let channel = catalog
@@ -159,6 +161,7 @@ impl ChannelPositionUpdater for ApplyingFakeChannelSource {
         _guild_id: &GuildId,
         updates: Vec<ChannelPositionUpdate>,
     ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
+        self.events.lock().unwrap().push("positions".to_owned());
         self.position_updates.lock().unwrap().push(updates.clone());
         let mut catalog = self.catalog.lock().unwrap();
         for update in updates {
@@ -179,6 +182,7 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
         _guild_id: &GuildId,
         create: ChannelCreate,
     ) -> Result<ChannelCreateOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("create:{}", create.name));
         self.creates.lock().unwrap().push(create.clone());
         let outcome = match self.create_outcome {
             ChannelCreateOutcome::Created(_) => {
@@ -218,6 +222,7 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
         _guild_id: &GuildId,
         channel_id: &ChannelId,
     ) -> Result<ChannelDeleteOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("delete:{channel_id}"));
         self.deletes.lock().unwrap().push(*channel_id);
         if self.apply_delete {
             self.catalog
@@ -268,6 +273,7 @@ fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSourc
         catalog: Arc::new(Mutex::new(catalog)),
         updates: Arc::new(Mutex::new(Vec::new())),
         position_updates: Arc::new(Mutex::new(Vec::new())),
+        events: Arc::new(Mutex::new(Vec::new())),
         position_outcome: ChannelPositionUpdateOutcome::Applied,
         creates: Arc::new(Mutex::new(Vec::new())),
         deletes: Arc::new(Mutex::new(Vec::new())),
@@ -435,6 +441,44 @@ async fn channel_plan_reports_category_and_child_order_changes() {
         order.groups()[1].expected_order(),
         &[ChannelId::new(600), ChannelId::new(500)]
     );
+}
+
+/// 未作成 managed Channel を含む固定 anchor 跨ぎを、作成前に診断する。
+#[tokio::test]
+async fn channel_order_rejects_uncreated_channel_crossing_fixed_anchor_before_create() {
+    let destination = channel_snapshot("200", ChannelKind::Category, "移動先", None);
+    let mut anchor = channel_snapshot("300", ChannelKind::Text, "固定 anchor", Some("200"));
+    anchor.manageable = false;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![destination, anchor],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.destination]
+        type = "category"
+        name = "移動先"
+        [channels.anchor]
+        mode = "reference"
+        [channels.new_channel]
+        type = "text"
+        name = "新規"
+        parent = "destination"
+        [order.children]
+        destination = ["new_channel", "anchor"]
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"destination":"200","anchor":"300"}"#),
+    )
+    .await
+    .expect_err("未作成 Channel が固定 anchor を越える順序は作成前に拒否します");
+    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("固定位置")));
 }
 
 /// 他の変更後に Channel の専用位置 API を一括実行し、再取得した兄弟順を確認する。
@@ -674,6 +718,96 @@ async fn apply_batches_channel_positions_across_sibling_groups() {
             (ChannelId::new(500), 1),
         ]
     );
+}
+
+/// lifecycle／属性変更後に位置 batch を最後に実行し、成功後の再適用を無差分にする。
+#[tokio::test]
+async fn channel_apply_orders_all_changes_before_final_position_batch_and_is_idempotent() {
+    let destination = channel_snapshot("200", ChannelKind::Category, "旧移動先", None);
+    let mut moved = channel_snapshot("300", ChannelKind::Text, "旧チャンネル", None);
+    moved.position = 0;
+    let mut sibling = channel_snapshot("400", ChannelKind::Text, "兄弟", Some("200"));
+    sibling.position = 1;
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![destination, moved, sibling],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.destination]
+        type = "category"
+        name = "新移動先"
+        [channels.moved]
+        type = "text"
+        name = "新チャンネル"
+        parent = "destination"
+        [channels.sibling]
+        type = "text"
+        name = "兄弟"
+        parent = "destination"
+        [channels.new_channel]
+        type = "text"
+        name = "新規"
+        parent = "destination"
+        [order.children]
+        destination = ["sibling", "new_channel", "moved"]
+    "#;
+    let state_json = channel_state(r#"{"destination":"200","moved":"300","sibling":"400"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+
+    let first = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(first.status, ChannelApplyStatus::Complete);
+    assert_eq!(
+        *source.events.lock().unwrap(),
+        vec![
+            "update:200".to_owned(),
+            "create:新規".to_owned(),
+            "update:300".to_owned(),
+            "positions".to_owned(),
+        ]
+    );
+    let event_count = source.events.lock().unwrap().len();
+
+    let second_plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &first.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(second_plan.is_empty(), "成功後の再計画は無差分であるべきです");
+    let second = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &first.state_json,
+        &second_plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(second.status, ChannelApplyStatus::Complete);
+    assert_eq!(source.events.lock().unwrap().len(), event_count);
 }
 
 /// Channel 位置 API の応答が不明でも、再取得した兄弟順が希望値なら成功として確定する。
