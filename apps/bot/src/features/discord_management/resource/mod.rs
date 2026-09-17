@@ -6,6 +6,7 @@
 pub(super) mod channel;
 pub(super) mod role;
 
+use super::{ids::RoleId, port::RoleSnapshot};
 use std::{cmp::Ordering, collections::BTreeSet, fmt};
 
 /// 同じ position の要素を Snowflake ID で安定して並べる共通 comparator です。
@@ -20,6 +21,16 @@ where
     I: Ord,
 {
     left_position.cmp(right_position).then_with(|| left_id.cmp(right_id))
+}
+
+/// Discord UI の Role 順序を `@everyone` の固定位置込みで比較します。
+pub(super) fn compare_role_order(left: &RoleSnapshot, right: &RoleSnapshot, everyone_id: RoleId) -> Ordering {
+    match (left.id == everyone_id, right.id == everyone_id) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
+    }
 }
 
 /// リソースの属性変更を同じ形式で表示します。

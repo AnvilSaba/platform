@@ -12,7 +12,7 @@ use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettin
 
 pub(crate) mod apply;
 
-use super::{compare_position_then_id, display_quoted_string, render_change_line, stable_relative_order};
+use super::{compare_role_order, display_quoted_string, render_change_line, stable_relative_order};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
@@ -579,17 +579,8 @@ fn build_order_plan(
         .map(|role| (role.id, role))
         .collect::<BTreeMap<_, _>>();
     let mut current = catalog.roles.iter().map(|role| role.id).collect::<Vec<_>>();
-    current.sort_by(|left, right| {
-        let left = actual[left];
-        let right = actual[right];
-        let everyone_id = RoleId::new(state.guild_id.get());
-        match (left.id == everyone_id, right.id == everyone_id) {
-            (true, true) => std::cmp::Ordering::Equal,
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
-        }
-    });
+    let everyone_id = RoleId::new(state.guild_id.get());
+    current.sort_by(|left, right| compare_role_order(actual[left], actual[right], everyone_id));
 
     let mut requested = Vec::with_capacity(order.roles.len());
     let mut fixed = BTreeSet::new();
@@ -602,7 +593,6 @@ fn build_order_plan(
     // @everyone は Discord が特別扱いする固定 anchor です。fake/adapter の
     // manageable 判定に依存せず、定義に列挙されない場合も直接移動対象に
     // しないで、実在する Guild の末尾位置を保ちます。
-    let everyone_id = RoleId::new(state.guild_id.get());
     if actual.contains_key(&everyone_id) {
         fixed.insert(everyone_id);
     }
@@ -753,11 +743,6 @@ fn add_update(
 
 pub(super) fn ordered_role_ids(catalog: &RoleCatalog, everyone_id: RoleId) -> Vec<RoleId> {
     let mut roles = catalog.roles.iter().collect::<Vec<_>>();
-    roles.sort_by(|left, right| match (left.id == everyone_id, right.id == everyone_id) {
-        (true, true) => std::cmp::Ordering::Equal,
-        (true, false) => std::cmp::Ordering::Greater,
-        (false, true) => std::cmp::Ordering::Less,
-        (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
-    });
+    roles.sort_by(|left, right| compare_role_order(left, right, everyone_id));
     roles.into_iter().map(|role| role.id).collect()
 }
