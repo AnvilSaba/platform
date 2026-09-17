@@ -12,7 +12,7 @@ use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettin
 
 pub(crate) mod apply;
 
-use super::{display_quoted_string, render_change_line, stable_relative_order};
+use super::{compare_position_then_id, display_quoted_string, render_change_line, stable_relative_order};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
@@ -587,10 +587,7 @@ fn build_order_plan(
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
-            (false, false) => right
-                .position
-                .cmp(&left.position)
-                .then_with(|| left.id.cmp(&right.id)),
+            (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
         }
     });
 
@@ -610,6 +607,8 @@ fn build_order_plan(
         fixed.insert(everyone_id);
     }
     let mut deferred = false;
+    let mut projected_missing = Vec::new();
+    let mut next_placeholder = u64::MAX - 1;
     for logical_id in &order.roles {
         let definition = definition
             .roles
@@ -625,7 +624,20 @@ fn build_order_plan(
                     "order.roles の参照専用 Role {logical_id} の対応がありません"
                 )));
             }
+            let placeholder = loop {
+                let candidate = RoleId::new(next_placeholder);
+                next_placeholder = next_placeholder.checked_sub(1).ok_or_else(|| {
+                    ManagementError::InvalidDefinition(
+                        "order.roles の未作成 Role を投影する ID を確保できません".to_owned(),
+                    )
+                })?;
+                if !actual.contains_key(&candidate) && !projected_missing.contains(&candidate) {
+                    break candidate;
+                }
+            };
+            projected_missing.push(placeholder);
             deferred = true;
+            requested.push(placeholder);
             continue;
         };
         let Some(role) = actual.get(&discord_id).copied() else {
@@ -633,18 +645,12 @@ fn build_order_plan(
                 "order.roles の Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             )));
         };
-        if definition.is_managed()
-            && *logical_id != everyone_logical_id()
-            && !role.manageable
-        {
+        if definition.is_managed() && *logical_id != everyone_logical_id() && !role.manageable {
             return Err(ManagementError::InvalidState(format!(
                 "order.roles の Role {logical_id} は Bot の階層より上位または管理対象外のため移動できません"
             )));
         }
-        if definition.is_reference()
-            || *logical_id == everyone_logical_id()
-            || !role.manageable
-        {
+        if definition.is_reference() || *logical_id == everyone_logical_id() || !role.manageable {
             fixed.insert(discord_id);
         }
         requested.push(discord_id);
@@ -664,9 +670,15 @@ fn build_order_plan(
     }
 
     if deferred {
-        // 作成前の managed Role 自体の位置はまだ未知でも、既存 Role だけで
-        // 参照専用 anchor をまたぐ矛盾は、lifecycle を呼ぶ前に診断できます。
-        stable_relative_order(&current, &requested, &fixed).map_err(|()| {
+        // Discord の新規 Role は既存 Role の下、@everyone の直上に作成されるため、
+        // その位置へ未作成 Role を投影してから固定 anchor との循環を診断します。
+        let mut projected_current = current.clone();
+        let everyone_index = projected_current
+            .iter()
+            .position(|discord_id| *discord_id == everyone_id)
+            .unwrap_or(projected_current.len());
+        projected_current.splice(everyone_index..everyone_index, projected_missing.iter().copied());
+        stable_relative_order(&projected_current, &requested, &fixed).map_err(|()| {
             ManagementError::InvalidDefinition(
                 "order.roles は参照専用 Role、@everyone、Role 階層の固定位置と両立しません".to_owned(),
             )
@@ -706,7 +718,10 @@ fn build_order_plan(
         let position = i16::try_from(desired.len() - 1 - desired_indices[&discord_id]).map_err(|_| {
             ManagementError::InvalidDefinition("Role の数が Discord の position 範囲を超えています".to_owned())
         })?;
-        updates.push(RolePositionUpdate { role_id: discord_id, position });
+        updates.push(RolePositionUpdate {
+            role_id: discord_id,
+            position,
+        });
     }
 
     Ok(Some(OrderPlan {
@@ -738,16 +753,11 @@ fn add_update(
 
 pub(super) fn ordered_role_ids(catalog: &RoleCatalog, everyone_id: RoleId) -> Vec<RoleId> {
     let mut roles = catalog.roles.iter().collect::<Vec<_>>();
-    roles.sort_by(|left, right| {
-        match (left.id == everyone_id, right.id == everyone_id) {
-            (true, true) => std::cmp::Ordering::Equal,
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => right
-                .position
-                .cmp(&left.position)
-                .then_with(|| left.id.cmp(&right.id)),
-        }
+    roles.sort_by(|left, right| match (left.id == everyone_id, right.id == everyone_id) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
     });
     roles.into_iter().map(|role| role.id).collect()
 }

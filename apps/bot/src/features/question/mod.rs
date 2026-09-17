@@ -6,8 +6,8 @@ use std::{str::FromStr, time::Duration};
 
 pub use command::question;
 
-use bot_macros::event_handler;
 use anyhow::Context as _;
+use bot_macros::event_handler;
 use serenity::{
     all::{
         ButtonStyle, CacheHttp, ComponentInteractionDataKind, Context, CreateActionRow, CreateButton, EditThread,

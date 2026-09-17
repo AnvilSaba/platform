@@ -243,8 +243,18 @@ async fn apply_updates_role_positions_after_other_changes() {
     assert_eq!(result.status, RoleApplyStatus::Complete);
     assert_eq!(source.position_updates.lock().unwrap().len(), 1);
     let catalog = source.catalog.lock().unwrap();
-    let second_position = catalog.roles.iter().find(|role| role.id == role_id("300")).unwrap().position;
-    let first_position = catalog.roles.iter().find(|role| role.id == role_id("200")).unwrap().position;
+    let second_position = catalog
+        .roles
+        .iter()
+        .find(|role| role.id == role_id("300"))
+        .unwrap()
+        .position;
+    let first_position = catalog
+        .roles
+        .iter()
+        .find(|role| role.id == role_id("200"))
+        .unwrap()
+        .position;
     assert!(second_position > first_position);
 }
 
@@ -318,7 +328,10 @@ async fn apply_resolves_deferred_role_order_after_creation() {
     let plan = plan_roles(&source, guild_id(100), definition, &state_json)
         .await
         .unwrap();
-    assert!(plan.order().unwrap().updates().is_empty(), "作成前は具体的な位置を解決できません");
+    assert!(
+        plan.order().unwrap().updates().is_empty(),
+        "作成前は具体的な位置を解決できません"
+    );
 
     let result = apply_roles(
         &source,
