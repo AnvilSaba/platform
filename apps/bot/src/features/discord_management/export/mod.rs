@@ -14,7 +14,7 @@ use super::{
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
     port::{ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSource, RoleSource},
-    resource::compare_position_then_id,
+    resource::{compare_position_then_id, compare_role_order},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,16 +61,8 @@ pub(super) async fn export_roles<S: RoleSource>(
         })
         .collect::<Vec<_>>();
     // Discord の Role は position 降順、同値なら Snowflake 昇順が UI 上から下の順です。
-    roles.sort_by(|left, right| {
-        let left_everyone = left.id.get() == guild_id.get();
-        let right_everyone = right.id.get() == guild_id.get();
-        match (left_everyone, right_everyone) {
-            (true, true) => std::cmp::Ordering::Equal,
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => compare_position_then_id(&right.position, &left.position, &left.id, &right.id),
-        }
-    });
+    let everyone_id = RoleId::new(guild_id.get());
+    roles.sort_by(|left, right| compare_role_order(left, right, everyone_id));
     let mut definitions = BTreeMap::new();
     let mut mappings = previous_mappings.clone();
     let mut order_roles = Vec::new();
