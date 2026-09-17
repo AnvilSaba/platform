@@ -71,8 +71,7 @@ pub(crate) struct DefinitionFile {
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
     pub(crate) message_sets: BTreeMap<String, RawMessageSetDefinition>,
     pub(crate) threads: BTreeMap<String, RawThreadDefinition>,
-    // order は parse/validate 済みの定義を保持し、並べ替え機能実装時に利用します。
-    #[allow(dead_code)]
+    // order は parse/validate 済みの相対順序指定を保持します。
     pub(crate) order: Option<RawOrderDefinition>,
 }
 
