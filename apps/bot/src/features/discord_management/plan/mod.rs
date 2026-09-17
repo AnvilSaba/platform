@@ -1,8 +1,8 @@
 //! `plan` ワークフローです。
 //!
 //! 入力の構文・Guild 対象を検証してから、各管理対象リソースの純粋な差分計算を
-//! 呼び出します。現在は Role の差分計算を実装し、Channel・管理メッセージ等の
-//! 宣言は共有 configuration で検証できる状態を保ちます。
+//! 呼び出します。Role と Category/Text Channel の属性・相対順序を各 resource
+//! module へ委譲し、管理メッセージ等の宣言は共有 configuration で検証します。
 
 use std::collections::BTreeSet;
 
