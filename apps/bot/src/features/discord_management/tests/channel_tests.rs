@@ -93,6 +93,8 @@ impl ChannelUpdater for BlockingCanManageRolesChannelSource {
     }
 }
 
+impl ChannelPositionUpdater for BlockingCanManageRolesChannelSource {}
+
 impl ChannelLifecycleTarget for BlockingCanManageRolesChannelSource {
     async fn create_channel(
         &self,
@@ -115,6 +117,8 @@ impl ChannelLifecycleTarget for BlockingCanManageRolesChannelSource {
 struct ApplyingFakeChannelSource {
     catalog: Arc<Mutex<ChannelCatalog>>,
     updates: Arc<Mutex<Vec<ChannelUpdate>>>,
+    position_updates: Arc<Mutex<Vec<Vec<ChannelPositionUpdate>>>>,
+    position_outcome: ChannelPositionUpdateOutcome,
     creates: Arc<Mutex<Vec<ChannelCreate>>>,
     deletes: Arc<Mutex<Vec<ChannelId>>>,
     next_id: Arc<Mutex<u64>>,
@@ -149,6 +153,26 @@ impl ChannelUpdater for ApplyingFakeChannelSource {
     }
 }
 
+impl ChannelPositionUpdater for ApplyingFakeChannelSource {
+    async fn update_channel_positions(
+        &self,
+        _guild_id: &GuildId,
+        updates: Vec<ChannelPositionUpdate>,
+    ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
+        self.position_updates.lock().unwrap().push(updates.clone());
+        let mut catalog = self.catalog.lock().unwrap();
+        for update in updates {
+            let channel = catalog
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == update.channel_id)
+                .expect("位置更新対象 Channel がカタログに存在します");
+            channel.position = u16::try_from(update.position).expect("テスト位置は u16 に収まります");
+        }
+        Ok(self.position_outcome)
+    }
+}
+
 impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
     async fn create_channel(
         &self,
@@ -170,6 +194,7 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
             let mut catalog = self.catalog.lock().unwrap();
             catalog.channels.push(ChannelSnapshot {
                 id: channel_id,
+                position: 0,
                 kind: create.kind,
                 manageable: true,
                 name: create.name,
@@ -242,6 +267,8 @@ fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSourc
     ApplyingFakeChannelSource {
         catalog: Arc::new(Mutex::new(catalog)),
         updates: Arc::new(Mutex::new(Vec::new())),
+        position_updates: Arc::new(Mutex::new(Vec::new())),
+        position_outcome: ChannelPositionUpdateOutcome::Applied,
         creates: Arc::new(Mutex::new(Vec::new())),
         deletes: Arc::new(Mutex::new(Vec::new())),
         next_id: Arc::new(Mutex::new(500)),
@@ -255,6 +282,7 @@ fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSourc
 fn channel_snapshot(id: &str, kind: ChannelKind, name: &str, parent_id: Option<&str>) -> ChannelSnapshot {
     ChannelSnapshot {
         id: id.parse().unwrap(),
+        position: 0,
         kind,
         manageable: true,
         name: name.to_owned(),
@@ -316,6 +344,232 @@ async fn channel_plan_reports_text_attribute_changes() {
         Some(&4320)
     );
     assert_eq!(attributes.default_thread_slowmode_seconds().unwrap().desired(), &10);
+}
+
+/// Category と親ごとの子 Channel の順序を、未管理 Channel を挟んだ兄弟全体の
+/// 位置更新計画として確認できる。
+#[tokio::test]
+async fn channel_plan_reports_category_and_child_order_changes() {
+    let mut category_a = channel_snapshot("200", ChannelKind::Category, "A", None);
+    category_a.position = 2;
+    let mut category_b = channel_snapshot("300", ChannelKind::Category, "B", None);
+    category_b.position = 0;
+    let mut unmanaged_first = channel_snapshot("400", ChannelKind::Text, "未管理1", None);
+    unmanaged_first.position = 1;
+    let mut unmanaged_second = channel_snapshot("401", ChannelKind::Text, "未管理2", None);
+    unmanaged_second.position = 3;
+    let mut child_first = channel_snapshot("500", ChannelKind::Text, "子1", Some("200"));
+    child_first.position = 0;
+    let mut child_second = channel_snapshot("600", ChannelKind::Text, "子2", Some("200"));
+    child_second.position = 1;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![
+                category_a,
+                category_b,
+                unmanaged_first,
+                unmanaged_second,
+                child_first,
+                child_second,
+            ],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.category_a]
+        type = "category"
+        name = "A"
+        [channels.category_b]
+        type = "category"
+        name = "B"
+        [channels.child_first]
+        type = "text"
+        name = "子1"
+        parent = "category_a"
+        [channels.child_second]
+        type = "text"
+        name = "子2"
+        parent = "category_a"
+        [order]
+        categories = ["category_a", "category_b"]
+        [order.children]
+        category_a = ["child_second", "child_first"]
+    "#;
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(
+            r#"{"category_a":"200","category_b":"300","child_first":"500","child_second":"600"}"#,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("Category と子 Channel の順序変更が plan に含まれます");
+    assert_eq!(order.groups().len(), 2);
+    assert_eq!(
+        order.groups()[0].expected_order(),
+        &[ChannelId::new(400), ChannelId::new(200), ChannelId::new(300), ChannelId::new(401)]
+    );
+    assert_eq!(
+        order.groups()[0]
+            .updates()
+            .iter()
+            .map(|update| update.channel_id)
+            .collect::<Vec<_>>(),
+        vec![ChannelId::new(400), ChannelId::new(200), ChannelId::new(300), ChannelId::new(401)]
+    );
+    assert_eq!(
+        order.groups()[1].expected_order(),
+        &[ChannelId::new(600), ChannelId::new(500)]
+    );
+}
+
+/// 他の変更後に Channel の専用位置 API を一括実行し、再取得した兄弟順を確認する。
+#[tokio::test]
+async fn apply_updates_channel_positions_after_other_changes() {
+    let mut category_a = channel_snapshot("200", ChannelKind::Category, "A", None);
+    category_a.position = 1;
+    let mut category_b = channel_snapshot("300", ChannelKind::Category, "B", None);
+    category_b.position = 0;
+    let source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![category_a, category_b],
+    });
+    let definition = r#"
+        schema_version = 1
+        [channels.category_a]
+        type = "category"
+        name = "A"
+        [channels.category_b]
+        type = "category"
+        name = "B"
+        [order]
+        categories = ["category_a", "category_b"]
+    "#;
+    let state_json = channel_state(r#"{"category_a":"200","category_b":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.position_updates.lock().unwrap();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].iter().map(|update| update.channel_id).collect::<Vec<_>>(), vec![ChannelId::new(200), ChannelId::new(300)]);
+    let catalog = source.catalog.lock().unwrap();
+    let category_a_position = catalog.channels.iter().find(|channel| channel.id == ChannelId::new(200)).unwrap().position;
+    let category_b_position = catalog.channels.iter().find(|channel| channel.id == ChannelId::new(300)).unwrap().position;
+    assert!(category_a_position < category_b_position);
+}
+
+/// Channel 位置 API の応答が不明でも、再取得した兄弟順が希望値なら成功として確定する。
+#[tokio::test]
+async fn unknown_channel_position_response_is_confirmed_by_refetch() {
+    let mut category_a = channel_snapshot("200", ChannelKind::Category, "A", None);
+    category_a.position = 1;
+    let mut category_b = channel_snapshot("300", ChannelKind::Category, "B", None);
+    category_b.position = 0;
+    let mut source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![category_a, category_b],
+    });
+    source.position_outcome = ChannelPositionUpdateOutcome::ResponseUnknown;
+    let definition = r#"
+        schema_version = 1
+        [channels.category_a]
+        type = "category"
+        name = "A"
+        [channels.category_b]
+        type = "category"
+        name = "B"
+        [order]
+        categories = ["category_a", "category_b"]
+    "#;
+    let state_json = channel_state(r#"{"category_a":"200","category_b":"300"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+}
+
+/// Channel の参照専用 Category を固定 anchor として使い、兄弟全体を送る場合も
+/// anchor 自身の位置を変更しない。
+#[tokio::test]
+async fn channel_plan_keeps_reference_category_at_its_anchor_position() {
+    let mut anchor = channel_snapshot("250", ChannelKind::Category, "基準", None);
+    anchor.position = 0;
+    let mut first = channel_snapshot("200", ChannelKind::Category, "A", None);
+    first.position = 1;
+    let mut second = channel_snapshot("300", ChannelKind::Category, "B", None);
+    second.position = 2;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![anchor, first, second],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.anchor]
+        mode = "reference"
+        [channels.first]
+        type = "category"
+        name = "A"
+        [channels.second]
+        type = "category"
+        name = "B"
+        [order]
+        categories = ["anchor", "second", "first"]
+    "#;
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"anchor":"250","first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let updates = &plan.order().unwrap().groups()[0].updates();
+    assert_eq!(
+        updates.iter().map(|update| update.channel_id).collect::<Vec<_>>(),
+        vec![ChannelId::new(250), ChannelId::new(300), ChannelId::new(200)]
+    );
+    assert_eq!(updates[0].position, 0, "参照専用 anchor は直接移動しません");
 }
 
 /// 先行する Channel 作成後に後続更新の対象が消えた場合も、作成済み mapping を返して停止する。
@@ -487,6 +741,7 @@ async fn channel_export_round_trip_is_idempotent() {
                 channel_snapshot("200", ChannelKind::Category, "案内", None),
                 ChannelSnapshot {
                     id: "300".parse().unwrap(),
+                    position: 0,
                     kind: ChannelKind::Text,
                     manageable: true,
                     name: "ルール".to_owned(),
@@ -521,6 +776,50 @@ async fn channel_export_round_trip_is_idempotent() {
     assert_eq!(state["channels"]["channel_300"], "300");
 }
 
+/// Channel export が Category と親ごとの子 Channel の UI 順序を出力し、再投入しても
+/// 無差分になることを保証する。
+#[tokio::test]
+async fn channel_export_order_round_trips_into_an_empty_plan() {
+    let mut category_a = channel_snapshot("200", ChannelKind::Category, "A", None);
+    category_a.position = 1;
+    let mut category_b = channel_snapshot("300", ChannelKind::Category, "B", None);
+    category_b.position = 0;
+    let mut child_a = channel_snapshot("400", ChannelKind::Text, "子A", Some("200"));
+    child_a.position = 0;
+    let mut child_b = channel_snapshot("401", ChannelKind::Text, "子B", Some("200"));
+    child_b.position = 1;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![category_a, category_b, child_a, child_b],
+        },
+    };
+
+    let exported = export_channels(&source, guild_id(100), None).await.unwrap();
+    let definition = parse_definition(&exported.definition_toml).unwrap();
+    let order = definition.order.as_ref().unwrap();
+    assert_eq!(
+        order.categories,
+        vec![ChannelLogicalId::parse("channel_300").unwrap(), ChannelLogicalId::parse("channel_200").unwrap()]
+    );
+    assert_eq!(
+        order.children.get(&ChannelLogicalId::parse("channel_200").unwrap()),
+        Some(&vec![
+            ChannelLogicalId::parse("channel_400").unwrap(),
+            ChannelLogicalId::parse("channel_401").unwrap(),
+        ])
+    );
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &exported.definition_toml,
+        &exported.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty(), "export 結果を再投入した plan は無差分であるべきです");
+}
+
 /// Category と同じ overwrite を持つ子 Channel は、export で同期指定として表現する。
 #[tokio::test]
 async fn channel_export_preserves_category_permission_sync() {
@@ -534,6 +833,7 @@ async fn channel_export_preserves_category_permission_sync() {
             channels: vec![
                 ChannelSnapshot {
                     id: "200".parse().unwrap(),
+                    position: 0,
                     kind: ChannelKind::Category,
                     manageable: true,
                     name: "非公開".to_owned(),
@@ -547,6 +847,7 @@ async fn channel_export_preserves_category_permission_sync() {
                 },
                 ChannelSnapshot {
                     id: "300".parse().unwrap(),
+                    position: 0,
                     kind: ChannelKind::Text,
                     manageable: true,
                     name: "運営".to_owned(),
@@ -587,6 +888,7 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
         catalog: ChannelCatalog {
             channels: vec![ChannelSnapshot {
                 id: "300".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Text,
                 manageable: true,
                 name: "ルール".to_owned(),
@@ -880,6 +1182,7 @@ async fn channel_default_thread_slowmode_zero_is_canonical_after_apply() {
     let source = lifecycle_channel_source(ChannelCatalog {
         channels: vec![ChannelSnapshot {
             id: "300".parse().unwrap(),
+            position: 0,
             kind: ChannelKind::Text,
             manageable: true,
             name: "ルール".to_owned(),
@@ -1244,6 +1547,8 @@ async fn channel_apply_creates_category_before_text_child() {
         type = "text"
         name = "ルール"
         parent = "information"
+        [order.children]
+        information = ["rules"]
     "#;
     let state_json = channel_state("{}");
     let plan = plan_channels(
@@ -1284,6 +1589,7 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
     let source = lifecycle_channel_source(ChannelCatalog {
         channels: vec![ChannelSnapshot {
             id: "300".parse().unwrap(),
+            position: 0,
             kind: ChannelKind::Text,
             manageable: true,
             name: "旧ルール".to_owned(),
@@ -1360,6 +1666,7 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
     let source = lifecycle_channel_source(ChannelCatalog {
         channels: vec![ChannelSnapshot {
             id: "300".parse().unwrap(),
+            position: 0,
             kind: ChannelKind::Text,
             manageable: true,
             name: "ルール".to_owned(),
@@ -1449,6 +1756,7 @@ async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_over
     let source = lifecycle_channel_source(ChannelCatalog {
         channels: vec![ChannelSnapshot {
             id: "300".parse().unwrap(),
+            position: 0,
             kind: ChannelKind::Text,
             manageable: true,
             name: "ルール".to_owned(),
@@ -1538,6 +1846,7 @@ async fn channel_apply_unparents_children_before_category_deletion() {
             channel_snapshot("200", ChannelKind::Category, "案内", None),
             ChannelSnapshot {
                 id: "300".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Text,
                 manageable: true,
                 name: "ルール".to_owned(),
@@ -1860,6 +2169,7 @@ async fn channel_plan_reports_category_permission_sync() {
             channels: vec![
                 ChannelSnapshot {
                     id: "200".parse().unwrap(),
+                    position: 0,
                     kind: ChannelKind::Category,
                     manageable: true,
                     name: "案内".to_owned(),
@@ -1879,6 +2189,7 @@ async fn channel_plan_reports_category_permission_sync() {
                 },
                 ChannelSnapshot {
                     id: "300".parse().unwrap(),
+                    position: 0,
                     kind: ChannelKind::Text,
                     manageable: true,
                     name: "ルール".to_owned(),
@@ -1939,6 +2250,7 @@ async fn channel_apply_copies_category_permission_overwrites() {
         channels: vec![
             ChannelSnapshot {
                 id: "200".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Category,
                 manageable: true,
                 name: "案内".to_owned(),
@@ -1952,6 +2264,7 @@ async fn channel_apply_copies_category_permission_overwrites() {
             },
             ChannelSnapshot {
                 id: "300".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Text,
                 manageable: true,
                 name: "ルール".to_owned(),
@@ -2195,6 +2508,7 @@ async fn channel_apply_updates_category_before_syncing_child() {
         channels: vec![
             ChannelSnapshot {
                 id: "200".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Category,
                 manageable: true,
                 name: "非公開".to_owned(),
@@ -2214,6 +2528,7 @@ async fn channel_apply_updates_category_before_syncing_child() {
             },
             ChannelSnapshot {
                 id: "300".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Text,
                 manageable: true,
                 name: "運営".to_owned(),
@@ -2301,6 +2616,7 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
         channels: vec![
             ChannelSnapshot {
                 id: "200".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Category,
                 manageable: true,
                 name: "旧カテゴリ".to_owned(),
@@ -2320,6 +2636,7 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
             },
             ChannelSnapshot {
                 id: "300".parse().unwrap(),
+                position: 0,
                 kind: ChannelKind::Text,
                 manageable: true,
                 name: "子".to_owned(),

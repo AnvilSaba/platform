@@ -18,6 +18,8 @@ use super::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RoleSnapshot {
     pub id: RoleId,
+    /// Discord の Role position。UI 上から下へ並べるときは降順に解釈します。
+    pub position: i16,
     pub manageable: bool,
     pub name: String,
     pub color: Color,
@@ -100,6 +102,19 @@ pub(super) enum RoleUpdateOutcome {
     ResponseUnknown,
 }
 
+/// Role の相対順序を専用 endpoint へ渡す一項目です。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RolePositionUpdate {
+    pub role_id: RoleId,
+    pub position: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RolePositionUpdateOutcome {
+    Applied,
+    ResponseUnknown,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ResourceLookup {
     pub resource_type: ResourceType,
@@ -130,8 +145,21 @@ pub(super) trait RoleUpdater: RoleSource {
     ) -> Result<RoleUpdateOutcome, ManagementError>;
 }
 
+/// Role の位置更新を専用 endpoint で行う Port です。
+pub(super) trait RolePositionUpdater: RoleSource {
+    async fn update_role_positions(
+        &self,
+        _guild_id: &GuildId,
+        _updates: Vec<RolePositionUpdate>,
+    ) -> Result<RolePositionUpdateOutcome, ManagementError> {
+        Err(ManagementError::RoleSource(
+            "Role の位置更新 API が実装されていません".to_owned(),
+        ))
+    }
+}
+
 /// Role の作成・削除を行う Port です。
-pub(super) trait RoleLifecycleTarget: RoleUpdater {
+pub(super) trait RoleLifecycleTarget: RoleUpdater + RolePositionUpdater {
     async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError>;
 
     async fn delete_role(&self, guild_id: &GuildId, role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError>;
@@ -141,6 +169,8 @@ pub(super) trait RoleLifecycleTarget: RoleUpdater {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ChannelSnapshot {
     pub id: ChannelId,
+    /// Discord の Channel position。兄弟 Channel 内の並びを再構成するために保持します。
+    pub position: u16,
     pub kind: ChannelKind,
     pub manageable: bool,
     pub name: String,
@@ -335,6 +365,19 @@ pub(super) enum ChannelUpdateOutcome {
     ResponseUnknown,
 }
 
+/// Channel の相対順序を専用 endpoint へ渡す一項目です。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ChannelPositionUpdate {
+    pub channel_id: ChannelId,
+    pub position: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChannelPositionUpdateOutcome {
+    Applied,
+    ResponseUnknown,
+}
+
 /// Category/Text Channel の実構成を読み取るための Port です。
 pub(super) trait ChannelSource {
     async fn channel_catalog(&self, guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError>;
@@ -371,8 +414,21 @@ pub(super) trait ChannelUpdater: ChannelSource {
     ) -> Result<ChannelUpdateOutcome, ManagementError>;
 }
 
+/// Channel の位置更新を専用 endpoint で行う Port です。
+pub(super) trait ChannelPositionUpdater: ChannelSource {
+    async fn update_channel_positions(
+        &self,
+        _guild_id: &GuildId,
+        _updates: Vec<ChannelPositionUpdate>,
+    ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
+        Err(ManagementError::ChannelSource(
+            "Channel の位置更新 API が実装されていません".to_owned(),
+        ))
+    }
+}
+
 /// Category/Text Channel の作成・削除を行う Port です。
-pub(super) trait ChannelLifecycleTarget: ChannelUpdater {
+pub(super) trait ChannelLifecycleTarget: ChannelUpdater + ChannelPositionUpdater {
     async fn create_channel(
         &self,
         guild_id: &GuildId,

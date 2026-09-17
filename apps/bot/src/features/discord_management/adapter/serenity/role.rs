@@ -8,8 +8,9 @@ use crate::features::discord_management::configuration::{Color, KnownPermission,
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId};
 use crate::features::discord_management::port::{
-    RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleSource,
-    RoleUpdate, RoleUpdateOutcome, RoleUpdater,
+    RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RolePositionUpdate,
+    RolePositionUpdateOutcome, RolePositionUpdater, RoleSnapshot, RoleSource, RoleUpdate, RoleUpdateOutcome,
+    RoleUpdater,
 };
 
 use super::resource::SerenityManagementAdapter;
@@ -81,6 +82,7 @@ impl RoleSource for SerenityManagementAdapter<'_> {
             .into_iter()
             .map(|role| RoleSnapshot {
                 id: RoleId::from(role.id),
+                position: role.position,
                 // Serenity の Role::Ord が Discord の階層順（position、同値時は Snowflake）を表す。
                 // @everyone は通常の階層編集ではなく、基底権限の更新対象として明示的に許可する。
                 manageable: role.id == everyone_id || (!role.managed() && role.cmp(&bot_highest_role).is_lt()),
@@ -116,6 +118,34 @@ impl RoleSource for SerenityManagementAdapter<'_> {
                 })
                 .collect(),
         })
+    }
+}
+
+impl RolePositionUpdater for SerenityManagementAdapter<'_> {
+    async fn update_role_positions(
+        &self,
+        guild_id: &GuildId,
+        updates: Vec<RolePositionUpdate>,
+    ) -> Result<RolePositionUpdateOutcome, ManagementError> {
+        match SerenityGuildId::from(*guild_id)
+            .edit_role_positions(
+                self.http,
+                updates
+                    .into_iter()
+                    .map(|update| (SerenityRoleId::from(update.role_id), update.position)),
+                None,
+            )
+            .await
+        {
+            Ok(_) => Ok(RolePositionUpdateOutcome::Applied),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(RolePositionUpdateOutcome::ResponseUnknown)
+            }
+            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+                Err(ManagementError::RolePermissionDenied(error.to_string()))
+            }
+            Err(error) => Err(ManagementError::RoleSource(error.to_string())),
+        }
     }
 }
 

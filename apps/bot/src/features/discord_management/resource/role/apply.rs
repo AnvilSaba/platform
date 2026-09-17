@@ -1,13 +1,15 @@
 use std::time::{Duration, Instant};
 
-use super::{AttributeChanges, Change, Plan, RolePlan, build_plan};
+use super::{AttributeChanges, Change, Plan, RolePlan, build_order_plan, build_plan, ordered_role_ids};
 use crate::features::discord_management::apply::guild_lock::{GuildApplyLock, GuildApplyPermit};
-use crate::features::discord_management::configuration::{PermissionVocabulary, PlanInput, StateFile, serialize_state};
+use crate::features::discord_management::configuration::{
+    DefinitionFile, PermissionVocabulary, PlanInput, StateFile, serialize_state,
+};
 use crate::features::discord_management::domain::ManagementError;
 use crate::features::discord_management::ids::{GuildId, RoleId, RoleLogicalId};
 use crate::features::discord_management::port::{
-    RoleCatalog, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleUpdate,
-    RoleUpdateOutcome, RoleUpdater,
+    RoleCatalog, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RolePositionUpdateOutcome,
+    RolePositionUpdater, RoleSnapshot, RoleUpdate, RoleUpdateOutcome, RoleUpdater,
 };
 
 const RESULT_STATE_REFRESH_BUDGET: Duration = Duration::from_secs(90);
@@ -42,6 +44,7 @@ pub(crate) struct RoleApplyResult {
 struct ApplySession {
     _permit: GuildApplyPermit,
     state: StateFile,
+    definition: DefinitionFile,
     catalog: RoleCatalog,
     applied: Plan,
     pending: Plan,
@@ -108,6 +111,11 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
             ApplyPreparation::Finished(result) => return Ok(result),
             ApplyPreparation::Ready(session) => *session,
         };
+        if session.pending.has_order() {
+            return Err(ManagementError::InvalidState(
+                "属性更新専用の apply_role_updates には Role の相対順序変更を含められません".to_owned(),
+            ));
+        }
         if session.pending.iter().any(|(_, change)| !change.is_update()) {
             return Err(ManagementError::InvalidState(
                 "属性更新専用の apply_role_updates には Role の lifecycle 変更を含められません".to_owned(),
@@ -209,6 +217,7 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
         Ok(ApplyPreparation::Ready(Box::new(ApplySession {
             _permit: permit,
             state,
+            definition,
             catalog,
             applied,
             pending,
@@ -301,6 +310,81 @@ async fn apply_attribute_changes<S: RoleUpdater>(
     Ok(None)
 }
 
+async fn apply_order_changes<S: RolePositionUpdater>(
+    source: &S,
+    guild_id: &GuildId,
+    session: &mut ApplySession,
+    processing_deadline: Instant,
+) -> Result<Option<RoleApplyStatus>, ManagementError> {
+    let Some(planned_order) = build_order_plan(&session.definition, &session.state, &session.catalog)? else {
+        session.applied.set_order(session.pending.take_order());
+        return Ok(None);
+    };
+    if planned_order.updates.is_empty() {
+        if planned_order.expected_order.is_empty() {
+            // 作成前の managed Role を含む deferred order は、lifecycle が
+            // state/catalog を確定するまで完了扱いにしません。
+            session.pending.set_order(Some(planned_order));
+            return Ok(Some(RoleApplyStatus::ReplanRequired));
+        }
+        session.applied.set_order(session.pending.take_order());
+        return Ok(None);
+    }
+    if Instant::now() >= processing_deadline {
+        return Ok(Some(RoleApplyStatus::DeadlineExceeded));
+    }
+
+    let mut position_error = None;
+    let outcome = match tokio::time::timeout(
+        processing_deadline.saturating_duration_since(Instant::now()),
+        source.update_role_positions(guild_id, planned_order.updates.clone()),
+    )
+    .await
+    {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            // Discord が一部だけ適用してからエラーを返す可能性があるため、
+            // known error でも必ず最新 catalog を取得して pending order を
+            // 再計画します。API エラー自体は status に保持します。
+            position_error = Some(error.to_string());
+            RolePositionUpdateOutcome::ResponseUnknown
+        }
+        Err(_) => RolePositionUpdateOutcome::ResponseUnknown,
+    };
+
+    let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
+    session.catalog = match tokio::time::timeout(
+        result_deadline.saturating_duration_since(Instant::now()),
+        source.role_catalog(guild_id),
+    )
+    .await
+    {
+        Ok(Ok(catalog)) => catalog,
+        Ok(Err(error)) => return Ok(Some(RoleApplyStatus::Failed(error.to_string()))),
+        Err(_) => return Ok(Some(RoleApplyStatus::DeadlineExceeded)),
+    };
+
+    let actual_order = ordered_role_ids(&session.catalog, RoleId::new(session.state.guild_id.get()));
+    if actual_order != planned_order.expected_order {
+        session.pending.set_order(build_order_plan(
+            &session.definition,
+            &session.state,
+            &session.catalog,
+        )?);
+        return Ok(Some(
+            position_error.map_or(RoleApplyStatus::ReplanRequired, RoleApplyStatus::Failed),
+        ));
+    }
+
+    // 応答不明でも再取得した実順序が希望値なら、位置更新は確定成功とみなします。
+    if let Some(error) = position_error {
+        return Ok(Some(RoleApplyStatus::Failed(error)));
+    }
+    let _ = outcome;
+    session.applied.set_order(session.pending.take_order());
+    Ok(None)
+}
+
 impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
     pub(crate) async fn apply_roles(
         &self,
@@ -330,7 +414,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
         options: RoleApplyOptions,
         processing_deadline: Instant,
     ) -> Result<RoleApplyResult, ManagementError> {
-        if confirmed_plan.iter().all(|(_, change)| change.is_update()) {
+        if !confirmed_plan.has_order() && confirmed_plan.iter().all(|(_, change)| change.is_update()) {
             return self
                 .apply_role_updates(
                     guild_id,
@@ -492,6 +576,14 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
                         }
                     }
                 }
+            }
+        }
+
+        if session.pending.has_order() {
+            if let Some(status) =
+                apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+            {
+                return session.into_result(status);
             }
         }
 
