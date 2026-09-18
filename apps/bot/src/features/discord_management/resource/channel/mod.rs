@@ -803,6 +803,8 @@ fn build_order_plan(
     let projected_catalog = project_channel_parents_for_order(definition, state, catalog);
     let catalog = &projected_catalog;
     let mut groups = Vec::new();
+    let mut top_level_catalog = catalog.clone();
+    let mut top_level_group = None;
     if !order.categories.is_empty()
         && let Some(group) = build_order_group(
             &order.categories,
@@ -813,6 +815,22 @@ fn build_order_plan(
             catalog,
         )?
     {
+        project_order_updates(&mut top_level_catalog, &group.updates);
+        top_level_group = Some(group);
+    }
+    if !order.uncategorized.is_empty()
+        && let Some(group) = build_order_group(
+            &order.uncategorized,
+            |channel| channel.parent_id.is_none(),
+            ChannelKind::Text,
+            definition,
+            state,
+            &top_level_catalog,
+        )?
+    {
+        top_level_group = Some(group);
+    }
+    if let Some(group) = top_level_group {
         groups.push(group);
     }
     for (parent_logical_id, requested) in &order.children {
@@ -844,6 +862,18 @@ fn build_order_plan(
         }
     }
     Ok((!groups.is_empty()).then_some(OrderPlan { groups }))
+}
+
+fn project_order_updates(catalog: &mut ChannelCatalog, updates: &[ChannelPositionUpdate]) {
+    for update in updates {
+        if let Some(channel) = catalog
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == update.channel_id)
+        {
+            channel.position = u16::try_from(update.position).expect("Channel position は u16 の範囲内です");
+        }
+    }
 }
 
 fn validate_deferred_child_order(

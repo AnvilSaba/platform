@@ -512,6 +512,52 @@ async fn channel_plan_reports_category_and_child_order_changes() {
     );
 }
 
+/// Category に属さない Text Channel の相対順序を、top-level 全体の位置更新として計画する。
+#[tokio::test]
+async fn channel_plan_reports_uncategorized_order_changes() {
+    let mut channel_a = channel_snapshot("400", ChannelKind::Text, "A", None);
+    channel_a.position = 0;
+    let mut category = channel_snapshot("200", ChannelKind::Category, "区切り", None);
+    category.position = 1;
+    let mut channel_b = channel_snapshot("401", ChannelKind::Text, "B", None);
+    channel_b.position = 2;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_a, category, channel_b],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.channel_a]
+        type = "text"
+        name = "A"
+        parent = { clear = true }
+        [channels.channel_b]
+        type = "text"
+        name = "B"
+        parent = { clear = true }
+        [order]
+        uncategorized = ["channel_b", "channel_a"]
+    "#;
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"channel_a":"400","channel_b":"401"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("親なし Channel の順序変更が plan に含まれます");
+    assert_eq!(order.groups().len(), 1);
+    assert_eq!(
+        order.groups()[0].expected_order(),
+        &[ChannelId::new(200), ChannelId::new(401), ChannelId::new(400)]
+    );
+}
+
 /// 未作成 managed Channel を含む固定 anchor 跨ぎを、作成前に診断する。
 #[tokio::test]
 async fn channel_order_rejects_uncreated_channel_crossing_fixed_anchor_before_create() {
@@ -1244,6 +1290,41 @@ async fn channel_export_order_round_trips_into_an_empty_plan() {
             ChannelLogicalId::parse("channel_400").unwrap(),
             ChannelLogicalId::parse("channel_401").unwrap(),
         ])
+    );
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &exported.definition_toml,
+        &exported.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty(), "export 結果を再投入した plan は無差分であるべきです");
+}
+
+/// Category に属さない Text Channel の UI 順序も export し、再投入時に維持する。
+#[tokio::test]
+async fn channel_export_order_includes_uncategorized_channels() {
+    let mut channel_a = channel_snapshot("400", ChannelKind::Text, "A", None);
+    channel_a.position = 1;
+    let mut channel_b = channel_snapshot("401", ChannelKind::Text, "B", None);
+    channel_b.position = 0;
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![channel_a, channel_b],
+        },
+    };
+
+    let exported = export_channels(&source, guild_id(100), None).await.unwrap();
+    let definition = parse_definition(&exported.definition_toml).unwrap();
+    assert_eq!(
+        definition.order.as_ref().unwrap().uncategorized,
+        vec![
+            ChannelLogicalId::parse("channel_401").unwrap(),
+            ChannelLogicalId::parse("channel_400").unwrap(),
+        ],
+        "Category に属さない Channel の順序が export されるべきです"
     );
     let plan = plan_channels(
         &source,
