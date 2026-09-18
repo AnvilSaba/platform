@@ -156,6 +156,7 @@ pub(super) async fn export_roles<S: RoleSource>(
         order: (!order_roles.is_empty()).then_some(RawOrderDefinition {
             roles: order_roles,
             categories: Vec::new(),
+            uncategorized: Vec::new(),
             children: BTreeMap::new(),
         }),
     })?;
@@ -255,6 +256,15 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
     let order_categories = ordered_categories
         .iter()
+        .map(|channel| logical_ids[&channel.id].clone())
+        .collect::<Vec<_>>();
+    let mut uncategorized = channels
+        .iter()
+        .filter(|channel| channel.kind == ChannelKind::Text && channel.parent_id.is_none())
+        .collect::<Vec<_>>();
+    uncategorized.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
+    let order_uncategorized = uncategorized
+        .into_iter()
         .map(|channel| logical_ids[&channel.id].clone())
         .collect::<Vec<_>>();
     let mut order_children = BTreeMap::new();
@@ -416,11 +426,13 @@ pub(super) async fn export_channels<S: ChannelSource>(
         members: member_definitions,
         message_sets: BTreeMap::new(),
         threads: BTreeMap::new(),
-        order: (!order_categories.is_empty() || !order_children.is_empty()).then_some(RawOrderDefinition {
-            roles: Vec::new(),
-            categories: order_categories,
-            children: order_children,
-        }),
+        order: (!order_categories.is_empty() || !order_uncategorized.is_empty() || !order_children.is_empty())
+            .then_some(RawOrderDefinition {
+                roles: Vec::new(),
+                categories: order_categories,
+                uncategorized: order_uncategorized,
+                children: order_children,
+            }),
     })?;
     let mut exported_roles = previous_role_mappings;
     for (discord_id, logical_id) in &role_ids {
