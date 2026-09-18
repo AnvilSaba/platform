@@ -83,7 +83,9 @@ pub(super) async fn export_roles<S: RoleSource>(
             }
             generated
         };
-        order_roles.push(logical_id.clone());
+        if !is_everyone {
+            order_roles.push(logical_id.clone());
+        }
         if !is_everyone
             && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id)
             && existing_id != role.id
