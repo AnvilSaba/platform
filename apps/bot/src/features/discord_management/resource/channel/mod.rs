@@ -803,17 +803,17 @@ fn build_order_plan(
     let projected_catalog = project_channel_parents_for_order(definition, state, catalog);
     let catalog = &projected_catalog;
     let mut groups = Vec::new();
-    if !order.categories.is_empty() {
-        if let Some(group) = build_order_group(
+    if !order.categories.is_empty()
+        && let Some(group) = build_order_group(
             &order.categories,
             |channel| channel.parent_id.is_none(),
             ChannelKind::Category,
             definition,
             state,
             catalog,
-        )? {
-            groups.push(group);
-        }
+        )?
+    {
+        groups.push(group);
     }
     for (parent_logical_id, requested) in &order.children {
         if requested.is_empty() {
