@@ -593,11 +593,10 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
             }
         }
 
-        if session.pending.has_order() {
-            if let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
-            {
-                return session.into_result(status);
-            }
+        if session.pending.has_order()
+            && let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+        {
+            return session.into_result(status);
         }
         session.into_result(ChannelApplyStatus::Complete)
     }

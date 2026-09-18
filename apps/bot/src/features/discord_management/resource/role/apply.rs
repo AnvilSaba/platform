@@ -69,7 +69,7 @@ impl ApplySession {
 }
 
 enum ApplyPreparation {
-    Finished(RoleApplyResult),
+    Finished(Box<RoleApplyResult>),
     Ready(Box<ApplySession>),
 }
 
@@ -108,7 +108,7 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
             )
             .await?;
         let mut session = match preparation {
-            ApplyPreparation::Finished(result) => return Ok(result),
+            ApplyPreparation::Finished(result) => return Ok(*result),
             ApplyPreparation::Ready(session) => *session,
         };
         if session.pending.has_order() {
@@ -161,21 +161,21 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
     ) -> Result<ApplyPreparation, ManagementError> {
         let PlanInput { definition, state } = PlanInput::parse(definition_toml, state_json, guild_id, self.vocabulary)?;
         let Some(permit) = self.apply_lock.try_acquire(guild_id) else {
-            return Ok(ApplyPreparation::Finished(result(
+            return Ok(ApplyPreparation::Finished(Box::new(result(
                 &state,
                 RoleApplyStatus::GuildBusy,
                 Plan::default(),
                 confirmed_plan.clone(),
-            )?));
+            )?)));
         };
 
         if Instant::now() >= processing_deadline {
-            return Ok(ApplyPreparation::Finished(result(
+            return Ok(ApplyPreparation::Finished(Box::new(result(
                 &state,
                 RoleApplyStatus::DeadlineExceeded,
                 Plan::default(),
                 confirmed_plan.clone(),
-            )?));
+            )?)));
         }
 
         let applied = Plan::default();
@@ -188,30 +188,30 @@ impl<S: RoleUpdater> RoleApplyWorkflow<'_, S> {
         {
             Ok(Ok(catalog)) => catalog,
             Ok(Err(error)) => {
-                return Ok(ApplyPreparation::Finished(result(
+                return Ok(ApplyPreparation::Finished(Box::new(result(
                     &state,
                     RoleApplyStatus::Failed(error.to_string()),
                     applied,
                     pending,
-                )?));
+                )?)));
             }
             Err(_) => {
-                return Ok(ApplyPreparation::Finished(result(
+                return Ok(ApplyPreparation::Finished(Box::new(result(
                     &state,
                     RoleApplyStatus::DeadlineExceeded,
                     applied,
                     pending,
-                )?));
+                )?)));
             }
         };
         let current_plan = build_plan(&definition, &state, &catalog)?;
         if current_plan != *confirmed_plan {
-            return Ok(ApplyPreparation::Finished(result(
+            return Ok(ApplyPreparation::Finished(Box::new(result(
                 &state,
                 RoleApplyStatus::ReplanRequired,
                 Plan::default(),
                 current_plan,
-            )?));
+            )?)));
         }
 
         Ok(ApplyPreparation::Ready(Box::new(ApplySession {
@@ -434,7 +434,7 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
             )
             .await?;
         let mut session = match preparation {
-            ApplyPreparation::Finished(result) => return Ok(result),
+            ApplyPreparation::Finished(result) => return Ok(*result),
             ApplyPreparation::Ready(session) => *session,
         };
         if !options.allow_deletions && session.pending.contains_deletions() {
@@ -577,11 +577,10 @@ impl<S: RoleLifecycleTarget> RoleApplyWorkflow<'_, S> {
             }
         }
 
-        if session.pending.has_order() {
-            if let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
-            {
-                return session.into_result(status);
-            }
+        if session.pending.has_order()
+            && let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+        {
+            return session.into_result(status);
         }
 
         session.into_result(RoleApplyStatus::Complete)
