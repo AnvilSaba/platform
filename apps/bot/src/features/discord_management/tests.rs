@@ -1205,6 +1205,100 @@ async fn role_settings_set_attributes_are_planned() {
     assert_eq!(hoist.desired(), &true);
 }
 
+/// 設定セット名や共通化方法は解決後の希望構成に含まれず、同じ最終値なら差分を生まない。
+#[tokio::test]
+async fn renamed_role_settings_set_with_the_same_final_values_has_no_plan_changes() {
+    let mut actual = role("200", "運営");
+    actual.hoist = true;
+    actual.mentionable = true;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![actual],
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.role.renamed_staff]
+        hoist = true
+
+        [roles.moderator]
+        settings_sets = ["renamed_staff"]
+        mentionable = true
+    "#;
+
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.is_empty());
+}
+
+/// Role と Channel の設定セットは別名前空間であり、同名でも対応型の値だけを使う。
+#[tokio::test]
+async fn role_settings_set_uses_the_role_namespace_when_names_overlap() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("200", "運営")],
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.role.shared]
+        hoist = true
+
+        [settings_sets.channel.shared]
+        name = "Channel用"
+
+        [roles.moderator]
+        settings_sets = ["shared"]
+    "#;
+
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"moderator":"200"}"#),
+    )
+    .await
+    .unwrap();
+
+    let attributes = plan
+        .get(&logical_id("moderator"))
+        .and_then(Change::attributes)
+        .expect("Role用設定セットの属性だけが計画されます");
+    assert_eq!(attributes.hoist().unwrap().desired(), &true);
+    assert!(attributes.name().is_none());
+}
+
+/// Role でも同じ設定セットの重複適用を公開 plan の入力検証で拒否する。
+#[tokio::test]
+async fn duplicate_role_settings_sets_are_reported() {
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: Vec::new(),
+    };
+    let definition = r#"
+        schema_version = 1
+        [settings_sets.role.staff]
+        name = "運営"
+        [roles.moderator]
+        settings_sets = ["staff", "staff"]
+    "#;
+
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Role moderator") && message.contains("重複"))
+    );
+}
+
 /// 一つの Role に複数属性の差分がある場合、Role 単位の一つの Update に集約することを保証する。
 #[tokio::test]
 async fn multiple_role_attributes_are_grouped_in_one_change() {
