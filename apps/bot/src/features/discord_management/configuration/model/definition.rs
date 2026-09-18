@@ -269,7 +269,14 @@ pub(crate) struct RawOrderDefinition {
 }
 
 fn validate_unique_role_order(values: &[RoleLogicalId]) -> Result<(), ValidationError> {
-    validate_unique_order(values, "Role")
+    validate_unique_order(values, "Role")?;
+    if values.contains(&everyone_logical_id()) {
+        return Err(validation_error(
+            "fixed_position",
+            "@everyone Role は最下位固定のため order.roles に指定できません",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_unique_channel_order(values: &[ChannelLogicalId]) -> Result<(), ValidationError> {
