@@ -375,6 +375,56 @@ fn channel_state(channels: &str) -> String {
     format!(r#"{{"schema_version":1,"guild_id":"100","channels":{channels}}}"#)
 }
 
+/// 設定セットは左から右、最後に直接指定を合成し、Overwrite は権限名単位で保持する。
+/// マーカーによる置換後の最終値が実構成と同じなら、設定セット名や共通化方法は差分にしない。
+#[tokio::test]
+async fn channel_settings_sets_resolve_to_the_same_final_state_without_changes() {
+    let mut actual = channel_snapshot("300", ChannelKind::Text, "ルール", None);
+    actual.overwrites.insert(
+        ChannelOverwriteTarget::Everyone,
+        ChannelOverwritePermissions::from_known(BTreeMap::from([
+            (known_permission("VIEW_CHANNEL"), OverwriteValue::Deny),
+            (known_permission("SEND_MESSAGES"), OverwriteValue::Allow),
+        ])),
+    );
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![actual] },
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.channel.base]
+        type = "text"
+        topic = "置換前"
+        [settings_sets.channel.base.overwrites.everyone]
+        VIEW_CHANNEL = "allow"
+        SEND_MESSAGES = "deny"
+
+        [settings_sets.channel.renamed_override]
+        topic = { clear = true }
+        [settings_sets.channel.renamed_override.overwrites.everyone]
+        SEND_MESSAGES = "allow"
+
+        [channels.rules]
+        settings_sets = ["base", "renamed_override"]
+        name = "ルール"
+        [channels.rules.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+    "#;
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"rules":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.is_empty());
+}
+
 /// Text Channel の型別属性を公開 plan 操作で差分として確認できる。
 #[tokio::test]
 async fn channel_plan_reports_text_attribute_changes() {
