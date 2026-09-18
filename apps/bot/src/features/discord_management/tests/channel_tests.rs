@@ -481,6 +481,41 @@ async fn channel_order_rejects_uncreated_channel_crossing_fixed_anchor_before_cr
     assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("固定位置")));
 }
 
+/// 未作成 Category の子順序に、現在は別親にいる参照専用 Channel を列挙できない。
+#[tokio::test]
+async fn channel_order_rejects_reference_child_under_uncreated_category_before_create() {
+    let other_category = channel_snapshot("200", ChannelKind::Category, "現在の親", None);
+    let anchor = channel_snapshot("300", ChannelKind::Text, "固定子", Some("200"));
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![other_category, anchor],
+        },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.destination]
+        type = "category"
+        name = "新カテゴリ"
+        [channels.anchor]
+        mode = "reference"
+        [order.children]
+        destination = ["anchor"]
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"anchor":"300"}"#),
+    )
+    .await
+    .expect_err("未作成 Category の固定子を別親から移動する順序は作成前に拒否します");
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("未作成 Category") && message.contains("参照専用"))
+    );
+}
+
 /// 他の変更後に Channel の専用位置 API を一括実行し、再取得した兄弟順を確認する。
 #[tokio::test]
 async fn apply_updates_channel_positions_after_other_changes() {
