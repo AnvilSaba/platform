@@ -149,13 +149,9 @@ pub(super) trait RoleUpdater: RoleSource {
 pub(super) trait RolePositionUpdater: RoleSource {
     async fn update_role_positions(
         &self,
-        _guild_id: &GuildId,
-        _updates: Vec<RolePositionUpdate>,
-    ) -> Result<RolePositionUpdateOutcome, ManagementError> {
-        Err(ManagementError::RoleSource(
-            "Role の位置更新 API が実装されていません".to_owned(),
-        ))
-    }
+        guild_id: &GuildId,
+        updates: Vec<RolePositionUpdate>,
+    ) -> Result<RolePositionUpdateOutcome, ManagementError>;
 }
 
 /// Role の作成・削除を行う Port です。
