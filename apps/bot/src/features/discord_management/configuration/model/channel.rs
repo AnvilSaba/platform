@@ -570,13 +570,34 @@ impl ChannelDefinition {
         }
 
         let mut attributes = ChannelAttributes::default();
+        let mut declared_kind = None;
         for settings_set in &raw.settings_sets {
             let settings = settings_sets
                 .get(settings_set)
                 .expect("検証済み Channel 定義は既知の設定セットだけを参照します");
+            if let Some(kind) = settings.kind {
+                if let Some((declared, declared_by)) = &declared_kind
+                    && *declared != kind
+                {
+                    return Err(ManagementError::InvalidDefinition(format!(
+                        "Channel {logical_id} の設定セット {settings_set} の type {} は設定セット {declared_by} の type と一致しません",
+                        kind.as_str()
+                    )));
+                }
+                declared_kind = Some((kind, settings_set.clone()));
+            }
             attributes.merge(settings);
         }
         let direct_attributes = raw.attributes.resolve(&logical_id, vocabulary)?;
+        if let Some(kind) = direct_attributes.kind
+            && let Some((declared, declared_by)) = &declared_kind
+            && *declared != kind
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {logical_id} の直接指定 type {} は設定セット {declared_by} の type と一致しません",
+                kind.as_str()
+            )));
+        }
         attributes.merge(&direct_attributes);
         attributes.validate_for_kind(&logical_id)?;
         match (raw.ensure, raw.mode) {
