@@ -15,6 +15,19 @@ impl ChannelSource for ChannelCatalogSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
     }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
 }
 
 #[derive(Clone)]
@@ -43,6 +56,10 @@ impl ChannelSource for RejectingChannelReferenceSource {
             "権限対象 Member の Guild 所属を確認できません".to_owned(),
         ))
     }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
 }
 
 impl ChannelUpdater for RejectingChannelReferenceSource {
@@ -61,6 +78,15 @@ impl ChannelSource for PermissionAwareChannelSource {
         Ok(self.catalog.clone())
     }
 
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
     async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
         Ok(self.can_manage_roles)
     }
@@ -74,6 +100,15 @@ struct BlockingCanManageRolesChannelSource {
 impl ChannelSource for BlockingCanManageRolesChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
     }
 
     async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
@@ -93,7 +128,15 @@ impl ChannelUpdater for BlockingCanManageRolesChannelSource {
     }
 }
 
-impl ChannelPositionUpdater for BlockingCanManageRolesChannelSource {}
+impl ChannelPositionUpdater for BlockingCanManageRolesChannelSource {
+    async fn update_channel_positions(
+        &self,
+        _guild_id: &GuildId,
+        _updates: Vec<ChannelPositionUpdate>,
+    ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
+        unreachable!("can_manage_roles の期限超過後に Channel 位置更新へ進みません")
+    }
+}
 
 impl ChannelLifecycleTarget for BlockingCanManageRolesChannelSource {
     async fn create_channel(
@@ -132,6 +175,19 @@ struct ApplyingFakeChannelSource {
 impl ChannelSource for ApplyingFakeChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.lock().unwrap().clone())
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 }
 
@@ -245,6 +301,19 @@ struct UnknownChannelUpdateSource {
 impl ChannelSource for UnknownChannelUpdateSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.lock().unwrap().clone())
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 }
 
