@@ -379,25 +379,15 @@ pub(super) trait ChannelSource {
     async fn channel_catalog(&self, guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError>;
 
     /// 権限上書きで参照する Role/Member が対象 Guild に存在するかを確認します。
-    ///
-    /// Fake source や、既に bind 済みの state だけを扱う実装は既定の no-op を
-    /// 利用できます。Discord adapter は実際の Role/Member endpoint で検証します。
     async fn validate_channel_permission_targets(
         &self,
-        _guild_id: &GuildId,
-        _role_ids: &[RoleId],
-        _member_ids: &[MemberId],
-    ) -> Result<(), ManagementError> {
-        Ok(())
-    }
+        guild_id: &GuildId,
+        role_ids: &[RoleId],
+        member_ids: &[MemberId],
+    ) -> Result<(), ManagementError>;
 
     /// Channel の permission overwrite を更新できるかを事前に確認します。
-    ///
-    /// 既存の Port 実装は Channel catalog だけを提供しても動作できるよう、
-    /// 既定値は許可とします。実環境の adapter は Discord の実権限を返します。
-    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
-        Ok(true)
-    }
+    async fn can_manage_roles(&self, guild_id: &GuildId) -> Result<bool, ManagementError>;
 }
 
 /// Category/Text Channel の属性更新を行う Port です。
@@ -414,13 +404,9 @@ pub(super) trait ChannelUpdater: ChannelSource {
 pub(super) trait ChannelPositionUpdater: ChannelSource {
     async fn update_channel_positions(
         &self,
-        _guild_id: &GuildId,
-        _updates: Vec<ChannelPositionUpdate>,
-    ) -> Result<ChannelPositionUpdateOutcome, ManagementError> {
-        Err(ManagementError::ChannelSource(
-            "Channel の位置更新 API が実装されていません".to_owned(),
-        ))
-    }
+        guild_id: &GuildId,
+        updates: Vec<ChannelPositionUpdate>,
+    ) -> Result<ChannelPositionUpdateOutcome, ManagementError>;
 }
 
 /// Category/Text Channel の作成・削除を行う Port です。
