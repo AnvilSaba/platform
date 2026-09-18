@@ -2335,6 +2335,20 @@ fn order_definition_is_typed_and_validated() {
         ManagementError::InvalidDefinition(message) if message.contains("order") && message.contains("重複")
     ));
 
+    let everyone_order = parse_definition(
+        r#"
+            schema_version = 1
+            [roles.everyone]
+            [order]
+            roles = ["everyone"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        everyone_order,
+        ManagementError::InvalidDefinition(message) if message.contains("@everyone") && message.contains("最下位固定")
+    ));
+
     let invalid_role_id = parse_definition(
         r#"
             schema_version = 1
@@ -2372,7 +2386,7 @@ async fn role_export_order_round_trips_into_an_empty_plan() {
     let exported_definition = parse_definition(&exported.definition_toml).unwrap();
     assert_eq!(
         exported_definition.order.as_ref().unwrap().roles,
-        vec![logical_id("top"), logical_id("bottom"), everyone_logical_id()]
+        vec![logical_id("top"), logical_id("bottom")]
     );
     let plan = plan_roles(&source, guild_id(100), &exported.definition_toml, &exported.state_json)
         .await
