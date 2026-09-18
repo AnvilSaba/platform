@@ -35,6 +35,7 @@ impl RoleUpdater for ApplyingFakeRoleSource {
 struct LifecycleFakeRoleSource {
     catalog: Arc<Mutex<RoleCatalog>>,
     catalog_calls: Arc<AtomicUsize>,
+    events: Arc<Mutex<Vec<String>>>,
     position_updates: Arc<Mutex<Vec<Vec<RolePositionUpdate>>>>,
     position_outcome: RolePositionUpdateOutcome,
     creates: Arc<Mutex<Vec<RoleCreate>>>,
@@ -70,6 +71,7 @@ impl RoleUpdater for LifecycleFakeRoleSource {
         role_id: &RoleId,
         update: RoleUpdate,
     ) -> Result<RoleUpdateOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("update:{role_id}"));
         let mut catalog = self.catalog.lock().unwrap();
         let role = catalog.roles.iter_mut().find(|role| role.id == *role_id).unwrap();
         update.apply_to(role);
@@ -83,6 +85,7 @@ impl RolePositionUpdater for LifecycleFakeRoleSource {
         _guild_id: &GuildId,
         updates: Vec<RolePositionUpdate>,
     ) -> Result<RolePositionUpdateOutcome, ManagementError> {
+        self.events.lock().unwrap().push("positions".to_owned());
         self.position_updates.lock().unwrap().push(updates.clone());
         let mut catalog = self.catalog.lock().unwrap();
         for update in updates {
@@ -99,6 +102,7 @@ impl RolePositionUpdater for LifecycleFakeRoleSource {
 
 impl RoleLifecycleTarget for LifecycleFakeRoleSource {
     async fn create_role(&self, _guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("create:{}", create.name));
         let call = {
             let mut creates = self.creates.lock().unwrap();
             creates.push(create.clone());
@@ -127,6 +131,7 @@ impl RoleLifecycleTarget for LifecycleFakeRoleSource {
     }
 
     async fn delete_role(&self, _guild_id: &GuildId, role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
+        self.events.lock().unwrap().push(format!("delete:{role_id}"));
         self.deletes.lock().unwrap().push(*role_id);
         if self.delete_permission_denied {
             return Err(ManagementError::RolePermissionDenied(
@@ -144,6 +149,7 @@ fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
     LifecycleFakeRoleSource {
         catalog: Arc::new(Mutex::new(catalog)),
         catalog_calls: Arc::new(AtomicUsize::new(0)),
+        events: Arc::new(Mutex::new(Vec::new())),
         position_updates: Arc::new(Mutex::new(Vec::new())),
         position_outcome: RolePositionUpdateOutcome::Applied,
         creates: Arc::new(Mutex::new(Vec::new())),
@@ -256,6 +262,72 @@ async fn apply_updates_role_positions_after_other_changes() {
         .unwrap()
         .position;
     assert!(second_position > first_position);
+}
+
+/// Role の属性変更を終えてから位置を更新し、再適用を無差分にする。
+#[tokio::test]
+async fn apply_orders_role_positions_after_attribute_change_and_is_idempotent() {
+    let mut first = role("200", "旧最初");
+    first.position = 3;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![first, second, everyone],
+        permission_names: known_permissions(["VIEW_CHANNEL"]),
+        grantable_permissions: known_permissions(["VIEW_CHANNEL"]),
+        default_permissions: known_permission_values([("VIEW_CHANNEL", true)]),
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "新最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let state_json = state("100", r#"{"first":"200","second":"300"}"#);
+    let plan = plan_roles(&source, guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let first_result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(first_result.status, RoleApplyStatus::Complete);
+    assert_eq!(
+        *source.events.lock().unwrap(),
+        vec!["update:200".to_owned(), "positions".to_owned()]
+    );
+    let event_count = source.events.lock().unwrap().len();
+
+    let second_plan = plan_roles(&source, guild_id(100), definition, &first_result.state_json)
+        .await
+        .unwrap();
+    assert!(second_plan.is_empty(), "成功後の再計画は無差分であるべきです");
+    let second_result = apply_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &first_result.state_json,
+        &second_plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(second_result.status, RoleApplyStatus::Complete);
+    assert_eq!(source.events.lock().unwrap().len(), event_count);
 }
 
 /// Role 位置 API の応答が不明でも、再取得した実順序が希望値なら成功として確定する。

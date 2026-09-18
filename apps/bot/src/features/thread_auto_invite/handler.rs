@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use anyhow::Context as _;
 use bot_macros::event_handler;
+use anyhow::Context as _;
 use serenity::{
     all::{ChannelType, Context, EditMessage, GuildId, Member, Mentionable, RoleId, prelude::CacheHttp},
     collector::CollectMessages,

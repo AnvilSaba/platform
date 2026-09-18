@@ -821,8 +821,10 @@ fn build_order_plan(
         }
         let Some(parent_id) = resolve_channel_order_id(parent_logical_id, definition, state, catalog)? else {
             // 親 Category が同じ apply の前段で作成される場合は、実 ID が確定
-            // するまで子 Channel の sibling 集合を解決できません。順序指定を
-            // 保留して、作成後の最新 state/catalog から再計画します。
+            // するまで子 Channel の sibling 集合を解決できません。ただし、
+            // 参照専用の子は親を変更できないため、作成後に解決できない指定を
+            // 保留せず、この時点で診断します。
+            validate_deferred_child_order(parent_logical_id, requested, definition, state, catalog)?;
             groups.push(OrderGroupPlan {
                 requested: requested.clone(),
                 updates: Vec::new(),
@@ -842,6 +844,51 @@ fn build_order_plan(
         }
     }
     Ok((!groups.is_empty()).then_some(OrderPlan { groups }))
+}
+
+fn validate_deferred_child_order(
+    parent_logical_id: &ChannelLogicalId,
+    requested_logical_ids: &[ChannelLogicalId],
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> Result<(), ManagementError> {
+    for logical_id in requested_logical_ids {
+        let channel_definition = definition
+            .channels
+            .get(logical_id)
+            .expect("order.children の子は DefinitionFile の検証済み宣言だけを参照します");
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            if channel_definition.is_reference() {
+                return Err(ManagementError::InvalidState(format!(
+                    "order.children の参照専用 Channel {logical_id} の対応がありません"
+                )));
+            }
+            continue;
+        };
+        let Some(channel) = catalog.channels.iter().find(|channel| channel.id == discord_id) else {
+            return Err(ManagementError::InvalidState(format!(
+                "order.children の Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
+        };
+        if channel.kind != ChannelKind::Text {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の Channel {logical_id} は Text の兄弟として指定できません"
+            )));
+        }
+        if channel_definition.is_reference() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の未作成 Category {parent_logical_id} には、現在の親が {:?} の参照専用 Channel {logical_id} を配置できません",
+                channel.parent_id
+            )));
+        }
+        if !channel.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "order.children の Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn project_channel_parents_for_order(
