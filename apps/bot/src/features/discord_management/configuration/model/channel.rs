@@ -287,6 +287,8 @@ pub(crate) struct ChannelAttributes {
     pub(crate) slowmode_seconds: Option<ChannelValue<u16>>,
     pub(crate) default_auto_archive_minutes: Option<ChannelValue<u16>>,
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
+    /// 親 Category と permission overwrite を同期する明示指定です。
+    pub(crate) permissions_sync: Option<bool>,
     pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
 }
 
@@ -317,6 +319,9 @@ impl ChannelAttributes {
         if later.default_thread_slowmode_seconds.is_some() {
             self.default_thread_slowmode_seconds
                 .clone_from(&later.default_thread_slowmode_seconds);
+        }
+        if later.permissions_sync.is_some() {
+            self.permissions_sync = later.permissions_sync;
         }
         for (subject, permissions) in &later.overwrites {
             self.overwrites
@@ -355,6 +360,16 @@ impl ChannelAttributes {
                 "Text Channel {logical_id} の parent に default は指定できません"
             )));
         }
+        if self.permissions_sync == Some(true) && !self.overwrites.is_empty() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {logical_id} の permissions_sync と個別 Overwrite は併用できません"
+            )));
+        }
+        if self.permissions_sync == Some(true) && kind == ChannelKind::Category {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Category {logical_id} には permissions_sync を指定できません"
+            )));
+        }
         Ok(())
     }
 
@@ -367,6 +382,7 @@ impl ChannelAttributes {
             && self.slowmode_seconds.is_none()
             && self.default_auto_archive_minutes.is_none()
             && self.default_thread_slowmode_seconds.is_none()
+            && self.permissions_sync.is_none()
             && self.overwrites.is_empty()
     }
 }
@@ -401,6 +417,8 @@ pub(crate) struct RawChannelAttributes {
     ))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) permissions_sync: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<PermissionName, OverwriteValue>>,
 }
@@ -420,6 +438,7 @@ impl RawChannelAttributes {
             slowmode_seconds,
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
+            permissions_sync,
             overwrites,
         } = self;
         let kind = kind.map(ChannelKind::from);
@@ -433,6 +452,7 @@ impl RawChannelAttributes {
             slowmode_seconds,
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
+            permissions_sync,
             overwrites,
         })
     }
