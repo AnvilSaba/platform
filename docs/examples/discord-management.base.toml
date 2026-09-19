@@ -24,6 +24,13 @@ slowmode_seconds = { default = true }
 VIEW_CHANNEL = "allow"
 SEND_MESSAGES = "deny"
 
+[channels.news]
+type = "announcement"
+name = "お知らせ"
+parent = "information"
+topic = "最新情報"
+default_auto_archive_minutes = 4320
+
 [message_sets.guidelines]
 channel = "rules"
 

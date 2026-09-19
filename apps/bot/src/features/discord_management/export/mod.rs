@@ -219,7 +219,12 @@ pub(super) async fn export_channels<S: ChannelSource>(
     let channels = catalog
         .channels
         .iter()
-        .filter(|channel| matches!(channel.kind, ChannelKind::Category | ChannelKind::Text))
+        .filter(|channel| {
+            matches!(
+                channel.kind,
+                ChannelKind::Category | ChannelKind::Text | ChannelKind::Announcement
+            )
+        })
         .filter(|channel| channel.manageable || previous_mappings.values().any(|id| *id == channel.id))
         .cloned()
         .collect::<Vec<_>>();
@@ -262,7 +267,9 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .collect::<Vec<_>>();
     let mut uncategorized = channels
         .iter()
-        .filter(|channel| channel.kind == ChannelKind::Text && channel.parent_id.is_none())
+        .filter(|channel| {
+            matches!(channel.kind, ChannelKind::Text | ChannelKind::Announcement) && channel.parent_id.is_none()
+        })
         .collect::<Vec<_>>();
     uncategorized.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
     let order_uncategorized = uncategorized
@@ -346,7 +353,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .expect("論理 ID は先行する対応付けで生成されています")
             .clone();
         let kind = channel.kind;
-        let is_permissions_sync = kind == ChannelKind::Text
+        let is_permissions_sync = matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
             && channel.parent_id.is_some_and(|parent_id| {
                 catalog
                     .channels
@@ -360,6 +367,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
             kind: Some(match kind {
                 ChannelKind::Category => RawChannelKind::Category,
                 ChannelKind::Text => RawChannelKind::Text,
+                ChannelKind::Announcement => RawChannelKind::Announcement,
                 ChannelKind::Unsupported => unreachable!("Unsupported Channel は export 対象に含まれません"),
             }),
             name: Some(ChannelValue::Value(channel.name)),
@@ -374,12 +382,12 @@ pub(super) async fn export_channels<S: ChannelSource>(
                 })?;
                 attributes.parent = Some(ChannelValue::Value(parent.clone()));
             }
-            None if kind == ChannelKind::Text => {
+            None if matches!(kind, ChannelKind::Text | ChannelKind::Announcement) => {
                 attributes.parent = Some(ChannelValue::Clear);
             }
             None => {}
         }
-        if kind == ChannelKind::Text {
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement) {
             match channel.topic {
                 Some(topic) => {
                     attributes.topic = Some(ChannelValue::Value(topic));
@@ -393,8 +401,10 @@ pub(super) async fn export_channels<S: ChannelSource>(
             if let Some(minutes) = channel.default_auto_archive_minutes {
                 attributes.default_auto_archive_minutes = Some(ChannelValue::Value(minutes));
             }
-            attributes.default_thread_slowmode_seconds =
-                Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
+            if kind == ChannelKind::Text {
+                attributes.default_thread_slowmode_seconds =
+                    Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
+            }
         }
         if is_permissions_sync {
             attributes.permissions_sync = Some(true);
