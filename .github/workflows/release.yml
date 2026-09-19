@@ -48,10 +48,16 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
+      - name: Validate release source
+        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+        shell: bash
+        run: |
+          echo "::error::実リリースは main ブランチからのみ実行できます。"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ inputs.dry_run && github.sha || 'main' }}
       - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
         with:
           tool: git-cliff@2.14.2
