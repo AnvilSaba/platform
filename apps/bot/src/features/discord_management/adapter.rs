@@ -1,9 +1,15 @@
 use std::collections::BTreeMap;
 
-use serenity::all::{GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId};
+use serenity::{
+    Error as SerenityError,
+    all::{Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId},
+    http::HttpError,
+};
 
 use super::ids::{GuildId, RoleId};
-use super::service::{ManagementError, RoleCatalog, RoleSnapshot, RoleSource};
+use super::service::{
+    ManagementError, RoleCatalog, RoleSnapshot, RoleSource, RoleTarget, RoleUpdate, RoleUpdateOutcome,
+};
 
 impl From<SerenityGuildId> for GuildId {
     fn from(id: SerenityGuildId) -> Self {
@@ -27,10 +33,6 @@ impl From<RoleId> for SerenityRoleId {
     fn from(id: RoleId) -> Self {
         Self::new(id.get())
     }
-}
-
-fn is_lower_in_hierarchy(position: i16, id: SerenityRoleId, highest_position: i16, highest_id: SerenityRoleId) -> bool {
-    position < highest_position || (position == highest_position && id > highest_id)
 }
 
 pub struct SerenityRoleSource<'a> {
@@ -79,14 +81,19 @@ impl RoleSource for SerenityRoleSource<'_> {
                 "Bot に MANAGE_ROLES 権限がありません".to_owned(),
             ));
         }
+        let grantable_permissions = if bot_permissions.contains(Permissions::ADMINISTRATOR) {
+            Permissions::all()
+        } else {
+            bot_permissions
+        };
 
         let mut snapshots = roles
             .into_iter()
             .map(|role| RoleSnapshot {
                 id: RoleId::from(role.id),
-                manageable: role.id != everyone_id
-                    && !role.managed()
-                    && is_lower_in_hierarchy(role.position, role.id, bot_highest_role.position, bot_highest_role.id),
+                // Serenity の Role::Ord が Discord の階層順（position、同値時は Snowflake）を表す。
+                // @everyone は通常の階層編集ではなく、基底権限の更新対象として明示的に許可する。
+                manageable: role.id == everyone_id || (!role.managed() && role.cmp(&bot_highest_role).is_lt()),
                 name: role.name.to_string(),
                 color: role.colour.0,
                 hoist: role.hoist(),
@@ -104,6 +111,11 @@ impl RoleSource for SerenityRoleSource<'_> {
                 .iter_names()
                 .map(|(name, _)| name.to_owned())
                 .collect(),
+            grantable_permissions: Permissions::all()
+                .iter_names()
+                .filter(|&(_, permission)| grantable_permissions.contains(permission))
+                .map(|(name, _)| name.to_owned())
+                .collect(),
             default_permissions: Permissions::all()
                 .iter_names()
                 .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
@@ -112,23 +124,51 @@ impl RoleSource for SerenityRoleSource<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl RoleTarget for SerenityRoleSource<'_> {
+    async fn update_role(
+        &self,
+        guild_id: &GuildId,
+        role_id: &RoleId,
+        update: RoleUpdate,
+    ) -> Result<RoleUpdateOutcome, ManagementError> {
+        let mut edit = EditRole::new();
+        if let Some(name) = update.name {
+            edit = edit.name(name);
+        }
+        if let Some(color) = update.color {
+            edit = edit.colour(Colour::new(color));
+        }
+        if let Some(hoist) = update.hoist {
+            edit = edit.hoist(hoist);
+        }
+        if let Some(mentionable) = update.mentionable {
+            edit = edit.mentionable(mentionable);
+        }
+        if let Some(permission_values) = update.permissions {
+            let mut permissions = Permissions::empty();
+            for (name, enabled) in permission_values {
+                let permission = Permissions::all()
+                    .iter_names()
+                    .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
+                    .ok_or_else(|| {
+                        ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています"))
+                    })?;
+                if enabled {
+                    permissions |= permission;
+                }
+            }
+            edit = edit.permissions(permissions);
+        }
 
-    #[test]
-    fn same_position_role_with_larger_snowflake_is_lower() {
-        assert!(is_lower_in_hierarchy(
-            10,
-            SerenityRoleId::new(201),
-            10,
-            SerenityRoleId::new(200)
-        ));
-        assert!(!is_lower_in_hierarchy(
-            10,
-            SerenityRoleId::new(199),
-            10,
-            SerenityRoleId::new(200)
-        ));
+        match SerenityGuildId::from(*guild_id)
+            .edit_role(self.http, SerenityRoleId::from(*role_id), edit)
+            .await
+        {
+            Ok(_) => Ok(RoleUpdateOutcome::Applied),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(RoleUpdateOutcome::ResponseUnknown)
+            }
+            Err(error) => Err(ManagementError::RoleSource(error.to_string())),
+        }
     }
 }
