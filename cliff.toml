@@ -70,6 +70,7 @@ commit_preprocessors = [
   { pattern = "\\(#([0-9]+)\\)", replace = "([#$1](https://github.com/anvilsaba/platform/pull/$1))" },
 ]
 commit_parsers = [
+  { message = "^Merge ", skip = true },
   { message = "^feat", group = "<!-- 0 -->機能追加" },
   { message = "^fix", group = "<!-- 1 -->バグ修正" },
   { message = "^perf", group = "<!-- 2 -->性能改善" },
