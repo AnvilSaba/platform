@@ -34,30 +34,53 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: write
-  packages: write
+permissions: {}
 
 concurrency:
   group: release-${{ inputs.app }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  dry-run:
+    if: ${{ inputs.dry_run }}
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.release.outputs.tag }}
+    permissions:
+      contents: read
     steps:
-      - name: Validate release source
-        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
+        with:
+          tool: git-cliff@2.14.2
+      - name: Prepare release
+        shell: pwsh
+        run: |
+          ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' -DryRun
+
+  reject-release:
+    if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject release outside main
         shell: bash
         run: |
           echo "::error::実リリースは main ブランチからのみ実行できます。"
           exit 1
+
+  release:
+    if: ${{ !inputs.dry_run && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ inputs.dry_run && github.sha || 'main' }}
+          ref: main
       - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
         with:
           tool: git-cliff@2.14.2
@@ -65,11 +88,9 @@ jobs:
         id: release
         shell: pwsh
         run: |
-          $dryRun = [System.Convert]::ToBoolean('${{ inputs.dry_run }}')
-          $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' -DryRun:$dryRun | Select-Object -Last 1
+          $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' | Select-Object -Last 1
           "tag=$tag" >> $env:GITHUB_OUTPUT
       - name: Commit and tag
-        if: ${{ !inputs.dry_run }}
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
@@ -81,22 +102,31 @@ jobs:
           git push origin HEAD:main "${RELEASE_TAG}"
 
   build-bot-image:
-    if: inputs.app == 'bot' && !inputs.dry_run
+    if: ${{ inputs.app == 'bot' && !inputs.dry_run }}
     needs: release
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/image-bot.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
   build-mcguildlink-image:
-    if: inputs.app == 'mcguildlink' && !inputs.dry_run
+    if: ${{ inputs.app == 'mcguildlink' && !inputs.dry_run }}
     needs: release
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/image-mcguildlink.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
   publish-platform-chart:
-    if: inputs.app == 'chart' && !inputs.dry_run
+    if: ${{ inputs.app == 'chart' && !inputs.dry_run }}
     needs: release
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/chart-platform.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
