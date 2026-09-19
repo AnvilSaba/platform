@@ -54,7 +54,7 @@ jobs:
           ref: main
       - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
         with:
-          tool: git-cliff@2.13.1
+          tool: git-cliff@2.14.2
       - name: Prepare release
         id: release
         shell: pwsh
