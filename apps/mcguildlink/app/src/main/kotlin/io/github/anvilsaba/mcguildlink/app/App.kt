@@ -59,14 +59,14 @@ class App(
         val kord = Kord(config.bot.token) {
             httpClient = HttpClient(Java)
             gateways { resources, shards ->
-                val identifyRateLimiter = IdentifyRateLimiter(
+                val rateLimiter = IdentifyRateLimiter(
                     maxConcurrency = resources.maxConcurrency,
                     dispatcher = defaultDispatcher,
                 )
                 shards.map {
                     DefaultGateway {
                         client = resources.httpClient
-                        identifyRateLimiter = identifyRateLimiter
+                        identifyRateLimiter = rateLimiter
                         reconnectRetry = UnlimitedLinearRetry()
                     }
                 }
