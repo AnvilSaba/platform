@@ -42,7 +42,7 @@ if ($existingTags.Count -eq 0) {
     $nextVersion = $currentVersion
     Write-Host "$App には既存タグがないため、初回バージョン v$nextVersion を使用します。"
 } else {
-    $cliffBumpArgs = @("--config", "cliff.toml", "--bumped-version", "--tag-pattern", $tagPattern)
+    $cliffBumpArgs = @("--config", "cliff.toml", "--bumped-version", "--offline", "--tag-pattern", $tagPattern)
     foreach ($path in $settings.Paths) { $cliffBumpArgs += "--include-path=$path" }
     if ($Bump -ne "auto") { $cliffBumpArgs += @("--bump", $Bump) }
     $nextVersion = (& git-cliff @cliffBumpArgs).Trim() -replace "^$([regex]::Escape($App))/v", ""
