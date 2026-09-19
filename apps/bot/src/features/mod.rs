@@ -1,6 +1,6 @@
 mod admin;
 mod auth;
-mod discord_management;
+pub(crate) mod discord_management;
 mod honeypot;
 mod message_cache_handler;
 mod message_logging;
@@ -49,6 +49,9 @@ pub fn commands() -> Vec<AppCommand> {
         question::question,
         pin::pin,
         discord_management::bind,
+        discord_management::channel_apply,
+        discord_management::channel_export,
+        discord_management::channel_plan,
         discord_management::role_apply,
         discord_management::role_export,
         discord_management::role_plan,

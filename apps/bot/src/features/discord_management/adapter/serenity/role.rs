@@ -1,27 +1,29 @@
-use std::collections::BTreeMap;
-
 use serenity::{
     Error as SerenityError,
-    all::{Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId},
+    all::{Colour, EditRole, GuildId as SerenityGuildId, Permissions, RoleId as SerenityRoleId},
     http::{HttpError, StatusCode},
 };
 
-use super::ids::{GuildId, RoleId};
-use super::service::{
-    ManagementError, ResourceLookup, ResourceSource, ResourceType, RoleCatalog, RoleCreate, RoleCreateOutcome,
-    RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleSource, RoleUpdate, RoleUpdateOutcome, RoleUpdater,
+use crate::features::discord_management::configuration::{Color, KnownPermission, PermissionVocabulary};
+use crate::features::discord_management::domain::ManagementError;
+use crate::features::discord_management::ids::{GuildId, RoleId};
+use crate::features::discord_management::port::{
+    RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleLifecycleTarget, RoleSnapshot, RoleSource,
+    RoleUpdate, RoleUpdateOutcome, RoleUpdater,
 };
 
-impl From<SerenityGuildId> for GuildId {
-    fn from(id: SerenityGuildId) -> Self {
-        Self::new(id.get())
-    }
+use super::resource::SerenityManagementAdapter;
+
+pub(crate) fn permission_vocabulary() -> PermissionVocabulary {
+    PermissionVocabulary::from_names(Permissions::all().iter_names().map(|(name, _)| name.to_owned()))
+        .expect("Serenity の権限名は字句的に妥当です")
 }
 
-impl From<GuildId> for SerenityGuildId {
-    fn from(id: GuildId) -> Self {
-        Self::new(id.get())
-    }
+pub(super) fn serenity_permission(permission: &KnownPermission) -> Permissions {
+    Permissions::all()
+        .iter_names()
+        .find_map(|(known_name, permission_value)| (known_name == permission.as_str()).then_some(permission_value))
+        .expect("PermissionVocabulary と Serenity の権限語彙が一致しています")
 }
 
 impl From<SerenityRoleId> for RoleId {
@@ -36,18 +38,7 @@ impl From<RoleId> for SerenityRoleId {
     }
 }
 
-pub struct SerenityRoleSource<'a> {
-    http: &'a Http,
-    bot_user_id: UserId,
-}
-
-impl<'a> SerenityRoleSource<'a> {
-    pub fn new(http: &'a Http, bot_user_id: UserId) -> Self {
-        Self { http, bot_user_id }
-    }
-}
-
-impl RoleSource for SerenityRoleSource<'_> {
+impl RoleSource for SerenityManagementAdapter<'_> {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
         let guild_id = SerenityGuildId::from(*guild_id);
         let roles = guild_id.roles(self.http).await.map_err(map_role_catalog_error)?;
@@ -84,6 +75,7 @@ impl RoleSource for SerenityRoleSource<'_> {
         } else {
             bot_permissions
         };
+        let known_permissions = permission_vocabulary().known_permissions().collect::<Vec<_>>();
 
         let mut snapshots = roles
             .into_iter()
@@ -93,30 +85,35 @@ impl RoleSource for SerenityRoleSource<'_> {
                 // @everyone は通常の階層編集ではなく、基底権限の更新対象として明示的に許可する。
                 manageable: role.id == everyone_id || (!role.managed() && role.cmp(&bot_highest_role).is_lt()),
                 name: role.name.to_string(),
-                color: role.colour.0,
+                color: Color::new(role.colour.0).expect("Discord Role の color は常に24-bit範囲です"),
                 hoist: role.hoist(),
                 mentionable: role.mentionable(),
-                permissions: Permissions::all()
-                    .iter_names()
-                    .map(|(name, permission)| (name.to_owned(), role.permissions.contains(permission)))
-                    .collect::<BTreeMap<_, _>>(),
+                permissions: known_permissions
+                    .iter()
+                    .cloned()
+                    .map(|permission| {
+                        let serenity_permission = serenity_permission(&permission);
+                        (permission, role.permissions.contains(serenity_permission))
+                    })
+                    .collect(),
             })
             .collect::<Vec<_>>();
         snapshots.sort_by_key(|role| role.id);
         Ok(RoleCatalog {
             roles: snapshots,
-            permission_names: Permissions::all()
-                .iter_names()
-                .map(|(name, _)| name.to_owned())
+            permission_names: known_permissions.iter().cloned().collect(),
+            grantable_permissions: known_permissions
+                .iter()
+                .filter(|permission| grantable_permissions.contains(serenity_permission(permission)))
+                .cloned()
                 .collect(),
-            grantable_permissions: Permissions::all()
-                .iter_names()
-                .filter(|&(_, permission)| grantable_permissions.contains(permission))
-                .map(|(name, _)| name.to_owned())
-                .collect(),
-            default_permissions: Permissions::all()
-                .iter_names()
-                .map(|(name, permission)| (name.to_owned(), everyone_permissions.contains(permission)))
+            default_permissions: known_permissions
+                .iter()
+                .cloned()
+                .map(|permission| {
+                    let serenity_permission = serenity_permission(&permission);
+                    (permission, everyone_permissions.contains(serenity_permission))
+                })
                 .collect(),
         })
     }
@@ -131,51 +128,7 @@ fn map_role_catalog_error(error: SerenityError) -> ManagementError {
     }
 }
 
-impl ResourceSource for SerenityRoleSource<'_> {
-    async fn lookup_resource(
-        &self,
-        guild_id: &GuildId,
-        discord_id: u64,
-    ) -> Result<Option<ResourceLookup>, ManagementError> {
-        let guild_id = SerenityGuildId::from(*guild_id);
-        let channels = guild_id
-            .channels(self.http)
-            .await
-            .map_err(|error| ManagementError::ResourceSource(error.to_string()))?;
-        if channels.into_iter().any(|channel| channel.id.get() == discord_id) {
-            return Ok(Some(ResourceLookup {
-                resource_type: ResourceType::Channel,
-                guild_id: GuildId::from(guild_id),
-            }));
-        }
-
-        let roles = guild_id
-            .roles(self.http)
-            .await
-            .map_err(|error| ManagementError::ResourceSource(error.to_string()))?;
-        if roles.contains_key(&SerenityRoleId::new(discord_id)) {
-            return Ok(Some(ResourceLookup {
-                resource_type: ResourceType::Role,
-                guild_id: GuildId::from(guild_id),
-            }));
-        }
-
-        match guild_id.member(self.http, UserId::new(discord_id)).await {
-            Ok(_) => {
-                return Ok(Some(ResourceLookup {
-                    resource_type: ResourceType::Member,
-                    guild_id: GuildId::from(guild_id),
-                }));
-            }
-            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::NOT_FOUND) => {}
-            Err(error) => return Err(ManagementError::ResourceSource(error.to_string())),
-        }
-
-        Ok(None)
-    }
-}
-
-impl RoleUpdater for SerenityRoleSource<'_> {
+impl RoleUpdater for SerenityManagementAdapter<'_> {
     async fn update_role(
         &self,
         guild_id: &GuildId,
@@ -187,7 +140,7 @@ impl RoleUpdater for SerenityRoleSource<'_> {
             edit = edit.name(name);
         }
         if let Some(color) = update.color {
-            edit = edit.colour(Colour::new(color));
+            edit = edit.colour(Colour::new(color.get()));
         }
         if let Some(hoist) = update.hoist {
             edit = edit.hoist(hoist);
@@ -198,12 +151,7 @@ impl RoleUpdater for SerenityRoleSource<'_> {
         if let Some(permission_values) = update.permissions {
             let mut permissions = Permissions::empty();
             for (name, enabled) in permission_values {
-                let permission = Permissions::all()
-                    .iter_names()
-                    .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
-                    .ok_or_else(|| {
-                        ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています"))
-                    })?;
+                let permission = serenity_permission(&name);
                 if enabled {
                     permissions |= permission;
                 }
@@ -224,19 +172,16 @@ impl RoleUpdater for SerenityRoleSource<'_> {
     }
 }
 
-impl RoleLifecycleTarget for SerenityRoleSource<'_> {
+impl RoleLifecycleTarget for SerenityManagementAdapter<'_> {
     async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
         let mut edit = EditRole::new()
             .name(create.name)
-            .colour(Colour::new(create.color))
+            .colour(Colour::new(create.color.get()))
             .hoist(create.hoist)
             .mentionable(create.mentionable);
         let mut permissions = Permissions::empty();
         for (name, enabled) in create.permissions {
-            let permission = Permissions::all()
-                .iter_names()
-                .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
-                .ok_or_else(|| ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています")))?;
+            let permission = serenity_permission(&name);
             if enabled {
                 permissions |= permission;
             }

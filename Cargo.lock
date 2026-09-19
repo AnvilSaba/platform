@@ -194,13 +194,13 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "serdev",
  "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86)",
  "similar",
  "sysinfo",
  "thiserror",
  "tokio",
  "toml",
+ "toml_edit",
  "tracing",
  "tracing-subscriber",
  "validator",
@@ -2180,27 +2180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serdev"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e4fe8a010ca6819b605a68e11a592b787f1b9cda352491c1fc6c1c3b64d1393"
-dependencies = [
- "serde",
- "serdev_derive",
-]
-
-[[package]]
-name = "serdev_derive"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98a619df9c5d492c6d3ce259fd546e965991582e0b07e4a438cac0df57eb675c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "serenity"
 version = "0.12.5"
 source = "git+https://github.com/serenity-rs/serenity?branch=next#37b9f433ada8b9ccc5f93f04826403b175855f86"
@@ -2622,10 +2601,19 @@ dependencies = [
  "indexmap 2.14.0",
  "serde_core",
  "serde_spanned",
- "toml_datetime",
+ "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow 1.0.4",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "0.7.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -2635,6 +2623,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.24.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01f2eadbbc6b377a847be05f60791ef1058d9f696ecb51d2c07fe911d8569d8e"
+dependencies = [
+ "indexmap 2.14.0",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
 ]
 
 [[package]]

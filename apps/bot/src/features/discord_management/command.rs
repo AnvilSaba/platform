@@ -11,16 +11,22 @@ use serenity::{
 };
 use tracing::warn;
 
-use crate::app::{AppContext, AppError};
+use crate::app::{AppContext, AppError, BotDataExt};
 
 use super::{
-    adapter::SerenityRoleSource,
+    adapter::SerenityManagementAdapter,
+    apply::{RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleApplyWorkflow},
+    bind::BindWorkflow,
     confirmation::{ConfirmationError, ConfirmationStore},
+    domain::{ManagementError, ResourceType},
+    export::{export_channels, export_roles},
     ids::GuildId,
-    service::{
-        ManagementError, ResourceType, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleLifecycleChange,
-        RoleManagementService, RolePlan,
+    plan::{plan_channels, plan_roles},
+    resource::channel::{
+        ChannelPlan,
+        apply::{ChannelApplyOptions, ChannelApplyResult, ChannelApplyStatus, ChannelApplyWorkflow},
     },
+    resource::role::RolePlan,
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -49,6 +55,14 @@ struct PendingRoleApply {
     plan: RolePlan,
 }
 
+#[derive(Clone)]
+struct PendingChannelApply {
+    guild_id: GuildId,
+    definition: String,
+    state: String,
+    plan: ChannelPlan,
+}
+
 fn render_apply_result(result: &RoleApplyResult) -> String {
     let summary = match &result.status {
         RoleApplyStatus::Complete => "Role の変更を適用しました。".to_owned(),
@@ -61,29 +75,57 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
         RoleApplyStatus::DeletionPermissionDenied(error) => {
             format!("Discord の Role 削除権限が不足しているため停止しました: {error}")
         }
-        RoleApplyStatus::DeletionVerificationPermissionDenied(error) => {
-            format!("削除後の存在確認に必要な権限が不足しているため停止しました: {error}")
-        }
         RoleApplyStatus::CreationResponseUnknown => {
-            "Role 作成の応答を確認できませんでした。重複作成を避けるため、state の確認が必要です。".to_owned()
+            "Role 作成の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         RoleApplyStatus::DeletionResponseUnknown => {
-            "Role 削除の応答を確認できませんでした。既知の ID と削除意図を保持して停止しました。".to_owned()
-        }
-        RoleApplyStatus::DeletionVerificationIndeterminate(error) => {
-            format!("Role 削除後の存在確認が判定不能なため停止しました。削除済みとは扱いません: {error}")
+            "Role 削除の応答を確認できませんでした。対応表は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
         RoleApplyStatus::Failed(error) => format!("Role の変更中に失敗したため停止しました: {error}"),
         RoleApplyStatus::ResponseUnknown => {
-            "Role 更新の応答を確認できず、再取得した値も希望値と一致しないため停止しました。".to_owned()
+            "Role 更新の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
         }
     };
     format!(
-        "{summary}\n成功した属性: {} / Role 操作: {}\n未完了の属性: {} / Role 操作: {}",
+        "{summary}\n成功した Role: {}\n未完了の Role: {}",
         result.applied.len(),
-        result.applied_lifecycle.len(),
         result.pending.len(),
-        result.pending_lifecycle.len(),
+    )
+}
+
+fn render_channel_apply_result(result: &ChannelApplyResult) -> String {
+    let summary = match &result.status {
+        ChannelApplyStatus::Complete => "Channel の変更を適用しました。".to_owned(),
+        ChannelApplyStatus::GuildBusy => "同じ Guild の別の apply が進行中です。".to_owned(),
+        ChannelApplyStatus::ReplanRequired => {
+            "確認後に管理対象 Channel が変化しました。新しい plan を確認してください。".to_owned()
+        }
+        ChannelApplyStatus::DeadlineExceeded => "処理期限に達したため、新しい変更を開始せず停止しました。".to_owned(),
+        ChannelApplyStatus::DeletionPermissionRequired => "削除を含むため、削除許可付きの確認が必要です。".to_owned(),
+        ChannelApplyStatus::DeletionPermissionDenied(error) => {
+            format!("Discord の Channel 削除権限が不足しているため停止しました: {error}")
+        }
+        ChannelApplyStatus::CreationResponseUnknown => {
+            "Channel 作成の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
+        }
+        ChannelApplyStatus::DeletionResponseUnknown => {
+            "Channel 削除の応答を確認できませんでした。対応表は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
+        }
+        ChannelApplyStatus::Failed(error) => format!("Channel の変更中に失敗したため停止しました: {error}"),
+        ChannelApplyStatus::ResponseUnknown => {
+            "Channel 更新の応答を確認できませんでした。state は更新していないため、Discord 上の結果を確認してください。"
+                .to_owned()
+        }
+    };
+    format!(
+        "{summary}\n成功した Channel: {}\n未完了の Channel: {}",
+        result.applied.len(),
+        result.pending.len(),
     )
 }
 
@@ -129,10 +171,10 @@ pub async fn bind(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
 
-    match service
+    match BindWorkflow::new(&source, &vocabulary)
         .bind_resource(
             guild_id,
             &definition_text,
@@ -179,10 +221,9 @@ pub async fn role_export(
         None => None,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
 
-    match service.export_roles(guild_id, state_text.as_deref()).await {
+    match export_roles(&source, guild_id, state_text.as_deref()).await {
         Ok(files) => {
             ctx.send(
                 CreateReply::default()
@@ -220,10 +261,10 @@ pub async fn role_plan(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
 
-    match service.plan_roles(guild_id, &definition_text, &state_text).await {
+    match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => {
             ctx.send(
                 CreateReply::default()
@@ -260,17 +301,14 @@ pub async fn role_apply(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
-    let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-    let service = RoleManagementService::new(source);
-    let plan = match service.plan_roles(guild_id, &definition_text, &state_text).await {
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
+    let plan = match plan_roles(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
         Ok(plan) => plan,
         Err(error) => return send_input_error(ctx, error).await,
     };
     let rendered_plan = plan.render();
-    let deletion_in_plan = plan
-        .lifecycle
-        .iter()
-        .any(|change| matches!(change, RoleLifecycleChange::Delete { .. }));
+    let deletion_in_plan = plan.contains_deletions();
 
     let confirmations = ConfirmationStore::default();
     let pending = PendingRoleApply {
@@ -354,10 +392,12 @@ pub async fn role_apply(
             }
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
-                let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-                let service = RoleManagementService::new(source);
+                let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+                let bot_data = ctx.bot_data();
+                let apply_lock = bot_data.discord_management_apply_lock();
+                let workflow = RoleApplyWorkflow::new(apply_lock, &source, &vocabulary);
                 let result = if allow_deletions {
-                    service
+                    workflow
                         .apply_roles_with_options(
                             payload.guild_id,
                             &payload.definition,
@@ -368,7 +408,7 @@ pub async fn role_apply(
                         )
                         .await
                 } else {
-                    service
+                    workflow
                         .apply_roles(
                             payload.guild_id,
                             &payload.definition,
@@ -398,6 +438,244 @@ pub async fn role_apply(
                         response?;
                     }
                     Err(_) => warn!("Role apply result response exceeded the two-minute return budget"),
+                }
+                if needs_deletion_confirmation {
+                    continue;
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 管理可能な Category/Text Channel の現在値と対応 state を出力します。
+#[poise::command(
+    slash_command,
+    ephemeral,
+    guild_only,
+    owners_only,
+    required_bot_permissions = "MANAGE_CHANNELS"
+)]
+pub async fn channel_export(
+    ctx: AppContext<'_>,
+    #[description = "再 export で論理 ID を維持する state JSON"] state: Option<Attachment>,
+) -> Result<(), AppError> {
+    ctx.defer_ephemeral().await?;
+    let state_text = match state.as_ref() {
+        Some(attachment) => match read_text(attachment).await {
+            Ok(text) => Some(text),
+            Err(error) => return send_input_error(ctx, error).await,
+        },
+        None => None,
+    };
+    let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+
+    match export_channels(&source, guild_id, state_text.as_deref()).await {
+        Ok(files) => {
+            ctx.send(
+                CreateReply::default()
+                    .content("Category/Text Channel の定義と state を出力しました。")
+                    .attachment(CreateAttachment::bytes(files.definition_toml, "discord-channels.toml"))
+                    .attachment(CreateAttachment::bytes(files.state_json, "discord-state.json")),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(error) => send_input_error(ctx, error).await,
+    }
+}
+
+/// Category/Text Channel 定義と実構成を比較し、属性単位の変更計画を出力します。
+#[poise::command(
+    slash_command,
+    ephemeral,
+    guild_only,
+    owners_only,
+    required_bot_permissions = "MANAGE_CHANNELS"
+)]
+pub async fn channel_plan(
+    ctx: AppContext<'_>,
+    #[description = "希望構成の TOML"] definition: Attachment,
+    #[description = "対象 Guild の state JSON"] state: Attachment,
+) -> Result<(), AppError> {
+    ctx.defer_ephemeral().await?;
+    let definition_text = match read_text(&definition).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let state_text = match read_text(&state).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
+
+    match plan_channels(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
+        Ok(plan) => {
+            ctx.send(
+                CreateReply::default()
+                    .content("Category/Text Channel の変更計画を出力しました。")
+                    .attachment(CreateAttachment::bytes(plan.render(), "discord-channel-plan.txt")),
+            )
+            .await?;
+            Ok(())
+        }
+        Err(error) => send_input_error(ctx, error).await,
+    }
+}
+
+/// Category/Text Channel の変更計画を確認後、一度限りのボタン操作で適用します。
+#[poise::command(
+    slash_command,
+    ephemeral,
+    guild_only,
+    owners_only,
+    required_bot_permissions = "MANAGE_CHANNELS"
+)]
+pub async fn channel_apply(
+    ctx: AppContext<'_>,
+    #[description = "希望構成の TOML"] definition: Attachment,
+    #[description = "対象 Guild の state JSON"] state: Attachment,
+) -> Result<(), AppError> {
+    ctx.defer_ephemeral().await?;
+    let definition_text = match read_text(&definition).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let state_text = match read_text(&state).await {
+        Ok(text) => text,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let guild_id = GuildId::from(ctx.guild_id().expect("guild_only command"));
+    let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+    let vocabulary = source.permission_vocabulary();
+    let plan = match plan_channels(&source, &vocabulary, guild_id, &definition_text, &state_text).await {
+        Ok(plan) => plan,
+        Err(error) => return send_input_error(ctx, error).await,
+    };
+    let rendered_plan = plan.render();
+    let deletion_in_plan = plan.contains_deletions();
+
+    let confirmations = ConfirmationStore::default();
+    let pending = PendingChannelApply {
+        guild_id,
+        definition: definition_text,
+        state: state_text,
+        plan,
+    };
+    let token = confirmations.issue(ctx.author().id.get(), pending.clone(), Instant::now());
+    let deletion_token = deletion_in_plan.then(|| confirmations.issue(ctx.author().id.get(), pending, Instant::now()));
+    let custom_id = token.custom_id();
+    let deletion_custom_id = deletion_token.as_ref().map(|token| token.custom_id());
+    let mut buttons = vec![
+        CreateButton::new(&custom_id)
+            .label("Channel の変更を適用")
+            .style(ButtonStyle::Primary),
+    ];
+    if let Some(custom_id) = &deletion_custom_id {
+        buttons.push(
+            CreateButton::new(custom_id)
+                .label("削除を許可して適用")
+                .style(ButtonStyle::Danger),
+        );
+    }
+
+    ctx.send(
+        CreateReply::default()
+            .content("添付の変更計画を確認し、5分以内に適用してください。")
+            .attachment(CreateAttachment::bytes(rendered_plan, "discord-channel-plan.txt"))
+            .components(&[CreateComponent::ActionRow(CreateActionRow::buttons(&buttons))]),
+    )
+    .await?;
+
+    let custom_ids: FixedArray<FixedString> = std::iter::once(custom_id.clone())
+        .chain(deletion_custom_id.clone())
+        .map(FixedString::from_string_trunc)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let mut interactions = ComponentInteractionCollector::new(ctx.serenity_context())
+        .custom_ids(custom_ids)
+        .timeout(CONFIRMATION_WINDOW)
+        .stream();
+    while let Some(interaction) = interactions.next().await {
+        interaction.defer_ephemeral(ctx.http()).await?;
+        let allow_deletions = deletion_custom_id
+            .as_deref()
+            .is_some_and(|custom_id| custom_id == interaction.data.custom_id);
+        let selected_token = if allow_deletions {
+            deletion_token.as_ref().expect("削除ボタンには削除用トークンがあります")
+        } else {
+            &token
+        };
+        match confirmations.consume(selected_token, interaction.user.id.get(), Instant::now()) {
+            Err(ConfirmationError::WrongOwner) => {
+                interaction
+                    .edit_response(
+                        ctx.http(),
+                        EditInteractionResponse::new().content("この確認ボタンは plan の作成者だけが操作できます。"),
+                    )
+                    .await?;
+            }
+            Err(ConfirmationError::Expired) => {
+                interaction
+                    .edit_response(
+                        ctx.http(),
+                        EditInteractionResponse::new()
+                            .content("確認ボタンは失効しました。もう一度 plan を作成してください。"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+            Err(ConfirmationError::AlreadyConsumed | ConfirmationError::Unknown) => {
+                interaction
+                    .edit_response(
+                        ctx.http(),
+                        EditInteractionResponse::new().content("この確認ボタンはすでに使用されています。"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+            Ok(payload) => {
+                let deadlines = apply_deadlines(Instant::now());
+                let source = SerenityManagementAdapter::new(ctx.http(), ctx.cache().current_user().id);
+                let bot_data = ctx.bot_data();
+                let apply_lock = bot_data.discord_management_apply_lock();
+                let workflow = ChannelApplyWorkflow::new(apply_lock, &source, &vocabulary);
+                let result = workflow
+                    .apply_channels_with_options(
+                        payload.guild_id,
+                        &payload.definition,
+                        &payload.state,
+                        &payload.plan,
+                        ChannelApplyOptions { allow_deletions },
+                        deadlines.processing,
+                    )
+                    .await;
+                let needs_deletion_confirmation = matches!(
+                    &result,
+                    Ok(result) if result.status == ChannelApplyStatus::DeletionPermissionRequired
+                );
+                let edit = match result {
+                    Ok(result) => EditInteractionResponse::new()
+                        .content(render_channel_apply_result(&result))
+                        .new_attachment(CreateAttachment::bytes(result.state_json, "discord-state.json")),
+                    Err(error) => EditInteractionResponse::new().content(format!("入力を確認してください。\n{error}")),
+                };
+                match tokio::time::timeout(
+                    deadlines.response.saturating_duration_since(Instant::now()),
+                    interaction.edit_response(ctx.http(), edit),
+                )
+                .await
+                {
+                    Ok(response) => {
+                        response?;
+                    }
+                    Err(_) => warn!("Channel apply result response exceeded the two-minute return budget"),
                 }
                 if needs_deletion_confirmation {
                     continue;
