@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod discord_management;
 mod honeypot;
 mod message_cache_handler;
 mod message_logging;
@@ -39,6 +40,8 @@ pub fn commands() -> Vec<AppCommand> {
             auth::create_keyword_button,
             question::question,
             pin::pin,
+            discord_management::role_export,
+            discord_management::role_plan,
             admin::reload_config,
             thread_auto_invite::invite_thread,
             thread_auto_invite::add_invite_role,
@@ -68,4 +71,41 @@ fn build_commands(commands: Vec<fn() -> AppCommand>) -> Vec<AppCommand> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_registration_keeps_existing_commands_and_adds_role_management() {
+        let commands = commands();
+        let names = commands
+            .iter()
+            .map(|command| command.name.to_string())
+            .collect::<Vec<_>>();
+
+        for management_command in commands
+            .iter()
+            .filter(|command| matches!(command.name.as_ref(), "role_export" | "role_plan"))
+        {
+            assert!(management_command.owners_only);
+            assert!(management_command.guild_only);
+            assert!(management_command.ephemeral);
+        }
+
+        for expected in [
+            "create_keyword_button",
+            "question",
+            "pin",
+            "role_export",
+            "role_plan",
+            "reload_config",
+            "invite_thread",
+            "add_invite_role",
+            "remove_invite_role",
+        ] {
+            assert!(names.iter().any(|name| name == expected), "missing command: {expected}");
+        }
+    }
 }
