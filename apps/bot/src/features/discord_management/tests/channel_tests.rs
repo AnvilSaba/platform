@@ -11,9 +11,39 @@ struct ChannelCatalogSource {
     catalog: ChannelCatalog,
 }
 
+#[derive(Clone)]
+struct FeaturelessChannelSource;
+
+impl ChannelSource for FeaturelessChannelSource {
+    async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
+        Ok(ChannelCatalog { channels: Vec::new() })
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(false)
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
+}
+
 impl ChannelSource for ChannelCatalogSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 
     async fn validate_channel_permission_targets(
@@ -44,6 +74,10 @@ struct RejectingChannelReferenceSource {
 impl ChannelSource for RejectingChannelReferenceSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 
     async fn validate_channel_permission_targets(
@@ -78,6 +112,10 @@ impl ChannelSource for PermissionAwareChannelSource {
         Ok(self.catalog.clone())
     }
 
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
+
     async fn validate_channel_permission_targets(
         &self,
         _guild_id: &GuildId,
@@ -100,6 +138,10 @@ struct BlockingCanManageRolesChannelSource {
 impl ChannelSource for BlockingCanManageRolesChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.clone())
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 
     async fn validate_channel_permission_targets(
@@ -175,6 +217,10 @@ struct ApplyingFakeChannelSource {
 impl ChannelSource for ApplyingFakeChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.lock().unwrap().clone())
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 
     async fn validate_channel_permission_targets(
@@ -301,6 +347,10 @@ struct UnknownChannelUpdateSource {
 impl ChannelSource for UnknownChannelUpdateSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(self.catalog.lock().unwrap().clone())
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
     }
 
     async fn validate_channel_permission_targets(
@@ -3468,4 +3518,93 @@ async fn deleted_channel_mapping_is_released_when_definition_is_omitted() {
     .unwrap();
     let state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
     assert!(state.get("channels").is_none());
+}
+
+/// Announcement Channel の全対応属性を export し、再投入した plan が無差分になる。
+#[tokio::test]
+async fn announcement_channel_export_round_trip_is_idempotent() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![ChannelSnapshot {
+                id: "300".parse().unwrap(),
+                position: 0,
+                kind: ChannelKind::Announcement,
+                manageable: true,
+                name: "news".to_owned(),
+                parent_id: None,
+                topic: Some("updates".to_owned()),
+                nsfw: false,
+                slowmode_seconds: 5,
+                default_auto_archive_minutes: Some(4320),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::new(),
+            }],
+        },
+    };
+
+    let files = export_channels(&source, guild_id(100), None).await.unwrap();
+    assert!(files.definition_toml.contains("type = \"announcement\""));
+    assert!(files.definition_toml.contains("default_auto_archive_minutes = 4320"));
+    assert!(!files.definition_toml.contains("default_thread_slowmode_seconds"));
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &files.definition_toml,
+        &files.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty());
+}
+
+/// Announcement Channel では Text 専用の Thread 低速モードを受理しない。
+#[tokio::test]
+async fn announcement_channel_rejects_default_thread_slowmode() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.news]
+        type = "announcement"
+        name = "news"
+        default_thread_slowmode_seconds = 5
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .expect_err("Announcement の非対応属性を拒否します");
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("Announcement") && message.contains("default_thread_slowmode_seconds"))
+    );
+}
+
+/// COMMUNITY feature がない Guild では、API 呼び出し前の plan で作成を拒否する。
+#[tokio::test]
+async fn announcement_channel_creation_requires_community_feature() {
+    let definition = r#"
+        schema_version = 1
+        [channels.news]
+        type = "announcement"
+        name = "news"
+    "#;
+
+    let error = plan_channels(
+        &FeaturelessChannelSource,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .expect_err("COMMUNITY feature がない Guild では Announcement を作成できません");
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("COMMUNITY")));
 }

@@ -15,7 +15,7 @@ use super::{
 };
 
 use super::port::ChannelSource;
-use super::resource::channel::{ChannelPlan, build_channel_plan_with_capabilities};
+use super::resource::channel::{ChannelPlan, build_channel_plan_with_capabilities, requires_announcement_feature};
 
 /// 希望構成と実構成を比較し、全体管理計画の Role 部分を返します。
 pub(super) async fn plan_roles<S: RoleSource>(
@@ -45,7 +45,18 @@ pub(super) async fn plan_channels<S: ChannelSource>(
         .await?;
     let catalog = source.channel_catalog(&guild_id).await?;
     let can_manage_roles = source.can_manage_roles(&guild_id).await?;
-    build_channel_plan_with_capabilities(&input.definition, &input.state, &catalog, can_manage_roles)
+    let supports_announcement_channels = if requires_announcement_feature(&input.definition, &input.state) {
+        source.supports_announcement_channels(&guild_id).await?
+    } else {
+        true
+    };
+    build_channel_plan_with_capabilities(
+        &input.definition,
+        &input.state,
+        &catalog,
+        can_manage_roles,
+        supports_announcement_channels,
+    )
 }
 
 pub(crate) fn channel_permission_target_ids(

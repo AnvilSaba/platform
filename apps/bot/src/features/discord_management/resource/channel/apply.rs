@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, build_order_plan,
-    compose_attributes,
+    compose_attributes, requires_announcement_feature,
 };
 use crate::features::discord_management::{
     apply::guild_lock::{GuildApplyLock, GuildApplyPermit},
@@ -255,7 +255,41 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
                 }));
             }
         };
-        let current_plan = build_channel_plan_with_capabilities(&definition, &state, &catalog, can_manage_roles)?;
+        let supports_announcement_channels = if requires_announcement_feature(&definition, &state) {
+            match tokio::time::timeout(
+                processing_deadline.saturating_duration_since(Instant::now()),
+                self.source.supports_announcement_channels(&guild_id),
+            )
+            .await
+            {
+                Ok(Ok(supported)) => supported,
+                Ok(Err(error)) => {
+                    return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                        status: ChannelApplyStatus::Failed(error.to_string()),
+                        applied: Plan::default(),
+                        pending: confirmed_plan.clone(),
+                        state_json: serialize_state(&state)?,
+                    }));
+                }
+                Err(_) => {
+                    return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                        status: ChannelApplyStatus::DeadlineExceeded,
+                        applied: Plan::default(),
+                        pending: confirmed_plan.clone(),
+                        state_json: serialize_state(&state)?,
+                    }));
+                }
+            }
+        } else {
+            true
+        };
+        let current_plan = build_channel_plan_with_capabilities(
+            &definition,
+            &state,
+            &catalog,
+            can_manage_roles,
+            supports_announcement_channels,
+        )?;
         if current_plan != *confirmed_plan {
             return Ok(ApplyPreparation::Finished(ChannelApplyResult {
                 status: ChannelApplyStatus::ReplanRequired,
