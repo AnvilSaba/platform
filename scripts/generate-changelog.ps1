@@ -24,6 +24,7 @@ $baselineTag = $settings.BaselineTag
 $tagPattern = "^$([regex]::Escape($App))/v[0-9]+\.[0-9]+\.[0-9]+$"
 $cliffArgs = @(
     "--config", "cliff.toml",
+    "--offline",
     "--tag-pattern", $tagPattern,
     "--output", $outputPath
 )
