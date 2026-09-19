@@ -37,8 +37,8 @@ if ($Tag) {
     }
     $cliffArgs += @("--tag", $Tag)
 }
-foreach ($path in $settings.Paths) { $cliffArgs += @("--include-path", $path) }
 $cliffArgs += if ($settings.FullHistory) { "HEAD" } else { "$baselineTag..HEAD" }
+foreach ($path in $settings.Paths) { $cliffArgs += "--include-path=$path" }
 
 & git-cliff @cliffArgs
 if ($LASTEXITCODE -ne 0) { throw "変更履歴の生成に失敗しました。" }
