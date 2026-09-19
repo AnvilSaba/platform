@@ -375,6 +375,124 @@ fn channel_state(channels: &str) -> String {
     format!(r#"{{"schema_version":1,"guild_id":"100","channels":{channels}}}"#)
 }
 
+/// 設定セットは左から右、最後に直接指定を合成し、Overwrite は権限名単位で保持する。
+/// マーカーによる置換後の最終値が実構成と同じなら、設定セット名や共通化方法は差分にしない。
+#[tokio::test]
+async fn channel_settings_sets_resolve_to_the_same_final_state_without_changes() {
+    let mut actual = channel_snapshot("300", ChannelKind::Text, "ルール", None);
+    actual.overwrites.insert(
+        ChannelOverwriteTarget::Everyone,
+        ChannelOverwritePermissions::from_known(BTreeMap::from([
+            (known_permission("VIEW_CHANNEL"), OverwriteValue::Deny),
+            (known_permission("SEND_MESSAGES"), OverwriteValue::Allow),
+        ])),
+    );
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![actual] },
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.channel.base]
+        type = "text"
+        topic = "置換前"
+        [settings_sets.channel.base.overwrites.everyone]
+        VIEW_CHANNEL = "allow"
+        SEND_MESSAGES = "deny"
+
+        [settings_sets.channel.renamed_override]
+        topic = { clear = true }
+        [settings_sets.channel.renamed_override.overwrites.everyone]
+        SEND_MESSAGES = "allow"
+
+        [channels.rules]
+        settings_sets = ["base", "renamed_override"]
+        name = "ルール"
+        [channels.rules.overwrites.everyone]
+        VIEW_CHANNEL = "deny"
+    "#;
+
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state(r#"{"rules":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    assert!(plan.is_empty());
+}
+
+/// 設定セットの Channel 型は後勝ちで隠さず、対象 Channel の型との不一致を診断する。
+#[tokio::test]
+async fn channel_rejects_a_settings_set_with_a_different_kind() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.channel.category_defaults]
+        type = "category"
+
+        [channels.rules]
+        settings_sets = ["category_defaults"]
+        type = "text"
+        name = "ルール"
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("category_defaults") && message.contains("type"))
+    );
+}
+
+/// 複数の設定セットが互いに異なる Channel 型を宣言する場合も、合成前に診断する。
+#[tokio::test]
+async fn channel_rejects_settings_sets_with_different_kinds() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+    };
+    let definition = r#"
+        schema_version = 1
+
+        [settings_sets.channel.category_defaults]
+        type = "category"
+
+        [settings_sets.channel.text_defaults]
+        type = "text"
+
+        [channels.rules]
+        settings_sets = ["category_defaults", "text_defaults"]
+        name = "ルール"
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("category_defaults") && message.contains("text_defaults") && message.contains("type"))
+    );
+}
+
 /// Text Channel の型別属性を公開 plan 操作で差分として確認できる。
 #[tokio::test]
 async fn channel_plan_reports_text_attribute_changes() {

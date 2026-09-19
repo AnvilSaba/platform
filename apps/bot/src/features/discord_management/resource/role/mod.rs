@@ -2,13 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{
     configuration::{
-        Color, DefinitionFile, KnownPermission, OptionalManagedValueExt, RoleAttributes, RoleDefinition, StateFile,
+        Color, DefinitionFile, KnownPermission, OptionalManagedValueExt, RoleAttributes, StateFile,
         everyone_logical_id, resolve_role_id,
     },
     domain::ManagementError,
     port::{RoleCatalog, RoleCreate, RolePositionUpdate, RoleSnapshot, RoleUpdate},
 };
-use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettingsSetId};
+use crate::features::discord_management::ids::{RoleId, RoleLogicalId};
 
 pub(crate) mod apply;
 
@@ -392,21 +392,6 @@ fn render_create_attributes(attributes: &RoleCreate, output: &mut String) {
     }
 }
 
-pub(crate) fn compose_attributes(
-    definition: &RoleDefinition,
-    settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
-) -> RoleAttributes {
-    let mut composed = RoleAttributes::default();
-    for name in definition.settings_sets() {
-        let attributes = settings_sets
-            .get(name)
-            .expect("検証済み Role 定義は既知の設定セットだけを参照します");
-        composed.merge(attributes);
-    }
-    composed.merge(definition.attributes());
-    composed
-}
-
 /// Role 作成時に Discord API へ送る concrete payload を組み立てます。
 ///
 /// 作成 plan の表示と apply の payload が同じ既定値を使うため、plan にこの payload を
@@ -499,7 +484,7 @@ pub(crate) fn build_plan(
                     "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
                 ))
             })?;
-            let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
+            let desired_attributes = desired.attributes();
             if desired_attributes.has_non_permission_attributes() {
                 return Err(ManagementError::InvalidDefinition(
                     "@everyone Role では権限だけを管理できます".to_owned(),
@@ -508,7 +493,7 @@ pub(crate) fn build_plan(
             // @everyone は通常 Role の階層管理対象外ですが、基底権限の更新は
             // 専用 endpoint で許可されるため、snapshot の manageable 判定から
             // 独立して扱います。
-            add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
+            add_update(&mut plan, logical_id, discord_id, actual, desired_attributes, catalog)?;
             continue;
         }
 
@@ -518,9 +503,9 @@ pub(crate) fn build_plan(
                     "参照専用 Role {logical_id} の対応がありません"
                 )));
             }
-            let attributes = compose_attributes(desired, &definition.settings_sets.role);
+            let attributes = desired.attributes();
             let create = build_role_create(
-                &attributes,
+                attributes,
                 &catalog.permission_names,
                 &catalog.default_permissions,
                 &catalog.grantable_permissions,
@@ -535,13 +520,13 @@ pub(crate) fn build_plan(
                 "Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             )));
         };
-        let desired_attributes = compose_attributes(desired, &definition.settings_sets.role);
+        let desired_attributes = desired.attributes();
         if desired.is_managed() && !actual.manageable {
             return Err(ManagementError::InvalidState(format!(
                 "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
         }
-        add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
+        add_update(&mut plan, logical_id, discord_id, actual, desired_attributes, catalog)?;
     }
 
     for (logical_id, discord_id) in &state.roles {
