@@ -1,9 +1,12 @@
 package io.github.anvilsaba.mcguildlink.app
 
 import dev.kord.core.Kord
+import dev.kord.gateway.DefaultGateway
+import dev.kord.gateway.ratelimit.IdentifyRateLimiter
 import io.github.anvilsaba.mcguildlink.app.config.Config
 import io.github.anvilsaba.mcguildlink.app.db.DatabaseFactory
 import io.github.anvilsaba.mcguildlink.app.discord.Bot
+import io.github.anvilsaba.mcguildlink.app.discord.UnlimitedLinearRetry
 import io.github.anvilsaba.mcguildlink.app.discord.logging.AuditLogSender
 import io.github.anvilsaba.mcguildlink.app.discord.logging.DiscordAuditLogSender
 import io.github.anvilsaba.mcguildlink.app.minecraft.MinecraftServer
@@ -55,6 +58,19 @@ class App(
         whitelistFileSyncService.generateNow()
         val kord = Kord(config.bot.token) {
             httpClient = HttpClient(Java)
+            gateways { resources, shards ->
+                val identifyRateLimiter = IdentifyRateLimiter(
+                    maxConcurrency = resources.maxConcurrency,
+                    dispatcher = defaultDispatcher,
+                )
+                shards.map {
+                    DefaultGateway {
+                        client = resources.httpClient
+                        identifyRateLimiter = identifyRateLimiter
+                        reconnectRetry = UnlimitedLinearRetry()
+                    }
+                }
+            }
         }
 
         webServer.start(wait = false)
