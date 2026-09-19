@@ -5,14 +5,15 @@ use serenity::{
     Error as SerenityError,
     all::{
         AutoArchiveDuration, ChannelId as SerenityChannelId, ChannelType, GuildId as SerenityGuildId,
-        PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId as SerenityRoleId, UserId,
+        PermissionOverwrite, PermissionOverwriteType, Permissions, PremiumTier, RoleId as SerenityRoleId, UserId,
+        VideoQualityMode,
     },
     http::{HttpError, StatusCode},
     model::channel::GuildChannel,
 };
 
 use crate::features::discord_management::{
-    configuration::{ChannelKind, KnownPermission, OverwriteValue},
+    configuration::{ChannelKind, KnownPermission, OverwriteValue, VideoQuality},
     domain::ManagementError,
     ids::{ChannelId, GuildId, MemberId, RoleId},
     port::{
@@ -68,6 +69,8 @@ enum DiscordChannelType {
     Text,
     Announcement,
     Category,
+    Voice,
+    Stage,
 }
 
 impl Serialize for DiscordChannelType {
@@ -79,6 +82,8 @@ impl Serialize for DiscordChannelType {
             Self::Text => 0,
             Self::Announcement => 5,
             Self::Category => 4,
+            Self::Voice => 2,
+            Self::Stage => 13,
         })
     }
 }
@@ -165,6 +170,25 @@ impl<T: Serialize> Serialize for NullablePatchField<T> {
 enum CreateChannelRequest {
     Text(CreateTextChannelRequest),
     Category(CreateCategoryChannelRequest),
+    Voice(CreateVoiceChannelRequest),
+}
+
+#[derive(Debug, Serialize)]
+struct CreateVoiceChannelRequest {
+    name: String,
+    #[serde(rename = "type")]
+    channel_type: DiscordChannelType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<DiscordSnowflake>,
+    nsfw: bool,
+    rate_limit_per_user: DiscordSeconds,
+    bitrate: u32,
+    user_limit: u16,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    rtc_region: NullablePatchField<String>,
+    video_quality_mode: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,6 +238,14 @@ struct ModifyChannelRequest {
     default_thread_rate_limit_per_user: Option<DiscordSeconds>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bitrate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_limit: Option<u16>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    rtc_region: NullablePatchField<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    video_quality_mode: Option<u8>,
 }
 
 impl ChannelSource for SerenityManagementAdapter<'_> {
@@ -252,6 +284,28 @@ impl ChannelSource for SerenityManagementAdapter<'_> {
                     .any(|feature| <_ as AsRef<str>>::as_ref(feature) == "COMMUNITY")
             })
             .map_err(map_channel_catalog_error)
+    }
+
+    async fn voice_bitrate_limit(&self, guild_id: &GuildId) -> Result<u32, ManagementError> {
+        let guild = self
+            .http
+            .get_guild(SerenityGuildId::from(*guild_id))
+            .await
+            .map_err(map_channel_catalog_error)?;
+        if guild
+            .features
+            .iter()
+            .any(|feature| <_ as AsRef<str>>::as_ref(feature) == "VIP_REGIONS")
+        {
+            return Ok(384_000);
+        }
+        Ok(match guild.premium_tier {
+            PremiumTier::Tier0 => 96_000,
+            PremiumTier::Tier1 => 128_000,
+            PremiumTier::Tier2 => 256_000,
+            PremiumTier::Tier3 => 384_000,
+            _ => 96_000,
+        })
     }
 
     async fn validate_channel_permission_targets(
@@ -362,6 +416,8 @@ fn channel_snapshot(
         ChannelType::Category => ChannelKind::Category,
         ChannelType::Text => ChannelKind::Text,
         ChannelType::News => ChannelKind::Announcement,
+        ChannelType::Voice => ChannelKind::Voice,
+        ChannelType::Stage => ChannelKind::Stage,
         _ => ChannelKind::Unsupported,
     };
     let known_permission_mask = known_permission_mask(known_permissions);
@@ -385,6 +441,14 @@ fn channel_snapshot(
         default_thread_slowmode_seconds: channel
             .default_thread_rate_limit_per_user
             .map_or(0, |seconds| seconds.get()),
+        bitrate: channel.bitrate.map(|value| value.get()),
+        user_limit: channel.user_limit.map(|value| value.get()),
+        rtc_region: channel.rtc_region.as_ref().map(ToString::to_string),
+        video_quality: channel.video_quality_mode.and_then(|quality| match quality {
+            VideoQualityMode::Auto => Some(VideoQuality::Auto),
+            VideoQualityMode::Full => Some(VideoQuality::Full),
+            _ => None,
+        }),
         overwrites,
     })
 }
@@ -474,6 +538,10 @@ fn channel_edit_is_required(update: &ChannelUpdate) -> bool {
         || update.slowmode_seconds.is_some()
         || !update.default_auto_archive_minutes.is_keep()
         || update.default_thread_slowmode_seconds.is_some()
+        || update.bitrate.is_some()
+        || update.user_limit.is_some()
+        || !update.rtc_region.is_keep()
+        || update.video_quality.is_some()
         || update.overwrites.is_some()
 }
 
@@ -566,6 +634,25 @@ fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateCh
             channel_type: DiscordChannelType::Category,
             permission_overwrites,
         }),
+        ChannelKind::Voice | ChannelKind::Stage => CreateChannelRequest::Voice(CreateVoiceChannelRequest {
+            name: create.name,
+            channel_type: if create.kind == ChannelKind::Voice {
+                DiscordChannelType::Voice
+            } else {
+                DiscordChannelType::Stage
+            },
+            parent_id: create.parent_id.map(|id| DiscordSnowflake(id.get())),
+            nsfw: create.nsfw,
+            rate_limit_per_user: DiscordSeconds(create.slowmode_seconds),
+            bitrate: create.bitrate.unwrap_or(64_000),
+            user_limit: create.user_limit.unwrap_or(0),
+            rtc_region: nullable_patch_field(&create.rtc_region, Clone::clone),
+            video_quality_mode: match create.video_quality.unwrap_or(VideoQuality::Auto) {
+                VideoQuality::Auto => 1,
+                VideoQuality::Full => 2,
+            },
+            permission_overwrites,
+        }),
         ChannelKind::Unsupported => unreachable!("Unsupported Channel は構成管理から作成できません"),
     }
 }
@@ -585,6 +672,13 @@ fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyCha
             .overwrites
             .as_ref()
             .map(|overwrites| overwrite_payloads(guild_id, overwrites)),
+        bitrate: update.bitrate,
+        user_limit: update.user_limit,
+        rtc_region: nullable_patch_field(&update.rtc_region, Clone::clone),
+        video_quality_mode: update.video_quality.map(|quality| match quality {
+            VideoQuality::Auto => 1,
+            VideoQuality::Full => 2,
+        }),
     }
 }
 
@@ -700,6 +794,10 @@ mod tests {
                 slowmode_seconds: 5,
                 default_auto_archive_minutes: Some(4320),
                 default_thread_slowmode_seconds: 10,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -734,6 +832,10 @@ mod tests {
                 slowmode_seconds: 5,
                 default_auto_archive_minutes: Some(4320),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -754,6 +856,87 @@ mod tests {
     }
 
     #[test]
+    fn voice_and_stage_payloads_use_type_specific_fields_and_null_for_auto_region() {
+        let create = create_channel_payload(
+            &GuildId::new(100),
+            ChannelCreate {
+                kind: ChannelKind::Voice,
+                name: "General".to_owned(),
+                parent_id: Some(ChannelId::new(200)),
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 5,
+                default_auto_archive_minutes: None,
+                default_thread_slowmode_seconds: 0,
+                bitrate: Some(96_000),
+                user_limit: Some(12),
+                rtc_region: ChannelUpdateValue::Clear,
+                video_quality: Some(VideoQuality::Full),
+                overwrites: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            payload_json(&create),
+            expected_json(
+                r#"{
+                    "name": "General", "type": 2, "parent_id": "200", "nsfw": false,
+                    "rate_limit_per_user": 5, "bitrate": 96000, "user_limit": 12,
+                    "rtc_region": null, "video_quality_mode": 2
+                }"#,
+            )
+        );
+
+        let omitted_region = create_channel_payload(
+            &GuildId::new(100),
+            ChannelCreate {
+                kind: ChannelKind::Stage,
+                name: "Town Hall".to_owned(),
+                parent_id: None,
+                topic: None,
+                nsfw: false,
+                slowmode_seconds: 0,
+                default_auto_archive_minutes: None,
+                default_thread_slowmode_seconds: 0,
+                bitrate: Some(64_000),
+                user_limit: Some(0),
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: Some(VideoQuality::Auto),
+                overwrites: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            payload_json(&omitted_region),
+            expected_json(
+                r#"{
+                    "name": "Town Hall", "type": 13, "nsfw": false,
+                    "rate_limit_per_user": 0, "bitrate": 64000, "user_limit": 0,
+                    "video_quality_mode": 1
+                }"#,
+            )
+        );
+
+        let update = edit_channel_payload(
+            &GuildId::new(100),
+            &ChannelUpdate {
+                bitrate: Some(64_000),
+                user_limit: Some(0),
+                rtc_region: ChannelUpdateValue::Clear,
+                video_quality: Some(VideoQuality::Auto),
+                ..ChannelUpdate::default()
+            },
+        );
+        assert_eq!(
+            payload_json(&update),
+            expected_json(
+                r#"{
+                    "bitrate": 64000, "user_limit": 0,
+                    "rtc_region": null, "video_quality_mode": 1
+                }"#,
+            )
+        );
+    }
+
+    #[test]
     fn create_payload_preserves_an_empty_topic() {
         let payload = create_channel_payload(
             &GuildId::new(100),
@@ -766,6 +949,10 @@ mod tests {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: None,
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -802,6 +989,10 @@ mod tests {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: None,
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Clear)])),
@@ -858,6 +1049,10 @@ mod tests {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: None,
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         );

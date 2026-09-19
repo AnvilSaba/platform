@@ -17,6 +17,8 @@ pub(crate) enum ChannelKind {
     Category,
     Text,
     Announcement,
+    Voice,
+    Stage,
     /// Discord 上存在但構成管理ではまだ属性を管理しない Channel 種別です。
     ///
     /// catalog から除外すると、管理対象 Category の配下にある Voice/Forum 等を
@@ -35,6 +37,8 @@ pub(crate) enum RawChannelKind {
     Category,
     Text,
     Announcement,
+    Voice,
+    Stage,
 }
 
 impl From<RawChannelKind> for ChannelKind {
@@ -43,6 +47,8 @@ impl From<RawChannelKind> for ChannelKind {
             RawChannelKind::Category => Self::Category,
             RawChannelKind::Text => Self::Text,
             RawChannelKind::Announcement => Self::Announcement,
+            RawChannelKind::Voice => Self::Voice,
+            RawChannelKind::Stage => Self::Stage,
         }
     }
 }
@@ -53,9 +59,18 @@ impl ChannelKind {
             Self::Category => "category",
             Self::Text => "text",
             Self::Announcement => "announcement",
+            Self::Voice => "voice",
+            Self::Stage => "stage",
             Self::Unsupported => "unsupported",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VideoQuality {
+    Auto,
+    Full,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,6 +306,10 @@ pub(crate) struct ChannelAttributes {
     pub(crate) slowmode_seconds: Option<ChannelValue<u16>>,
     pub(crate) default_auto_archive_minutes: Option<ChannelValue<u16>>,
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
+    pub(crate) bitrate: Option<ChannelValue<u32>>,
+    pub(crate) user_limit: Option<ChannelValue<u16>>,
+    pub(crate) rtc_region: Option<ChannelValue<String>>,
+    pub(crate) video_quality: Option<ChannelValue<VideoQuality>>,
     /// 親 Category と permission overwrite を同期する明示指定です。
     pub(crate) permissions_sync: Option<bool>,
     pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
@@ -324,6 +343,18 @@ impl ChannelAttributes {
             self.default_thread_slowmode_seconds
                 .clone_from(&later.default_thread_slowmode_seconds);
         }
+        if later.bitrate.is_some() {
+            self.bitrate.clone_from(&later.bitrate);
+        }
+        if later.user_limit.is_some() {
+            self.user_limit.clone_from(&later.user_limit);
+        }
+        if later.rtc_region.is_some() {
+            self.rtc_region.clone_from(&later.rtc_region);
+        }
+        if later.video_quality.is_some() {
+            self.video_quality.clone_from(&later.video_quality);
+        }
         if later.permissions_sync.is_some() {
             self.permissions_sync = later.permissions_sync;
         }
@@ -348,7 +379,11 @@ impl ChannelAttributes {
                 || self.nsfw.is_some()
                 || self.slowmode_seconds.is_some()
                 || self.default_auto_archive_minutes.is_some()
-                || self.default_thread_slowmode_seconds.is_some())
+                || self.default_thread_slowmode_seconds.is_some()
+                || self.bitrate.is_some()
+                || self.user_limit.is_some()
+                || self.rtc_region.is_some()
+                || self.video_quality.is_some())
         {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Category {logical_id} には Text 専用属性を指定できません"
@@ -374,6 +409,59 @@ impl ChannelAttributes {
                 "Announcement Channel {logical_id} には default_thread_slowmode_seconds を指定できません"
             )));
         }
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
+            && (self.bitrate.is_some()
+                || self.user_limit.is_some()
+                || self.rtc_region.is_some()
+                || self.video_quality.is_some())
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "{} Channel {logical_id} には音声専用属性を指定できません",
+                if kind == ChannelKind::Text {
+                    "Text"
+                } else {
+                    "Announcement"
+                }
+            )));
+        }
+        if matches!(kind, ChannelKind::Voice | ChannelKind::Stage)
+            && (self.topic.is_some()
+                || self.default_auto_archive_minutes.is_some()
+                || self.default_thread_slowmode_seconds.is_some())
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "{} Channel {logical_id} にはテキスト専用属性を指定できません",
+                if kind == ChannelKind::Voice { "Voice" } else { "Stage" }
+            )));
+        }
+        if kind == ChannelKind::Stage
+            && self
+                .bitrate
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .is_some_and(|value| *value > 64_000)
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Stage Channel {logical_id} の bitrate は64000以下で指定してください"
+            )));
+        }
+        let user_limit_max = match kind {
+            ChannelKind::Voice => Some(99),
+            ChannelKind::Stage => Some(10_000),
+            _ => None,
+        };
+        if let Some(max) = user_limit_max
+            && self
+                .user_limit
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .is_some_and(|value| *value > max)
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "{} Channel {logical_id} の user_limit は{max}以下で指定してください",
+                kind.as_str()
+            )));
+        }
         if self.permissions_sync == Some(true) && !self.overwrites.is_empty() {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Channel {logical_id} の permissions_sync と個別 Overwrite は併用できません"
@@ -396,6 +484,10 @@ impl ChannelAttributes {
             && self.slowmode_seconds.is_none()
             && self.default_auto_archive_minutes.is_none()
             && self.default_thread_slowmode_seconds.is_none()
+            && self.bitrate.is_none()
+            && self.user_limit.is_none()
+            && self.rtc_region.is_none()
+            && self.video_quality.is_none()
             && self.permissions_sync.is_none()
             && self.overwrites.is_empty()
     }
@@ -431,6 +523,18 @@ pub(crate) struct RawChannelAttributes {
     ))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_thread_slowmode_seconds: Option<ChannelValue<u16>>,
+    #[validate(range(min = 8000, message = "bitrate は8000以上で指定してください"))]
+    #[validate(custom(function = "validate_channel_bitrate"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bitrate: Option<ChannelValue<u32>>,
+    #[validate(custom(function = "validate_channel_user_limit"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) user_limit: Option<ChannelValue<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rtc_region: Option<ChannelValue<String>>,
+    #[validate(custom(function = "validate_channel_video_quality"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) video_quality: Option<ChannelValue<VideoQuality>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) permissions_sync: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -452,6 +556,10 @@ impl RawChannelAttributes {
             slowmode_seconds,
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
+            bitrate,
+            user_limit,
+            rtc_region,
+            video_quality,
             permissions_sync,
             overwrites,
         } = self;
@@ -466,6 +574,10 @@ impl RawChannelAttributes {
             slowmode_seconds,
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
+            bitrate,
+            user_limit,
+            rtc_region,
+            video_quality,
             permissions_sync,
             overwrites,
         })
@@ -515,6 +627,18 @@ fn validate_channel_auto_archive(value: &ChannelValue<u16>) -> Result<(), Valida
         )),
         _ => Ok(()),
     }
+}
+
+fn validate_channel_bitrate(value: &ChannelValue<u32>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "bitrate", true, false)
+}
+
+fn validate_channel_user_limit(value: &ChannelValue<u16>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "user_limit", true, false)
+}
+
+fn validate_channel_video_quality(value: &ChannelValue<VideoQuality>) -> Result<(), ValidationError> {
+    validate_channel_markers(value, "video_quality", true, false)
 }
 
 fn resolve_overwrites(

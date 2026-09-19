@@ -2042,8 +2042,8 @@ fn definition_validates_raw_attribute_values_with_validator() {
         matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default"))
     );
 
-    let invalid_kind = parse_definition("schema_version = 1\n[channels.rules]\ntype = \"voice\"\n").unwrap_err();
-    assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("voice")));
+    let invalid_kind = parse_definition("schema_version = 1\n[channels.rules]\ntype = \"forum\"\n").unwrap_err();
+    assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("forum")));
 }
 
 /// Option<ManagedValue<T>> の省略と既定値を、呼び出し側の分岐なしで解決できる。
