@@ -8,14 +8,14 @@ use super::super::{
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, RoleId},
     port::{
-        ChannelCatalog, ChannelCreate, ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSnapshot,
-        ChannelUpdate, ChannelUpdateValue,
+        ChannelCatalog, ChannelCreate, ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelPositionUpdate,
+        ChannelSnapshot, ChannelUpdate, ChannelUpdateValue,
     },
 };
 
 pub(crate) mod apply;
 
-use super::{display_quoted_string, render_change_line};
+use super::{compare_position_then_id, display_quoted_string, render_change_line, stable_relative_order};
 
 const DEFAULT_CHANNEL_NSFW: bool = false;
 const DEFAULT_SLOWMODE_SECONDS: u16 = 0;
@@ -456,6 +456,38 @@ impl Change {
 pub(crate) struct Plan {
     changes: BTreeMap<ChannelLogicalId, Change>,
     create_desired: BTreeMap<ChannelLogicalId, CreateDesired>,
+    order: Option<OrderPlan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderGroupPlan {
+    requested: Vec<ChannelLogicalId>,
+    updates: Vec<ChannelPositionUpdate>,
+    expected_order: Vec<ChannelId>,
+}
+
+impl OrderGroupPlan {
+    #[cfg(test)]
+    pub(crate) fn updates(&self) -> &[ChannelPositionUpdate] {
+        &self.updates
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expected_order(&self) -> &[ChannelId] {
+        &self.expected_order
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderPlan {
+    groups: Vec<OrderGroupPlan>,
+}
+
+impl OrderPlan {
+    #[cfg(test)]
+    pub(crate) fn groups(&self) -> &[OrderGroupPlan] {
+        &self.groups
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -504,7 +536,24 @@ impl Plan {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.changes.is_empty()
+        self.changes.is_empty() && self.order.is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn order(&self) -> Option<&OrderPlan> {
+        self.order.as_ref()
+    }
+
+    pub(super) fn has_order(&self) -> bool {
+        self.order.is_some()
+    }
+
+    pub(super) fn take_order(&mut self) -> Option<OrderPlan> {
+        self.order.take()
+    }
+
+    pub(super) fn set_order(&mut self, order: Option<OrderPlan>) {
+        self.order = order;
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&ChannelLogicalId, &Change)> {
@@ -556,6 +605,20 @@ impl Plan {
                 Change::Delete { discord_id } => output.push_str(&format!(
                     "- 削除: {logical_id} ({discord_id})\n  影響: Channel と配下の投稿・Thread が失われる可能性があります。\n"
                 )),
+            }
+        }
+        if let Some(order) = &self.order {
+            for group in &order.groups {
+                output.push_str("- Channel の相対順序: ");
+                output.push_str(
+                    &group
+                        .requested
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" -> "),
+                );
+                output.push('\n');
             }
         }
         output
@@ -722,7 +785,329 @@ pub(crate) fn build_channel_plan_with_capabilities(
         );
     }
 
+    plan.order = build_order_plan(definition, state, catalog)?;
+
     Ok(plan)
+}
+
+fn build_order_plan(
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> Result<Option<OrderPlan>, ManagementError> {
+    let Some(order) = definition.order.as_ref() else {
+        return Ok(None);
+    };
+    // 属性更新で親が変わる Channel は、同じ apply の後段で目的の sibling 集合へ
+    // 入るため、位置計画も予定された親を投影した catalog を基準に組み立てます。
+    let projected_catalog = project_channel_parents_for_order(definition, state, catalog);
+    let catalog = &projected_catalog;
+    let mut groups = Vec::new();
+    let mut top_level_catalog = catalog.clone();
+    let mut top_level_group = None;
+    if !order.categories.is_empty()
+        && let Some(group) = build_order_group(
+            &order.categories,
+            |channel| channel.parent_id.is_none(),
+            ChannelKind::Category,
+            definition,
+            state,
+            catalog,
+        )?
+    {
+        project_order_updates(&mut top_level_catalog, &group.updates);
+        top_level_group = Some(group);
+    }
+    if !order.uncategorized.is_empty()
+        && let Some(group) = build_order_group(
+            &order.uncategorized,
+            |channel| channel.parent_id.is_none(),
+            ChannelKind::Text,
+            definition,
+            state,
+            &top_level_catalog,
+        )?
+    {
+        top_level_group = Some(group);
+    }
+    if let Some(group) = top_level_group {
+        groups.push(group);
+    }
+    for (parent_logical_id, requested) in &order.children {
+        if requested.is_empty() {
+            continue;
+        }
+        let Some(parent_id) = resolve_channel_order_id(parent_logical_id, definition, state, catalog)? else {
+            // 親 Category が同じ apply の前段で作成される場合は、実 ID が確定
+            // するまで子 Channel の sibling 集合を解決できません。ただし、
+            // 参照専用の子は親を変更できないため、作成後に解決できない指定を
+            // 保留せず、この時点で診断します。
+            validate_deferred_child_order(parent_logical_id, requested, definition, state, catalog)?;
+            groups.push(OrderGroupPlan {
+                requested: requested.clone(),
+                updates: Vec::new(),
+                expected_order: Vec::new(),
+            });
+            continue;
+        };
+        if let Some(group) = build_order_group(
+            requested,
+            |channel| channel.parent_id == Some(parent_id),
+            ChannelKind::Text,
+            definition,
+            state,
+            catalog,
+        )? {
+            groups.push(group);
+        }
+    }
+    Ok((!groups.is_empty()).then_some(OrderPlan { groups }))
+}
+
+fn project_order_updates(catalog: &mut ChannelCatalog, updates: &[ChannelPositionUpdate]) {
+    for update in updates {
+        if let Some(channel) = catalog
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == update.channel_id)
+        {
+            channel.position = u16::try_from(update.position).expect("Channel position は u16 の範囲内です");
+        }
+    }
+}
+
+fn validate_deferred_child_order(
+    parent_logical_id: &ChannelLogicalId,
+    requested_logical_ids: &[ChannelLogicalId],
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> Result<(), ManagementError> {
+    for logical_id in requested_logical_ids {
+        let channel_definition = definition
+            .channels
+            .get(logical_id)
+            .expect("order.children の子は DefinitionFile の検証済み宣言だけを参照します");
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            if channel_definition.is_reference() {
+                return Err(ManagementError::InvalidState(format!(
+                    "order.children の参照専用 Channel {logical_id} の対応がありません"
+                )));
+            }
+            continue;
+        };
+        let Some(channel) = catalog.channels.iter().find(|channel| channel.id == discord_id) else {
+            return Err(ManagementError::InvalidState(format!(
+                "order.children の Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
+        };
+        if channel.kind != ChannelKind::Text {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の Channel {logical_id} は Text の兄弟として指定できません"
+            )));
+        }
+        if channel_definition.is_reference() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.children の未作成 Category {parent_logical_id} には、現在の親が {:?} の参照専用 Channel {logical_id} を配置できません",
+                channel.parent_id
+            )));
+        }
+        if !channel.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "order.children の Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn project_channel_parents_for_order(
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> ChannelCatalog {
+    let mut projected = catalog.clone();
+    for (logical_id, channel_definition) in &definition.channels {
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            continue;
+        };
+        let Some(parent) = channel_definition.attributes().parent.as_ref() else {
+            continue;
+        };
+        let desired_parent = if let Some(parent_logical_id) = parent.as_value() {
+            let Some(parent_id) = state.channels.get(parent_logical_id).copied() else {
+                continue;
+            };
+            Some(parent_id)
+        } else if parent.is_clear() {
+            None
+        } else {
+            continue;
+        };
+        if let Some(channel) = projected.channels.iter_mut().find(|channel| channel.id == discord_id) {
+            channel.parent_id = desired_parent;
+        }
+    }
+    projected
+}
+
+fn build_order_group(
+    requested_logical_ids: &[ChannelLogicalId],
+    belongs_to_group: impl Fn(&ChannelSnapshot) -> bool,
+    expected_kind: ChannelKind,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> Result<Option<OrderGroupPlan>, ManagementError> {
+    let actual = catalog
+        .channels
+        .iter()
+        .filter(|channel| belongs_to_group(channel))
+        .map(|channel| (channel.id, channel))
+        .collect::<BTreeMap<_, _>>();
+    // catalog の重複 ID も捨てずに stable_relative_order へ渡し、API 呼出し前に
+    // 不正な sibling 一覧として診断できるようにします。
+    let mut current = catalog
+        .channels
+        .iter()
+        .filter(|channel| belongs_to_group(channel))
+        .map(|channel| channel.id)
+        .collect::<Vec<_>>();
+    current
+        .sort_by(|left, right| compare_position_then_id(&actual[left].position, &actual[right].position, left, right));
+
+    let mut requested = Vec::with_capacity(requested_logical_ids.len());
+    let mut fixed = BTreeSet::new();
+    let mut deferred = false;
+    let mut projected_missing = Vec::new();
+    let mut next_placeholder = u64::MAX - 1;
+    for logical_id in requested_logical_ids {
+        let channel_definition = definition
+            .channels
+            .get(logical_id)
+            .expect("order の Channel は DefinitionFile の検証済み宣言だけを参照します");
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            if channel_definition.is_reference() {
+                return Err(ManagementError::InvalidState(format!(
+                    "order の参照専用 Channel {logical_id} の対応がありません"
+                )));
+            }
+            let placeholder = loop {
+                let candidate = ChannelId::new(next_placeholder);
+                next_placeholder = next_placeholder.checked_sub(1).ok_or_else(|| {
+                    ManagementError::InvalidDefinition(
+                        "order の未作成 Channel を投影する ID を確保できません".to_owned(),
+                    )
+                })?;
+                if !catalog.channels.iter().any(|channel| channel.id == candidate)
+                    && !projected_missing.contains(&candidate)
+                {
+                    break candidate;
+                }
+            };
+            projected_missing.push(placeholder);
+            deferred = true;
+            requested.push(placeholder);
+            continue;
+        };
+        let Some(channel) = actual.get(&discord_id).copied() else {
+            return Err(ManagementError::InvalidState(format!(
+                "order の Channel {logical_id} の Snowflake {discord_id} が対象の兄弟一覧にありません"
+            )));
+        };
+        if channel.kind != expected_kind {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order の Channel {logical_id} は {} の兄弟として指定できません",
+                expected_kind.as_str()
+            )));
+        }
+        if channel_definition.is_managed() && !channel.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "order の Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+            )));
+        }
+        if channel_definition.is_reference() {
+            fixed.insert(discord_id);
+        }
+        requested.push(discord_id);
+    }
+
+    for (logical_id, channel_definition) in &definition.channels {
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            continue;
+        };
+        if channel_definition.is_reference() && actual.contains_key(&discord_id) {
+            fixed.insert(discord_id);
+        }
+    }
+
+    if deferred {
+        // Discord の新規 Channel は対象 sibling の末尾へ作成されるため、その位置へ
+        // 未作成 Channel を投影してから参照専用 anchor との循環を診断します。
+        let mut projected_current = current.clone();
+        projected_current.extend(projected_missing);
+        stable_relative_order(&projected_current, &requested, &fixed).map_err(|()| {
+            ManagementError::InvalidDefinition("order の Channel は参照専用対象の固定位置と両立しません".to_owned())
+        })?;
+        return Ok(Some(OrderGroupPlan {
+            requested: requested_logical_ids.to_vec(),
+            updates: Vec::new(),
+            expected_order: Vec::new(),
+        }));
+    }
+
+    let desired = stable_relative_order(&current, &requested, &fixed).map_err(|()| {
+        ManagementError::InvalidDefinition("order の Channel は参照専用対象の固定位置と両立しません".to_owned())
+    })?;
+    if desired == current {
+        return Ok(None);
+    }
+
+    let updates = desired
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, channel_id)| ChannelPositionUpdate {
+            channel_id,
+            position: position as u64,
+        })
+        .collect();
+    Ok(Some(OrderGroupPlan {
+        requested: requested_logical_ids.to_vec(),
+        updates,
+        expected_order: desired,
+    }))
+}
+
+fn resolve_channel_order_id(
+    logical_id: &ChannelLogicalId,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+) -> Result<Option<ChannelId>, ManagementError> {
+    let channel_definition = definition
+        .channels
+        .get(logical_id)
+        .expect("order.children の親は DefinitionFile の検証済み宣言だけを参照します");
+    let Some(discord_id) = state.channels.get(logical_id).copied() else {
+        if channel_definition.is_reference() {
+            return Err(ManagementError::InvalidState(format!(
+                "order.children の参照専用親 Channel {logical_id} の対応がありません"
+            )));
+        }
+        return Ok(None);
+    };
+    let Some(channel) = catalog.channels.iter().find(|channel| channel.id == discord_id) else {
+        return Err(ManagementError::InvalidState(format!(
+            "order の親 Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+        )));
+    };
+    if channel.kind != ChannelKind::Category {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.children の親 Channel {logical_id} は Category ではありません"
+        )));
+    }
+    Ok(Some(discord_id))
 }
 
 fn desired_synced_overwrites(

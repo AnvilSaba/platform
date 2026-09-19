@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
-use super::{AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, compose_attributes};
+use super::{
+    AttributeChanges, Change, ChannelPlan, Plan, build_channel_plan_with_capabilities, build_order_plan,
+    compose_attributes,
+};
 use crate::features::discord_management::{
     apply::guild_lock::{GuildApplyLock, GuildApplyPermit},
     configuration::{ChannelKind, PermissionVocabulary, PlanInput, StateFile, serialize_state},
@@ -8,8 +11,9 @@ use crate::features::discord_management::{
     ids::{ChannelId, ChannelLogicalId, GuildId},
     plan::channel_permission_target_ids,
     port::{
-        ChannelCatalog, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget, ChannelSnapshot,
-        ChannelSource, ChannelUpdate, ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater,
+        ChannelCatalog, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
+        ChannelPositionUpdateOutcome, ChannelPositionUpdater, ChannelSnapshot, ChannelSource, ChannelUpdate,
+        ChannelUpdateOutcome, ChannelUpdateValue, ChannelUpdater,
     },
 };
 
@@ -117,6 +121,11 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
             ApplyPreparation::Finished(result) => return Ok(result),
             ApplyPreparation::Ready(session) => *session,
         };
+        if session.pending.has_order() {
+            return Err(ManagementError::InvalidState(
+                "属性更新専用の apply_channel_updates には Channel の相対順序変更を含められません".to_owned(),
+            ));
+        }
         if session.pending.iter().any(|(_, change)| !change.is_update()) {
             return Err(ManagementError::InvalidState(
                 "属性更新専用の apply_channel_updates には Channel の lifecycle 変更を含められません".to_owned(),
@@ -340,6 +349,75 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
     Ok(None)
 }
 
+async fn apply_order_changes<S: ChannelPositionUpdater>(
+    source: &S,
+    guild_id: &GuildId,
+    session: &mut ApplySession,
+    processing_deadline: Instant,
+) -> Result<Option<ChannelApplyStatus>, ManagementError> {
+    let Some(planned_order) = build_order_plan(&session.definition, &session.state, &session.catalog)? else {
+        session.applied.set_order(session.pending.take_order());
+        return Ok(None);
+    };
+    let updates = planned_order
+        .groups
+        .iter()
+        .flat_map(|group| group.updates.iter().copied())
+        .collect::<Vec<_>>();
+    let mut position_error = None;
+    if !updates.is_empty() {
+        if Instant::now() >= processing_deadline {
+            return Ok(Some(ChannelApplyStatus::DeadlineExceeded));
+        }
+        let outcome = match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            source.update_channel_positions(guild_id, updates),
+        )
+        .await
+        {
+            Ok(Ok(outcome)) => Some(outcome),
+            Ok(Err(error)) => {
+                // Channel の sibling 更新は一回の要求でも部分適用され得るため、
+                // 既知エラーでも最新 catalog を取得してから pending を再計画します。
+                position_error = Some(error.to_string());
+                None
+            }
+            Err(_) => Some(ChannelPositionUpdateOutcome::ResponseUnknown),
+        };
+        if outcome == Some(ChannelPositionUpdateOutcome::ResponseUnknown) {
+            // 全 sibling group を一つの要求で送ったため、応答不明時は再取得した
+            // 全 group の実順序だけで反映成否を確定します。
+        }
+    }
+
+    let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
+    session.catalog = match tokio::time::timeout(
+        result_deadline.saturating_duration_since(Instant::now()),
+        source.channel_catalog(guild_id),
+    )
+    .await
+    {
+        Ok(Ok(catalog)) => catalog,
+        Ok(Err(error)) => return Ok(Some(ChannelApplyStatus::Failed(error.to_string()))),
+        Err(_) => return Ok(Some(ChannelApplyStatus::DeadlineExceeded)),
+    };
+
+    let current_order = build_order_plan(&session.definition, &session.state, &session.catalog)?;
+    if current_order.is_some() {
+        session.pending.set_order(current_order);
+        return Ok(Some(
+            position_error.map_or(ChannelApplyStatus::ReplanRequired, ChannelApplyStatus::Failed),
+        ));
+    }
+
+    // 応答不明でも再取得した全兄弟の順序が希望値なら、位置更新は確定成功とみなします。
+    if let Some(error) = position_error {
+        return Ok(Some(ChannelApplyStatus::Failed(error)));
+    }
+    session.applied.set_order(session.pending.take_order());
+    Ok(None)
+}
+
 impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
     #[cfg(test)]
     pub(crate) async fn apply_channels(
@@ -370,7 +448,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
         options: ChannelApplyOptions,
         processing_deadline: Instant,
     ) -> Result<ChannelApplyResult, ManagementError> {
-        if confirmed_plan.iter().all(|(_, change)| change.is_update()) {
+        if !confirmed_plan.has_order() && confirmed_plan.iter().all(|(_, change)| change.is_update()) {
             return self
                 .apply_channel_updates(
                     guild_id,
@@ -513,6 +591,12 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     }
                 }
             }
+        }
+
+        if session.pending.has_order()
+            && let Some(status) = apply_order_changes(self.source, &guild_id, &mut session, processing_deadline).await?
+        {
+            return session.into_result(status);
         }
         session.into_result(ChannelApplyStatus::Complete)
     }

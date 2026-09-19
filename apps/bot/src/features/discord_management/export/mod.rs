@@ -8,12 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     configuration::{
         ChannelKind, ChannelValue, ManagedValue, OverwriteTarget, OverwriteValue, PermissionName, RawChannelAttributes,
-        RawChannelDefinition, RawChannelKind, RawDefinitionFile, RawRoleAttributes, RawRoleDefinition, RawSettingsSets,
-        RawStateFile, RoleEnsure, RoleMode, StateFile, everyone_logical_id,
+        RawChannelDefinition, RawChannelKind, RawDefinitionFile, RawOrderDefinition, RawRoleAttributes,
+        RawRoleDefinition, RawSettingsSets, RawStateFile, RoleEnsure, RoleMode, StateFile, everyone_logical_id,
     },
     domain::{ManagementError, SCHEMA_VERSION},
     ids::{ChannelId, ChannelLogicalId, GuildId, MemberId, RoleId, RoleLogicalId},
     port::{ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSource, RoleSource},
+    resource::{compare_position_then_id, compare_role_order},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,9 +53,19 @@ pub(super) async fn export_roles<S: RoleSource>(
             )));
         }
     }
-    let roles = catalog.roles.into_iter().filter(|role| role.manageable);
+    let mut roles = catalog
+        .roles
+        .into_iter()
+        .filter(|role| {
+            role.id.get() == guild_id.get() || role.manageable || previous_mappings.values().any(|id| *id == role.id)
+        })
+        .collect::<Vec<_>>();
+    // Discord の Role は position 降順、同値なら Snowflake 昇順が UI 上から下の順です。
+    let everyone_id = RoleId::new(guild_id.get());
+    roles.sort_by(|left, right| compare_role_order(left, right, everyone_id));
     let mut definitions = BTreeMap::new();
     let mut mappings = previous_mappings.clone();
+    let mut order_roles = Vec::new();
 
     for role in roles {
         let is_everyone = role.id.get() == guild_id.get();
@@ -72,6 +83,9 @@ pub(super) async fn export_roles<S: RoleSource>(
             }
             generated
         };
+        if !is_everyone {
+            order_roles.push(logical_id.clone());
+        }
         if !is_everyone
             && let Some(existing_id) = mappings.insert(logical_id.clone(), role.id)
             && existing_id != role.id
@@ -85,7 +99,11 @@ pub(super) async fn export_roles<S: RoleSource>(
             logical_id.clone(),
             RawRoleDefinition {
                 ensure: RoleEnsure::Present,
-                mode: RoleMode::Managed,
+                mode: if is_everyone || role.manageable {
+                    RoleMode::Managed
+                } else {
+                    RoleMode::Reference
+                },
                 settings_sets: Vec::new(),
                 attributes: if is_everyone {
                     RawRoleAttributes {
@@ -101,7 +119,7 @@ pub(super) async fn export_roles<S: RoleSource>(
                             .collect(),
                         ..RawRoleAttributes::default()
                     }
-                } else {
+                } else if role.manageable {
                     RawRoleAttributes {
                         name: Some(ManagedValue::Value(role.name)),
                         color: Some(ManagedValue::Value(role.color)),
@@ -119,6 +137,11 @@ pub(super) async fn export_roles<S: RoleSource>(
                             })
                             .collect(),
                     }
+                } else {
+                    // 参照専用 Role の属性は Discord の現在値を設定値として
+                    // 固定化しない。参照専用の責務は順序アンカーと state 上の
+                    // 論理 ID を保持することだけです。
+                    RawRoleAttributes::default()
                 },
             },
         );
@@ -132,7 +155,12 @@ pub(super) async fn export_roles<S: RoleSource>(
         members: BTreeMap::new(),
         message_sets: BTreeMap::new(),
         threads: BTreeMap::new(),
-        order: None,
+        order: (!order_roles.is_empty()).then_some(RawOrderDefinition {
+            roles: order_roles,
+            categories: Vec::new(),
+            uncategorized: Vec::new(),
+            children: BTreeMap::new(),
+        }),
     })?;
     let state_json = serde_json::to_string_pretty(&RawStateFile {
         schema_version: SCHEMA_VERSION,
@@ -191,8 +219,8 @@ pub(super) async fn export_channels<S: ChannelSource>(
     let channels = catalog
         .channels
         .iter()
-        .filter(|channel| channel.manageable)
         .filter(|channel| matches!(channel.kind, ChannelKind::Category | ChannelKind::Text))
+        .filter(|channel| channel.manageable || previous_mappings.values().any(|id| *id == channel.id))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -220,6 +248,43 @@ pub(super) async fn export_channels<S: ChannelSource>(
             )));
         }
         logical_ids.insert(channel.id, logical_id);
+    }
+
+    let mut ordered_categories = channels
+        .iter()
+        .filter(|channel| channel.kind == ChannelKind::Category)
+        .collect::<Vec<_>>();
+    ordered_categories
+        .sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
+    let order_categories = ordered_categories
+        .iter()
+        .map(|channel| logical_ids[&channel.id].clone())
+        .collect::<Vec<_>>();
+    let mut uncategorized = channels
+        .iter()
+        .filter(|channel| channel.kind == ChannelKind::Text && channel.parent_id.is_none())
+        .collect::<Vec<_>>();
+    uncategorized.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
+    let order_uncategorized = uncategorized
+        .into_iter()
+        .map(|channel| logical_ids[&channel.id].clone())
+        .collect::<Vec<_>>();
+    let mut order_children = BTreeMap::new();
+    for category in ordered_categories {
+        let mut children = channels
+            .iter()
+            .filter(|channel| channel.parent_id == Some(category.id))
+            .collect::<Vec<_>>();
+        children.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
+        if !children.is_empty() {
+            order_children.insert(
+                logical_ids[&category.id].clone(),
+                children
+                    .into_iter()
+                    .map(|channel| logical_ids[&channel.id].clone())
+                    .collect(),
+            );
+        }
     }
 
     let previous_role_mappings = previous_state
@@ -339,10 +404,18 @@ pub(super) async fn export_channels<S: ChannelSource>(
         definitions.insert(
             logical_id,
             RawChannelDefinition {
-                mode: RoleMode::Managed,
+                mode: if channel.manageable {
+                    RoleMode::Managed
+                } else {
+                    RoleMode::Reference
+                },
                 ensure: None,
                 settings_sets: Vec::new(),
-                attributes,
+                attributes: if channel.manageable {
+                    attributes
+                } else {
+                    RawChannelAttributes::default()
+                },
             },
         );
     }
@@ -355,7 +428,13 @@ pub(super) async fn export_channels<S: ChannelSource>(
         members: member_definitions,
         message_sets: BTreeMap::new(),
         threads: BTreeMap::new(),
-        order: None,
+        order: (!order_categories.is_empty() || !order_uncategorized.is_empty() || !order_children.is_empty())
+            .then_some(RawOrderDefinition {
+                roles: Vec::new(),
+                categories: order_categories,
+                uncategorized: order_uncategorized,
+                children: order_children,
+            }),
     })?;
     let mut exported_roles = previous_role_mappings;
     for (discord_id, logical_id) in &role_ids {
