@@ -16,6 +16,7 @@ use crate::features::discord_management::{
 pub(crate) enum ChannelKind {
     Category,
     Text,
+    Announcement,
     /// Discord 上存在但構成管理ではまだ属性を管理しない Channel 種別です。
     ///
     /// catalog から除外すると、管理対象 Category の配下にある Voice/Forum 等を
@@ -33,6 +34,7 @@ pub(crate) enum ChannelKind {
 pub(crate) enum RawChannelKind {
     Category,
     Text,
+    Announcement,
 }
 
 impl From<RawChannelKind> for ChannelKind {
@@ -40,6 +42,7 @@ impl From<RawChannelKind> for ChannelKind {
         match kind {
             RawChannelKind::Category => Self::Category,
             RawChannelKind::Text => Self::Text,
+            RawChannelKind::Announcement => Self::Announcement,
         }
     }
 }
@@ -49,6 +52,7 @@ impl ChannelKind {
         match self {
             Self::Category => "category",
             Self::Text => "text",
+            Self::Announcement => "announcement",
             Self::Unsupported => "unsupported",
         }
     }
@@ -350,14 +354,24 @@ impl ChannelAttributes {
                 "Category {logical_id} には Text 専用属性を指定できません"
             )));
         }
-        if kind == ChannelKind::Text
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
             && self
                 .parent
                 .as_ref()
                 .is_some_and(|value| matches!(value, ChannelValue::Default))
         {
             return Err(ManagementError::InvalidDefinition(format!(
-                "Text Channel {logical_id} の parent に default は指定できません"
+                "{} Channel {logical_id} の parent に default は指定できません",
+                if kind == ChannelKind::Text {
+                    "Text"
+                } else {
+                    "Announcement"
+                }
+            )));
+        }
+        if kind == ChannelKind::Announcement && self.default_thread_slowmode_seconds.is_some() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Announcement Channel {logical_id} には default_thread_slowmode_seconds を指定できません"
             )));
         }
         if self.permissions_sync == Some(true) && !self.overwrites.is_empty() {
