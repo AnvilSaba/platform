@@ -3,12 +3,13 @@ use std::collections::BTreeMap;
 use serenity::{
     Error as SerenityError,
     all::{Colour, EditRole, GuildId as SerenityGuildId, Http, Permissions, RoleId as SerenityRoleId, UserId},
-    http::HttpError,
+    http::{HttpError, StatusCode},
 };
 
 use super::ids::{GuildId, RoleId};
 use super::service::{
-    ManagementError, RoleCatalog, RoleSnapshot, RoleSource, RoleTarget, RoleUpdate, RoleUpdateOutcome,
+    ManagementError, RoleCatalog, RoleCreate, RoleCreateOutcome, RoleDeleteOutcome, RoleSnapshot, RoleSource,
+    RoleTarget, RoleUpdate, RoleUpdateOutcome,
 };
 
 impl From<SerenityGuildId> for GuildId {
@@ -49,14 +50,11 @@ impl<'a> SerenityRoleSource<'a> {
 impl RoleSource for SerenityRoleSource<'_> {
     async fn role_catalog(&self, guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
         let guild_id = SerenityGuildId::from(*guild_id);
-        let roles = guild_id
-            .roles(self.http)
-            .await
-            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+        let roles = guild_id.roles(self.http).await.map_err(map_role_catalog_error)?;
         let bot_member = guild_id
             .member(self.http, self.bot_user_id)
             .await
-            .map_err(|error| ManagementError::RoleSource(error.to_string()))?;
+            .map_err(map_role_catalog_error)?;
 
         let everyone_id = SerenityRoleId::new(guild_id.get());
         let everyone_permissions = roles
@@ -124,6 +122,15 @@ impl RoleSource for SerenityRoleSource<'_> {
     }
 }
 
+fn map_role_catalog_error(error: SerenityError) -> ManagementError {
+    match error {
+        SerenityError::Http(error) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+            ManagementError::RoleCatalogPermissionDenied(error.to_string())
+        }
+        error => ManagementError::RoleSource(error.to_string()),
+    }
+}
+
 impl RoleTarget for SerenityRoleSource<'_> {
     async fn update_role(
         &self,
@@ -167,6 +174,52 @@ impl RoleTarget for SerenityRoleSource<'_> {
             Ok(_) => Ok(RoleUpdateOutcome::Applied),
             Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
                 Ok(RoleUpdateOutcome::ResponseUnknown)
+            }
+            Err(error) => Err(ManagementError::RoleSource(error.to_string())),
+        }
+    }
+
+    async fn create_role(&self, guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
+        let mut edit = EditRole::new()
+            .name(create.name)
+            .colour(Colour::new(create.color))
+            .hoist(create.hoist)
+            .mentionable(create.mentionable);
+        let mut permissions = Permissions::empty();
+        for (name, enabled) in create.permissions {
+            let permission = Permissions::all()
+                .iter_names()
+                .find_map(|(known_name, permission)| (known_name == name).then_some(permission))
+                .ok_or_else(|| ManagementError::InvalidDefinition(format!("未知の権限 {name} が指定されています")))?;
+            if enabled {
+                permissions |= permission;
+            }
+        }
+        edit = edit.permissions(permissions);
+
+        match SerenityGuildId::from(*guild_id).create_role(self.http, edit).await {
+            Ok(role) => Ok(RoleCreateOutcome::Created(RoleId::from(role.id))),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(RoleCreateOutcome::ResponseUnknown)
+            }
+            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+                Err(ManagementError::RolePermissionDenied(error.to_string()))
+            }
+            Err(error) => Err(ManagementError::RoleSource(error.to_string())),
+        }
+    }
+
+    async fn delete_role(&self, guild_id: &GuildId, role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
+        match SerenityGuildId::from(*guild_id)
+            .delete_role(self.http, SerenityRoleId::from(*role_id), None)
+            .await
+        {
+            Ok(()) => Ok(RoleDeleteOutcome::Deleted),
+            Err(SerenityError::Io(_)) | Err(SerenityError::Http(HttpError::Request(_))) => {
+                Ok(RoleDeleteOutcome::ResponseUnknown)
+            }
+            Err(SerenityError::Http(error)) if error.status_code() == Some(StatusCode::FORBIDDEN) => {
+                Err(ManagementError::RolePermissionDenied(error.to_string()))
             }
             Err(error) => Err(ManagementError::RoleSource(error.to_string())),
         }

@@ -17,7 +17,10 @@ use super::{
     adapter::SerenityRoleSource,
     confirmation::{ConfirmationError, ConfirmationStore},
     ids::GuildId,
-    service::{ManagementError, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan},
+    service::{
+        ManagementError, RoleApplyOptions, RoleApplyResult, RoleApplyStatus, RoleLifecycleChange,
+        RoleManagementService, RolePlan,
+    },
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -54,15 +57,33 @@ fn render_apply_result(result: &RoleApplyResult) -> String {
             "確認後に管理属性が変化しました。新しい plan を確認してください。".to_owned()
         }
         RoleApplyStatus::DeadlineExceeded => "処理期限に達したため、新しい変更を開始せず停止しました。".to_owned(),
+        RoleApplyStatus::DeletionPermissionRequired => "削除を含むため、削除許可付きの確認が必要です。".to_owned(),
+        RoleApplyStatus::DeletionPermissionDenied(error) => {
+            format!("Discord の Role 削除権限が不足しているため停止しました: {error}")
+        }
+        RoleApplyStatus::DeletionVerificationPermissionDenied(error) => {
+            format!("削除後の存在確認に必要な権限が不足しているため停止しました: {error}")
+        }
+        RoleApplyStatus::CreationResponseUnknown => {
+            "Role 作成の応答を確認できませんでした。重複作成を避けるため、state の確認が必要です。".to_owned()
+        }
+        RoleApplyStatus::DeletionResponseUnknown => {
+            "Role 削除の応答を確認できませんでした。既知の ID と削除意図を保持して停止しました。".to_owned()
+        }
+        RoleApplyStatus::DeletionVerificationIndeterminate(error) => {
+            format!("Role 削除後の存在確認が判定不能なため停止しました。削除済みとは扱いません: {error}")
+        }
         RoleApplyStatus::Failed(error) => format!("Role の変更中に失敗したため停止しました: {error}"),
         RoleApplyStatus::ResponseUnknown => {
             "Role 更新の応答を確認できず、再取得した値も希望値と一致しないため停止しました。".to_owned()
         }
     };
     format!(
-        "{summary}\n成功した属性: {}\n未完了の属性: {}",
+        "{summary}\n成功した属性: {} / Role 操作: {}\n未完了の属性: {} / Role 操作: {}",
         result.applied.len(),
-        result.pending.len()
+        result.applied_lifecycle.len(),
+        result.pending.len(),
+        result.pending_lifecycle.len(),
     )
 }
 
@@ -193,40 +214,64 @@ pub async fn role_apply(
         Err(error) => return send_input_error(ctx, error).await,
     };
     let rendered_plan = plan.render();
+    let deletion_in_plan = plan
+        .lifecycle
+        .iter()
+        .any(|change| matches!(change, RoleLifecycleChange::Delete { .. }));
 
     let confirmations = ConfirmationStore::default();
-    let token = confirmations.issue(
-        ctx.author().id.get(),
-        PendingRoleApply {
-            guild_id,
-            definition: definition_text,
-            state: state_text,
-            plan,
-        },
-        Instant::now(),
-    );
+    let pending = PendingRoleApply {
+        guild_id,
+        definition: definition_text,
+        state: state_text,
+        plan,
+    };
+    let token = confirmations.issue(ctx.author().id.get(), pending.clone(), Instant::now());
+    let deletion_token = deletion_in_plan.then(|| confirmations.issue(ctx.author().id.get(), pending, Instant::now()));
     let custom_id = token.custom_id();
+    let deletion_custom_id = deletion_token.as_ref().map(|token| token.custom_id());
+    let mut buttons = vec![
+        CreateButton::new(&custom_id)
+            .label("Role の変更を適用")
+            .style(ButtonStyle::Primary),
+    ];
+    if let Some(custom_id) = &deletion_custom_id {
+        buttons.push(
+            CreateButton::new(custom_id)
+                .label("削除を許可して適用")
+                .style(ButtonStyle::Danger),
+        );
+    }
 
     ctx.send(
         CreateReply::default()
             .content("添付の変更計画を確認し、5分以内に適用してください。")
             .attachment(CreateAttachment::bytes(rendered_plan, "discord-role-plan.txt"))
-            .components(&[CreateComponent::ActionRow(CreateActionRow::buttons(&[
-                CreateButton::new(&custom_id)
-                    .label("Role の変更を適用")
-                    .style(ButtonStyle::Danger),
-            ]))]),
+            .components(&[CreateComponent::ActionRow(CreateActionRow::buttons(&buttons))]),
     )
     .await?;
 
-    let custom_ids: FixedArray<FixedString> = vec![FixedString::from_string_trunc(custom_id)].try_into().unwrap();
+    let custom_ids: FixedArray<FixedString> = std::iter::once(custom_id.clone())
+        .chain(deletion_custom_id.clone())
+        .map(FixedString::from_string_trunc)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
     let mut interactions = ComponentInteractionCollector::new(ctx.serenity_context())
         .custom_ids(custom_ids)
         .timeout(CONFIRMATION_WINDOW)
         .stream();
     while let Some(interaction) = interactions.next().await {
         interaction.defer_ephemeral(ctx.http()).await?;
-        match confirmations.consume(&token, interaction.user.id.get(), Instant::now()) {
+        let allow_deletions = deletion_custom_id
+            .as_deref()
+            .is_some_and(|custom_id| custom_id == interaction.data.custom_id);
+        let selected_token = if allow_deletions {
+            deletion_token.as_ref().expect("削除ボタンには削除用トークンがあります")
+        } else {
+            &token
+        };
+        match confirmations.consume(selected_token, interaction.user.id.get(), Instant::now()) {
             Err(ConfirmationError::WrongOwner) => {
                 interaction
                     .edit_response(
@@ -258,15 +303,32 @@ pub async fn role_apply(
                 let deadlines = apply_deadlines(Instant::now());
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
                 let service = RoleManagementService::new(source);
-                let result = service
-                    .apply_roles(
-                        payload.guild_id,
-                        &payload.definition,
-                        &payload.state,
-                        &payload.plan,
-                        deadlines.processing,
-                    )
-                    .await;
+                let result = if allow_deletions {
+                    service
+                        .apply_roles_with_options(
+                            payload.guild_id,
+                            &payload.definition,
+                            &payload.state,
+                            &payload.plan,
+                            RoleApplyOptions { allow_deletions: true },
+                            deadlines.processing,
+                        )
+                        .await
+                } else {
+                    service
+                        .apply_roles(
+                            payload.guild_id,
+                            &payload.definition,
+                            &payload.state,
+                            &payload.plan,
+                            deadlines.processing,
+                        )
+                        .await
+                };
+                let needs_deletion_confirmation = matches!(
+                    &result,
+                    Ok(result) if result.status == RoleApplyStatus::DeletionPermissionRequired
+                );
                 let edit = match result {
                     Ok(result) => EditInteractionResponse::new()
                         .content(render_apply_result(&result))
@@ -283,6 +345,9 @@ pub async fn role_apply(
                         response?;
                     }
                     Err(_) => warn!("Role apply result response exceeded the two-minute return budget"),
+                }
+                if needs_deletion_confirmation {
+                    continue;
                 }
                 return Ok(());
             }

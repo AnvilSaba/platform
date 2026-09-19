@@ -101,10 +101,12 @@ async fn initial_export_uses_snowflakes_for_duplicate_role_names() {
         literal_string(&definition.roles[&logical_id("role_201")].attributes.name),
         Some("運営")
     );
-    assert!(!definition.roles[&logical_id("role_200")]
-        .attributes
-        .permissions
-        .contains_key("SEND_MESSAGES"));
+    assert!(
+        !definition.roles[&logical_id("role_200")]
+            .attributes
+            .permissions
+            .contains_key("SEND_MESSAGES")
+    );
     assert_eq!(state.guild_id.get(), 100);
     assert_eq!(state.roles[&logical_id("role_200")].get(), 200);
     assert_eq!(state.roles[&logical_id("role_201")].get(), 201);
@@ -156,7 +158,9 @@ async fn everyone_rejects_non_permission_managed_attributes() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("@everyone") && message.contains("権限")));
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("@everyone") && message.contains("権限"))
+    );
 }
 
 /// 再export時に既存stateの論理IDを引き継ぎ、Role名の変更で対応関係が変わらないことを保証する。
@@ -200,6 +204,37 @@ async fn exported_definition_has_no_plan_changes() {
         .unwrap();
 
     assert!(plan.changes.is_empty());
+}
+
+/// 空の対応表から明示した managed Role を新規構築する計画を作り、Discord ID を推測しないことを保証する。
+#[tokio::test]
+async fn empty_state_plans_managed_role_creation_without_discord_id() {
+    let service = RoleManagementService::new(StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("100", "@everyone")],
+    });
+    let definition = r#"
+        schema_version = 1
+        [roles.moderator]
+        name = "運営"
+    "#;
+
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap();
+
+    assert!(plan.changes.is_empty());
+    assert_eq!(
+        plan.lifecycle,
+        vec![RoleLifecycleChange::Create {
+            logical_id: logical_id("moderator"),
+            recreated: false,
+        }]
+    );
+    assert!(plan.render().contains("moderator"));
+    assert!(plan.render().contains("作成"));
+    assert!(!plan.render().contains("Snowflake"));
 }
 
 /// 参照専用Roleは更新しないため、Botが管理不能なRoleでも参照先として使用できることを保証する。
@@ -382,9 +417,11 @@ async fn default_specifiers_are_resolved_to_schema_version_values() {
         .await
         .unwrap();
 
-    assert!(plan.changes.iter().any(|change| {
-        change.attribute == "name" && change.current == "運営" && change.desired == "new role"
-    }));
+    assert!(
+        plan.changes
+            .iter()
+            .any(|change| { change.attribute == "name" && change.current == "運営" && change.desired == "new role" })
+    );
     assert!(
         plan.changes
             .iter()
@@ -444,7 +481,9 @@ async fn everyone_mapping_in_state_is_rejected() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("everyone") && message.contains("state に含めず")));
+    assert!(
+        matches!(error, ManagementError::InvalidState(message) if message.contains("everyone") && message.contains("state に含めず"))
+    );
 }
 
 /// 複数の論理IDが同じRole Snowflakeを指す曖昧なstateを拒否することを保証する。
@@ -480,9 +519,7 @@ async fn duplicate_logical_id_keys_in_state_are_reported() {
 
     let error = service.export_roles(guild_id(100), Some(state)).await.unwrap_err();
 
-    assert!(
-        matches!(error, ManagementError::InvalidState(message) if message.contains("論理 ID moderator が重複"))
-    );
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("論理 ID moderator が重複")));
 }
 
 /// 新規Role用に生成する論理IDが古いstateの予約と衝突した場合、誤対応せず拒否することを保証する。
@@ -681,6 +718,659 @@ impl RoleTarget for ApplyingFakeRoleSource {
     }
 }
 
+#[derive(Clone)]
+struct LifecycleFakeRoleSource {
+    catalog: Arc<Mutex<RoleCatalog>>,
+    catalog_calls: Arc<AtomicUsize>,
+    creates: Arc<Mutex<Vec<RoleCreate>>>,
+    deletes: Arc<Mutex<Vec<RoleId>>>,
+    create_outcome: RoleCreateOutcome,
+    create_error_on_call: Option<usize>,
+    delete_outcome: RoleDeleteOutcome,
+    delete_permission_denied: bool,
+    apply_delete: bool,
+    catalog_error_on_call: Option<usize>,
+    catalog_permission_denied: bool,
+}
+
+impl RoleSource for LifecycleFakeRoleSource {
+    async fn role_catalog(&self, _guild_id: &GuildId) -> Result<RoleCatalog, ManagementError> {
+        let call = self.catalog_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.catalog_error_on_call == Some(call) {
+            return Err(if self.catalog_permission_denied {
+                ManagementError::RoleCatalogPermissionDenied("Role の閲覧権限がありません".to_owned())
+            } else {
+                ManagementError::RoleSource("取得に失敗しました".to_owned())
+            });
+        }
+        Ok(self.catalog.lock().unwrap().clone())
+    }
+}
+
+impl RoleTarget for LifecycleFakeRoleSource {
+    async fn update_role(
+        &self,
+        _guild_id: &GuildId,
+        _role_id: &RoleId,
+        _update: RoleUpdate,
+    ) -> Result<RoleUpdateOutcome, ManagementError> {
+        Ok(RoleUpdateOutcome::Applied)
+    }
+
+    async fn create_role(&self, _guild_id: &GuildId, create: RoleCreate) -> Result<RoleCreateOutcome, ManagementError> {
+        let call = {
+            let mut creates = self.creates.lock().unwrap();
+            creates.push(create.clone());
+            creates.len()
+        };
+        if self.create_error_on_call == Some(call) {
+            return Err(ManagementError::RoleSource("作成後の処理に失敗しました".to_owned()));
+        }
+        if let RoleCreateOutcome::Created(role_id) = self.create_outcome {
+            let mut catalog = self.catalog.lock().unwrap();
+            catalog.roles.push(RoleSnapshot {
+                id: role_id,
+                manageable: true,
+                name: create.name,
+                color: create.color,
+                hoist: create.hoist,
+                mentionable: create.mentionable,
+                permissions: create.permissions,
+            });
+        }
+        Ok(self.create_outcome)
+    }
+
+    async fn delete_role(&self, _guild_id: &GuildId, role_id: &RoleId) -> Result<RoleDeleteOutcome, ManagementError> {
+        self.deletes.lock().unwrap().push(*role_id);
+        if self.delete_permission_denied {
+            return Err(ManagementError::RolePermissionDenied(
+                "MANAGE_ROLES がありません".to_owned(),
+            ));
+        }
+        if self.apply_delete {
+            self.catalog.lock().unwrap().roles.retain(|role| role.id != *role_id);
+        }
+        Ok(self.delete_outcome)
+    }
+}
+
+fn lifecycle_source(catalog: RoleCatalog) -> LifecycleFakeRoleSource {
+    LifecycleFakeRoleSource {
+        catalog: Arc::new(Mutex::new(catalog)),
+        catalog_calls: Arc::new(AtomicUsize::new(0)),
+        creates: Arc::new(Mutex::new(Vec::new())),
+        deletes: Arc::new(Mutex::new(Vec::new())),
+        create_outcome: RoleCreateOutcome::Created(role_id("300")),
+        create_error_on_call: None,
+        delete_outcome: RoleDeleteOutcome::Deleted,
+        delete_permission_denied: false,
+        apply_delete: true,
+        catalog_error_on_call: None,
+        catalog_permission_denied: false,
+    }
+}
+
+/// 作成成功時に新しい Snowflake を state へ記録し、同じ Role を重複作成しない出発点を返すことを保証する。
+#[tokio::test]
+async fn apply_creates_managed_role_and_returns_new_mapping() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
+        grantable_permissions: BTreeSet::from(["VIEW_CHANNEL".to_owned()]),
+        default_permissions: BTreeMap::from([("VIEW_CHANNEL".to_owned(), true)]),
+    });
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state("100", "{}"),
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert_eq!(result.applied_lifecycle, plan.lifecycle);
+    assert!(result.pending_lifecycle.is_empty());
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["moderator"], "300");
+    assert_eq!(source.creates.lock().unwrap().len(), 1);
+    assert_eq!(source.creates.lock().unwrap()[0].name, "運営");
+}
+
+/// 先行する Role 作成成功を state に残したまま、後続作成の失敗で停止することを保証する。
+#[tokio::test]
+async fn create_failure_returns_successful_mappings_and_pending_creations() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.create_error_on_call = Some(2);
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.first]\nname = \"先行\"\n[roles.second]\nname = \"後続\"\n";
+    let state_json = state("100", "{}");
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("作成後の処理")));
+    assert_eq!(result.applied_lifecycle.len(), 1);
+    assert_eq!(result.pending_lifecycle.len(), 1);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["first"], "300");
+    assert!(returned_state["roles"].get("second").is_none());
+}
+
+/// 作成応答不明時に重複作成せず、確認が必要な state を返すことを保証する。
+#[tokio::test]
+async fn unknown_create_response_is_recorded_without_retrying_creation() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.create_outcome = RoleCreateOutcome::ResponseUnknown;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
+    let state_json = state("100", "{}");
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
+    assert_eq!(source.creates.lock().unwrap().len(), 1);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
+    assert!(
+        RoleManagementService::new(source.clone())
+            .plan_roles(guild_id(100), definition, &result.state_json)
+            .await
+            .is_err()
+    );
+}
+
+/// 削除済み Role の再作成応答不明でも旧 ID と pending 状態を矛盾なく保持することを保証する。
+#[tokio::test]
+async fn unknown_recreation_response_keeps_deleted_mapping_until_confirmation() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("100", "@everyone")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.create_outcome = RoleCreateOutcome::ResponseUnknown;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"再作成\"\n";
+    let state_json = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": {"moderator": "200"},
+        "deleted_roles": ["moderator"]
+    }"#;
+    let plan = service.plan_roles(guild_id(100), definition, state_json).await.unwrap();
+
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::CreationResponseUnknown);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["moderator"], "200");
+    assert_eq!(returned_state["deleted_roles"], serde_json::json!(["moderator"]));
+    assert_eq!(returned_state["pending_creations"], serde_json::json!(["moderator"]));
+    let error = service
+        .plan_roles(guild_id(100), definition, &result.state_json)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("作成結果不明")));
+}
+
+/// 定義から Role を外す管理解除が実物を残し、state だけを更新して再適用を無差分にすることを保証する。
+#[tokio::test]
+async fn omitted_role_is_released_without_deleting_the_discord_role() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "運営")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n";
+    let state_json = state("100", r#"{"moderator":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        plan.lifecycle,
+        vec![RoleLifecycleChange::Release {
+            logical_id: logical_id("moderator"),
+            discord_id: role_id("200"),
+        }]
+    );
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::Complete);
+    assert!(result.pending_lifecycle.is_empty());
+    assert_eq!(source.deletes.lock().unwrap().len(), 0);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&result.state_json).unwrap()["roles"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .plan_roles(guild_id(100), definition, &result.state_json)
+            .await
+            .unwrap()
+            .lifecycle
+            .is_empty()
+    );
+    assert_eq!(source.catalog.lock().unwrap().roles.len(), 1);
+}
+
+/// 明示削除を plan に表示し、削除許可なしでは外部操作を開始しないことを保証する。
+#[tokio::test]
+async fn deletion_requires_explicit_permission_before_calling_discord() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        plan.lifecycle.as_slice(),
+        [RoleLifecycleChange::Delete { .. }]
+    ));
+    assert!(plan.render().contains("削除"));
+    assert!(plan.render().contains("影響"));
+    let result = service
+        .apply_roles(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RoleApplyStatus::DeletionPermissionRequired);
+    assert!(source.deletes.lock().unwrap().is_empty());
+}
+
+/// Discord API の削除権限不足を、確認不足による削除許可要求とは別の結果として返すことを保証する。
+#[tokio::test]
+async fn deletion_permission_shortage_is_distinguished_from_confirmation_requirement() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.delete_permission_denied = true;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result.status,
+        RoleApplyStatus::DeletionPermissionDenied(message) if message.contains("MANAGE_ROLES")
+    ));
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["pending_deletions"], serde_json::json!(["unused"]));
+    assert!(returned_state.get("deleted_roles").is_none());
+}
+
+/// 明示削除成功を deleted として保存し、同じ削除と deleted からの再作成を無差分・新 ID で扱うことを保証する。
+#[tokio::test]
+async fn deletion_is_idempotent_and_deleted_role_can_be_recreated() {
+    let source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    let service = RoleManagementService::new(source.clone());
+    let delete_definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let delete_plan = service
+        .plan_roles(guild_id(100), delete_definition, &state_json)
+        .await
+        .unwrap();
+    let deleted = service
+        .apply_roles_with_options(
+            guild_id(100),
+            delete_definition,
+            &state_json,
+            &delete_plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(deleted.status, RoleApplyStatus::Complete);
+    let deleted_state: serde_json::Value = serde_json::from_str(&deleted.state_json).unwrap();
+    assert_eq!(deleted_state["deleted_roles"], serde_json::json!(["unused"]));
+    assert!(
+        service
+            .plan_roles(guild_id(100), delete_definition, &deleted.state_json)
+            .await
+            .unwrap()
+            .lifecycle
+            .is_empty()
+    );
+
+    let create_definition = "schema_version = 1\n[roles.unused]\nname = \"再作成\"\n";
+    let create_plan = service
+        .plan_roles(guild_id(100), create_definition, &deleted.state_json)
+        .await
+        .unwrap();
+    assert!(matches!(
+        create_plan.lifecycle.as_slice(),
+        [RoleLifecycleChange::Create { recreated: true, .. }]
+    ));
+    let recreated = service
+        .apply_roles(
+            guild_id(100),
+            create_definition,
+            &deleted.state_json,
+            &create_plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recreated.status, RoleApplyStatus::Complete);
+    let recreated_state: serde_json::Value = serde_json::from_str(&recreated.state_json).unwrap();
+    assert_eq!(recreated_state["roles"]["unused"], "300");
+    assert!(recreated_state.get("deleted_roles").is_none());
+}
+
+/// 削除成功直後の state を保持したまま最新構成の取得失敗で停止することを保証する。
+#[tokio::test]
+async fn delete_refresh_failure_returns_deleted_state_without_rollback() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.catalog_error_on_call = Some(3);
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(result.status, RoleApplyStatus::Failed(message) if message.contains("取得に失敗")));
+    assert_eq!(result.applied_lifecycle.len(), 1);
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["deleted_roles"], serde_json::json!(["unused"]));
+    assert!(source.catalog.lock().unwrap().roles.is_empty());
+}
+
+/// 削除応答不明時に既知 ID と意図を state に残し、存在確認で次回に確定できることを保証する。
+#[tokio::test]
+async fn unknown_delete_response_keeps_intent_until_existence_is_confirmed() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
+    source.apply_delete = false;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let unknown = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown.status, RoleApplyStatus::DeletionResponseUnknown);
+    let unknown_state: serde_json::Value = serde_json::from_str(&unknown.state_json).unwrap();
+    assert_eq!(unknown_state["roles"]["unused"], "200");
+    assert_eq!(unknown_state["pending_deletions"], serde_json::json!(["unused"]));
+
+    source.catalog.lock().unwrap().roles.clear();
+    let resolved = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &unknown.state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status, RoleApplyStatus::Complete);
+    let resolved_state: serde_json::Value = serde_json::from_str(&resolved.state_json).unwrap();
+    assert_eq!(resolved_state["deleted_roles"], serde_json::json!(["unused"]));
+    assert!(resolved_state.get("pending_deletions").is_none());
+    assert_eq!(source.deletes.lock().unwrap().len(), 1);
+}
+
+/// 削除応答後の存在確認が取得不能な場合、削除済みとはせず判定不能として返すことを保証する。
+#[tokio::test]
+async fn unknown_delete_response_with_failed_verification_is_indeterminate() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
+    source.apply_delete = false;
+    source.catalog_error_on_call = Some(3);
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result.status,
+        RoleApplyStatus::DeletionVerificationIndeterminate(message) if message.contains("取得に失敗")
+    ));
+    let returned_state: serde_json::Value = serde_json::from_str(&result.state_json).unwrap();
+    assert_eq!(returned_state["roles"]["unused"], "200");
+    assert_eq!(returned_state["pending_deletions"], serde_json::json!(["unused"]));
+    assert!(returned_state.get("deleted_roles").is_none());
+}
+
+/// 削除後の存在確認で閲覧権限が不足した場合、一般的な取得不能とは別に返すことを保証する。
+#[tokio::test]
+async fn unknown_delete_response_with_verification_permission_shortage_is_distinguished() {
+    let mut source = lifecycle_source(RoleCatalog {
+        roles: vec![role("200", "不要")],
+        permission_names: BTreeSet::new(),
+        grantable_permissions: BTreeSet::new(),
+        default_permissions: BTreeMap::new(),
+    });
+    source.delete_outcome = RoleDeleteOutcome::ResponseUnknown;
+    source.apply_delete = false;
+    source.catalog_error_on_call = Some(3);
+    source.catalog_permission_denied = true;
+    let service = RoleManagementService::new(source.clone());
+    let definition = "schema_version = 1\n[roles.unused]\nensure = \"absent\"\n";
+    let state_json = state("100", r#"{"unused":"200"}"#);
+    let plan = service
+        .plan_roles(guild_id(100), definition, &state_json)
+        .await
+        .unwrap();
+
+    let result = service
+        .apply_roles_with_options(
+            guild_id(100),
+            definition,
+            &state_json,
+            &plan,
+            RoleApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result.status,
+        RoleApplyStatus::DeletionVerificationPermissionDenied(message) if message.contains("閲覧権限")
+    ));
+}
+
+/// active 対応先が予期せず消えた場合、自動再作成せず state エラーで停止することを保証する。
+#[tokio::test]
+async fn active_role_disappearance_is_not_treated_as_creation() {
+    let service = RoleManagementService::new(StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("100", "@everyone")],
+    });
+    let definition = "schema_version = 1\n[roles.moderator]\nname = \"運営\"\n";
+    let error = service
+        .plan_roles(guild_id(100), definition, &state("100", r#"{"moderator":"200"}"#))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("予期せず消失")));
+}
+
+/// 新規 Role に必須の name がない場合、外部操作前に定義エラーにすることを保証する。
+#[tokio::test]
+async fn new_managed_role_requires_a_name() {
+    let service = RoleManagementService::new(StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![role("100", "@everyone")],
+    });
+    let definition = "schema_version = 1\n[roles.moderator]\nhoist = true\n";
+    let error = service
+        .plan_roles(guild_id(100), definition, &state("100", "{}"))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("必要"))
+    );
+}
+
 /// Botが持たない権限のfalseからtrueへの変更をplanで拒否し、Discord APIの失敗を事前に示す。
 #[tokio::test]
 async fn plan_rejects_granting_a_permission_the_bot_does_not_have() {
@@ -706,7 +1396,9 @@ async fn plan_rejects_granting_a_permission_the_bot_does_not_have() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("SEND_MESSAGES") && message.contains("Bot 自身")));
+    assert!(
+        matches!(error, ManagementError::InvalidDefinition(message) if message.contains("SEND_MESSAGES") && message.contains("Bot 自身"))
+    );
 }
 
 /// Botが現在持たない権限でも、対象Roleから削除する変更は付与ではないためplanできることを保証する。
@@ -781,8 +1473,7 @@ async fn apply_resolves_everyone_without_a_state_mapping() {
 #[tokio::test]
 async fn apply_updates_only_explicit_attributes_and_preserves_omitted_permissions() {
     let mut moderator = role("200", "運営");
-    moderator.permissions =
-        BTreeMap::from([("VIEW_CHANNEL".to_owned(), false), ("MANAGE_MESSAGES".to_owned(), true)]);
+    moderator.permissions = BTreeMap::from([("VIEW_CHANNEL".to_owned(), false), ("MANAGE_MESSAGES".to_owned(), true)]);
     let source = ApplyingFakeRoleSource {
         catalog: Arc::new(Mutex::new(RoleCatalog {
             roles: vec![moderator],
