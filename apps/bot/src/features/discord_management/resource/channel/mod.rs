@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{
     configuration::{
-        ChannelAttributes, ChannelDefinition, ChannelKind, ChannelValue, DefinitionFile, KnownPermission,
-        OverwriteTarget, OverwriteValue, StateFile, VideoQuality,
+        ChannelAttributes, ChannelDefinition, ChannelKind, ChannelValue, DefinitionFile, ForumLayout, ForumSortOrder,
+        KnownPermission, OverwriteTarget, OverwriteValue, StateFile, VideoQuality,
     },
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, RoleId},
@@ -101,6 +101,9 @@ pub(crate) struct AttributeChanges {
     user_limit: Option<ValueChange<u16>>,
     rtc_region: Option<NullableValueChange<String>>,
     video_quality: Option<ValueChange<VideoQuality>>,
+    default_reaction: Option<NullableValueChange<String>>,
+    default_sort_order: Option<NullableValueChange<ForumSortOrder>>,
+    default_forum_layout: Option<ValueChange<ForumLayout>>,
     overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>,
     /// 同期時に子へ送る Category の完成形です。空の map も有効な更新値です。
     synced_overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
@@ -195,6 +198,24 @@ impl AttributeChanges {
             .as_ref()
             .map(|value| value.resolve(DEFAULT_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY))
             .and_then(|desired| ValueChange::between(actual.video_quality.unwrap_or(DEFAULT_VIDEO_QUALITY), desired));
+        let default_reaction = desired
+            .default_reaction
+            .as_ref()
+            .map(|value| value.resolve_optional(None))
+            .and_then(|desired| NullableValueChange::between(actual.default_reaction.clone(), desired));
+        let default_sort_order = desired
+            .default_sort_order
+            .as_ref()
+            .map(|value| value.resolve_optional(None))
+            .and_then(|desired| NullableValueChange::between(actual.default_sort_order, desired));
+        let default_forum_layout = desired
+            .default_forum_layout
+            .as_ref()
+            .and_then(ChannelValue::as_value)
+            .copied()
+            .and_then(|desired| {
+                ValueChange::between(actual.default_forum_layout.unwrap_or(ForumLayout::NotSet), desired)
+            });
         let overwrites = if synced_overwrites.is_some() {
             BTreeMap::new()
         } else {
@@ -220,6 +241,9 @@ impl AttributeChanges {
             user_limit,
             rtc_region,
             video_quality,
+            default_reaction,
+            default_sort_order,
+            default_forum_layout,
             overwrites,
             synced_overwrites,
         };
@@ -239,6 +263,9 @@ impl AttributeChanges {
             && self.user_limit.is_none()
             && self.rtc_region.is_none()
             && self.video_quality.is_none()
+            && self.default_reaction.is_none()
+            && self.default_sort_order.is_none()
+            && self.default_forum_layout.is_none()
             && self.overwrites.is_empty()
             && self.synced_overwrites.is_none()
     }
@@ -325,6 +352,10 @@ impl AttributeChanges {
             user_limit: self.user_limit.as_ref().map(|change| *change.desired()),
             rtc_region: nullable_update(self.rtc_region.as_ref()),
             video_quality: self.video_quality.as_ref().map(|change| *change.desired()),
+            default_reaction: nullable_update(self.default_reaction.as_ref()),
+            default_sort_order: nullable_update(self.default_sort_order.as_ref()),
+            default_forum_layout: self.default_forum_layout.as_ref().map(|change| *change.desired()),
+            available_tags: matches!(actual.kind, ChannelKind::Forum).then(|| actual.available_tags.clone()),
             overwrites: (self.synced_overwrites.is_some() || !self.overwrites.is_empty()).then_some(overwrites),
         })
     }
@@ -450,6 +481,36 @@ impl AttributeChanges {
                 display_video_quality(*change.desired()),
             );
         }
+        if let Some(change) = &self.default_reaction {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_reaction",
+                display_nullable_string(change.current().as_ref()),
+                display_nullable_string(change.desired()),
+            );
+        }
+        if let Some(change) = &self.default_sort_order {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_sort_order",
+                change.current().as_ref().map_or("None", display_forum_sort_order),
+                change.desired().map_or("None", display_forum_sort_order),
+            );
+        }
+        if let Some(change) = &self.default_forum_layout {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_forum_layout",
+                display_forum_layout(*change.current()),
+                display_forum_layout(*change.desired()),
+            );
+        }
         for (target, permissions) in &self.overwrites {
             for (permission, change) in permissions {
                 render_change_line(
@@ -501,6 +562,21 @@ fn display_video_quality(value: VideoQuality) -> &'static str {
     match value {
         VideoQuality::Auto => "auto",
         VideoQuality::Full => "full",
+    }
+}
+
+fn display_forum_sort_order(value: &ForumSortOrder) -> &'static str {
+    match value {
+        ForumSortOrder::LatestActivity => "latest_activity",
+        ForumSortOrder::CreationDate => "creation_date",
+    }
+}
+
+fn display_forum_layout(value: ForumLayout) -> &'static str {
+    match value {
+        ForumLayout::NotSet => "not_set",
+        ForumLayout::List => "list",
+        ForumLayout::Gallery => "gallery",
     }
 }
 
@@ -743,6 +819,37 @@ fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
             ));
         }
     }
+    if matches!(payload.kind, ChannelKind::Forum) {
+        output.push_str(&format!("    parent: {parent}\n"));
+        output.push_str(&format!(
+            "    topic: {}\n",
+            display_nullable_string(payload.topic.as_ref())
+        ));
+        output.push_str(&format!("    nsfw: {}\n", payload.nsfw));
+        output.push_str(&format!("    slowmode_seconds: {}\n", payload.slowmode_seconds));
+        output.push_str(&format!(
+            "    default_auto_archive_minutes: {}\n",
+            display_nullable(payload.default_auto_archive_minutes.as_ref())
+        ));
+        output.push_str(&format!(
+            "    default_thread_slowmode_seconds: {}\n",
+            payload.default_thread_slowmode_seconds
+        ));
+        output.push_str(&format!(
+            "    default_reaction: {}\n",
+            display_nullable_string(payload.default_reaction.as_ref())
+        ));
+        output.push_str(&format!(
+            "    default_sort_order: {}\n",
+            payload
+                .default_sort_order
+                .as_ref()
+                .map_or("None", display_forum_sort_order)
+        ));
+        if let Some(layout) = payload.default_forum_layout {
+            output.push_str(&format!("    default_forum_layout: {}\n", display_forum_layout(layout)));
+        }
+    }
     if matches!(payload.kind, ChannelKind::Voice | ChannelKind::Stage) {
         output.push_str(&format!("    parent: {parent}\n"));
         output.push_str(&format!("    nsfw: {}\n", payload.nsfw));
@@ -847,9 +954,10 @@ pub(crate) fn build_channel_plan_with_capabilities(
             &planned_channel_creations,
         )?;
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
-            if kind == ChannelKind::Announcement && !supports_announcement_channels {
+            if matches!(kind, ChannelKind::Announcement | ChannelKind::Forum) && !supports_announcement_channels {
                 return Err(ManagementError::InvalidState(format!(
-                    "Announcement Channel {logical_id} の作成には Guild の COMMUNITY feature が必要です"
+                    "{} Channel {logical_id} の作成には Guild の COMMUNITY feature が必要です",
+                    kind.as_str()
                 )));
             }
             let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
@@ -927,7 +1035,10 @@ pub(crate) fn requires_announcement_feature(definition: &DefinitionFile, state: 
     definition.channels.iter().any(|(logical_id, channel)| {
         channel.is_managed()
             && !state.channels.contains_key(logical_id)
-            && channel.attributes().kind == Some(ChannelKind::Announcement)
+            && matches!(
+                channel.attributes().kind,
+                Some(ChannelKind::Announcement | ChannelKind::Forum)
+            )
     })
 }
 
@@ -1044,7 +1155,11 @@ fn validate_deferred_child_order(
         };
         if !matches!(
             channel.kind,
-            ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+            ChannelKind::Text
+                | ChannelKind::Announcement
+                | ChannelKind::Voice
+                | ChannelKind::Stage
+                | ChannelKind::Forum
         ) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order.children の Channel {logical_id} は Text の兄弟として指定できません"
@@ -1163,7 +1278,7 @@ fn build_order_group(
             && !(expected_kind == ChannelKind::Text
                 && matches!(
                     channel.kind,
-                    ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+                    ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage | ChannelKind::Forum
                 ))
         {
             return Err(ManagementError::InvalidDefinition(format!(
@@ -1489,7 +1604,13 @@ fn validate_channel_parent(
     let declared_kind = compose_attributes(parent_definition).kind;
     if matches!(
         declared_kind,
-        Some(ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage)
+        Some(
+            ChannelKind::Text
+                | ChannelKind::Announcement
+                | ChannelKind::Voice
+                | ChannelKind::Stage
+                | ChannelKind::Forum
+        )
     ) {
         return Err(ManagementError::InvalidDefinition(format!(
             "Channel {logical_id} の親 {parent_logical_id} は Category である必要があります"
@@ -1792,6 +1913,21 @@ pub(crate) fn desired_channel_create_with_catalog(
         user_limit: matches!(kind, ChannelKind::Voice | ChannelKind::Stage).then_some(user_limit),
         rtc_region,
         video_quality: matches!(kind, ChannelKind::Voice | ChannelKind::Stage).then_some(video_quality),
+        default_reaction: attributes
+            .default_reaction
+            .as_ref()
+            .and_then(ChannelValue::as_value)
+            .cloned(),
+        default_sort_order: attributes
+            .default_sort_order
+            .as_ref()
+            .and_then(ChannelValue::as_value)
+            .copied(),
+        default_forum_layout: attributes
+            .default_forum_layout
+            .as_ref()
+            .and_then(ChannelValue::as_value)
+            .copied(),
         overwrites,
     })
 }

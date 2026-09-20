@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::{
-    configuration::{ChannelKind, Color, KnownPermission, OverwriteValue},
+    configuration::{ChannelKind, Color, ForumLayout, ForumSortOrder, KnownPermission, OverwriteValue},
     domain::{ManagementError, ResourceType},
     ids::{ChannelId, GuildId, MemberId, RoleId},
 };
@@ -181,7 +181,20 @@ pub(super) struct ChannelSnapshot {
     pub user_limit: Option<u16>,
     pub rtc_region: Option<String>,
     pub video_quality: Option<super::configuration::VideoQuality>,
+    pub default_reaction: Option<String>,
+    pub default_sort_order: Option<ForumSortOrder>,
+    pub default_forum_layout: Option<ForumLayout>,
+    /// 基本属性の更新でも消してはならない既存 Forum Tag の完全な API 表現です。
+    pub available_tags: Vec<ForumTagSnapshot>,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ForumTagSnapshot {
+    pub id: u64,
+    pub name: String,
+    pub moderated: bool,
+    pub emoji: Option<String>,
 }
 
 /// Discord が追加した権限や、現在の SDK が名前を持たない権限 bit を保持します。
@@ -281,6 +294,9 @@ pub(super) struct ChannelCreate {
     pub user_limit: Option<u16>,
     pub rtc_region: ChannelUpdateValue<String>,
     pub video_quality: Option<super::configuration::VideoQuality>,
+    pub default_reaction: Option<String>,
+    pub default_sort_order: Option<ForumSortOrder>,
+    pub default_forum_layout: Option<ForumLayout>,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
@@ -310,6 +326,10 @@ pub(super) struct ChannelUpdate {
     pub user_limit: Option<u16>,
     pub rtc_region: ChannelUpdateValue<String>,
     pub video_quality: Option<super::configuration::VideoQuality>,
+    pub default_reaction: ChannelUpdateValue<String>,
+    pub default_sort_order: ChannelUpdateValue<ForumSortOrder>,
+    pub default_forum_layout: Option<ForumLayout>,
+    pub available_tags: Option<Vec<ForumTagSnapshot>>,
     pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
 }
 
@@ -374,6 +394,22 @@ impl ChannelUpdate {
         }
         if let Some(video_quality) = self.video_quality {
             channel.video_quality = Some(video_quality);
+        }
+        match &self.default_reaction {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(value) => channel.default_reaction = Some(value.clone()),
+            ChannelUpdateValue::Clear => channel.default_reaction = None,
+        }
+        match self.default_sort_order {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(value) => channel.default_sort_order = Some(value),
+            ChannelUpdateValue::Clear => channel.default_sort_order = None,
+        }
+        if let Some(value) = self.default_forum_layout {
+            channel.default_forum_layout = Some(value);
+        }
+        if let Some(tags) = &self.available_tags {
+            channel.available_tags.clone_from(tags);
         }
         if let Some(overwrites) = &self.overwrites {
             channel.overwrites.clone_from(overwrites);

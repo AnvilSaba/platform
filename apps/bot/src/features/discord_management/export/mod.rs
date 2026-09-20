@@ -227,6 +227,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
                     | ChannelKind::Announcement
                     | ChannelKind::Voice
                     | ChannelKind::Stage
+                    | ChannelKind::Forum
             )
         })
         .filter(|channel| channel.manageable || previous_mappings.values().any(|id| *id == channel.id))
@@ -274,7 +275,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .filter(|channel| {
             matches!(
                 channel.kind,
-                ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+                ChannelKind::Text
+                    | ChannelKind::Announcement
+                    | ChannelKind::Voice
+                    | ChannelKind::Stage
+                    | ChannelKind::Forum
             ) && channel.parent_id.is_none()
         })
         .collect::<Vec<_>>();
@@ -362,7 +367,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
         let kind = channel.kind;
         let is_permissions_sync = matches!(
             kind,
-            ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+            ChannelKind::Text
+                | ChannelKind::Announcement
+                | ChannelKind::Voice
+                | ChannelKind::Stage
+                | ChannelKind::Forum
         ) && channel.parent_id.is_some_and(|parent_id| {
             catalog
                 .channels
@@ -377,6 +386,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
                 ChannelKind::Announcement => RawChannelKind::Announcement,
                 ChannelKind::Voice => RawChannelKind::Voice,
                 ChannelKind::Stage => RawChannelKind::Stage,
+                ChannelKind::Forum => RawChannelKind::Forum,
                 ChannelKind::Unsupported => unreachable!("Unsupported Channel は export 対象に含まれません"),
             }),
             name: Some(ChannelValue::Value(channel.name)),
@@ -393,14 +403,18 @@ pub(super) async fn export_channels<S: ChannelSource>(
             }
             None if matches!(
                 kind,
-                ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+                ChannelKind::Text
+                    | ChannelKind::Announcement
+                    | ChannelKind::Voice
+                    | ChannelKind::Stage
+                    | ChannelKind::Forum
             ) =>
             {
                 attributes.parent = Some(ChannelValue::Clear);
             }
             None => {}
         }
-        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement) {
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Forum) {
             match channel.topic {
                 Some(topic) => {
                     attributes.topic = Some(ChannelValue::Value(topic));
@@ -414,10 +428,21 @@ pub(super) async fn export_channels<S: ChannelSource>(
             if let Some(minutes) = channel.default_auto_archive_minutes {
                 attributes.default_auto_archive_minutes = Some(ChannelValue::Value(minutes));
             }
-            if kind == ChannelKind::Text {
+            if matches!(kind, ChannelKind::Text | ChannelKind::Forum) {
                 attributes.default_thread_slowmode_seconds =
                     Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
             }
+        }
+        if matches!(kind, ChannelKind::Forum) {
+            attributes.default_reaction = Some(match channel.default_reaction {
+                Some(value) => ChannelValue::Value(value),
+                None => ChannelValue::Clear,
+            });
+            attributes.default_sort_order = Some(match channel.default_sort_order {
+                Some(value) => ChannelValue::Value(value),
+                None => ChannelValue::Clear,
+            });
+            attributes.default_forum_layout = channel.default_forum_layout.map(ChannelValue::Value);
         }
         if matches!(kind, ChannelKind::Voice | ChannelKind::Stage) {
             attributes.nsfw = Some(ChannelValue::Value(channel.nsfw));

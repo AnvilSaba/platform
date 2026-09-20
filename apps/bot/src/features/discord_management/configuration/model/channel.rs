@@ -19,6 +19,7 @@ pub(crate) enum ChannelKind {
     Announcement,
     Voice,
     Stage,
+    Forum,
     /// Discord 上存在但構成管理ではまだ属性を管理しない Channel 種別です。
     ///
     /// catalog から除外すると、管理対象 Category の配下にある Voice/Forum 等を
@@ -39,6 +40,7 @@ pub(crate) enum RawChannelKind {
     Announcement,
     Voice,
     Stage,
+    Forum,
 }
 
 impl From<RawChannelKind> for ChannelKind {
@@ -49,6 +51,7 @@ impl From<RawChannelKind> for ChannelKind {
             RawChannelKind::Announcement => Self::Announcement,
             RawChannelKind::Voice => Self::Voice,
             RawChannelKind::Stage => Self::Stage,
+            RawChannelKind::Forum => Self::Forum,
         }
     }
 }
@@ -61,6 +64,7 @@ impl ChannelKind {
             Self::Announcement => "announcement",
             Self::Voice => "voice",
             Self::Stage => "stage",
+            Self::Forum => "forum",
             Self::Unsupported => "unsupported",
         }
     }
@@ -71,6 +75,21 @@ impl ChannelKind {
 pub(crate) enum VideoQuality {
     Auto,
     Full,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ForumSortOrder {
+    LatestActivity,
+    CreationDate,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ForumLayout {
+    NotSet,
+    List,
+    Gallery,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,6 +329,9 @@ pub(crate) struct ChannelAttributes {
     pub(crate) user_limit: Option<ChannelValue<u16>>,
     pub(crate) rtc_region: Option<ChannelValue<String>>,
     pub(crate) video_quality: Option<ChannelValue<VideoQuality>>,
+    pub(crate) default_reaction: Option<ChannelValue<String>>,
+    pub(crate) default_sort_order: Option<ChannelValue<ForumSortOrder>>,
+    pub(crate) default_forum_layout: Option<ChannelValue<ForumLayout>>,
     /// 親 Category と permission overwrite を同期する明示指定です。
     pub(crate) permissions_sync: Option<bool>,
     pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<KnownPermission, OverwriteValue>>,
@@ -355,6 +377,15 @@ impl ChannelAttributes {
         if later.video_quality.is_some() {
             self.video_quality.clone_from(&later.video_quality);
         }
+        if later.default_reaction.is_some() {
+            self.default_reaction.clone_from(&later.default_reaction);
+        }
+        if later.default_sort_order.is_some() {
+            self.default_sort_order.clone_from(&later.default_sort_order);
+        }
+        if later.default_forum_layout.is_some() {
+            self.default_forum_layout.clone_from(&later.default_forum_layout);
+        }
         if later.permissions_sync.is_some() {
             self.permissions_sync = later.permissions_sync;
         }
@@ -383,13 +414,16 @@ impl ChannelAttributes {
                 || self.bitrate.is_some()
                 || self.user_limit.is_some()
                 || self.rtc_region.is_some()
-                || self.video_quality.is_some())
+                || self.video_quality.is_some()
+                || self.default_reaction.is_some()
+                || self.default_sort_order.is_some()
+                || self.default_forum_layout.is_some())
         {
             return Err(ManagementError::InvalidDefinition(format!(
                 "Category {logical_id} には Text 専用属性を指定できません"
             )));
         }
-        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Forum)
             && self
                 .parent
                 .as_ref()
@@ -399,9 +433,21 @@ impl ChannelAttributes {
                 "{} Channel {logical_id} の parent に default は指定できません",
                 if kind == ChannelKind::Text {
                     "Text"
-                } else {
+                } else if kind == ChannelKind::Announcement {
                     "Announcement"
+                } else {
+                    kind.as_str()
                 }
+            )));
+        }
+        if !matches!(kind, ChannelKind::Forum)
+            && (self.default_reaction.is_some()
+                || self.default_sort_order.is_some()
+                || self.default_forum_layout.is_some())
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "{} Channel {logical_id} には Forum 専用属性を指定できません",
+                kind.as_str()
             )));
         }
         if kind == ChannelKind::Announcement && self.default_thread_slowmode_seconds.is_some() {
@@ -409,7 +455,7 @@ impl ChannelAttributes {
                 "Announcement Channel {logical_id} には default_thread_slowmode_seconds を指定できません"
             )));
         }
-        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
+        if matches!(kind, ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Forum)
             && (self.bitrate.is_some()
                 || self.user_limit.is_some()
                 || self.rtc_region.is_some()
@@ -419,8 +465,10 @@ impl ChannelAttributes {
                 "{} Channel {logical_id} には音声専用属性を指定できません",
                 if kind == ChannelKind::Text {
                     "Text"
-                } else {
+                } else if kind == ChannelKind::Announcement {
                     "Announcement"
+                } else {
+                    kind.as_str()
                 }
             )));
         }
@@ -488,6 +536,9 @@ impl ChannelAttributes {
             && self.user_limit.is_none()
             && self.rtc_region.is_none()
             && self.video_quality.is_none()
+            && self.default_reaction.is_none()
+            && self.default_sort_order.is_none()
+            && self.default_forum_layout.is_none()
             && self.permissions_sync.is_none()
             && self.overwrites.is_empty()
     }
@@ -536,6 +587,12 @@ pub(crate) struct RawChannelAttributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) video_quality: Option<ChannelValue<VideoQuality>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_reaction: Option<ChannelValue<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_sort_order: Option<ChannelValue<ForumSortOrder>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_forum_layout: Option<ChannelValue<ForumLayout>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) permissions_sync: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) overwrites: BTreeMap<OverwriteTarget, BTreeMap<PermissionName, OverwriteValue>>,
@@ -560,6 +617,9 @@ impl RawChannelAttributes {
             user_limit,
             rtc_region,
             video_quality,
+            default_reaction,
+            default_sort_order,
+            default_forum_layout,
             permissions_sync,
             overwrites,
         } = self;
@@ -578,6 +638,9 @@ impl RawChannelAttributes {
             user_limit,
             rtc_region,
             video_quality,
+            default_reaction,
+            default_sort_order,
+            default_forum_layout,
             permissions_sync,
             overwrites,
         })

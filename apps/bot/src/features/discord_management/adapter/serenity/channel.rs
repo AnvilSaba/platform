@@ -4,23 +4,23 @@ use serde::{Serialize, Serializer};
 use serenity::{
     Error as SerenityError,
     all::{
-        AutoArchiveDuration, ChannelId as SerenityChannelId, ChannelType, GuildId as SerenityGuildId,
-        PermissionOverwrite, PermissionOverwriteType, Permissions, PremiumTier, RoleId as SerenityRoleId, UserId,
-        VideoQualityMode,
+        AutoArchiveDuration, ChannelId as SerenityChannelId, ChannelType, ForumEmoji, ForumLayoutType,
+        GuildId as SerenityGuildId, PermissionOverwrite, PermissionOverwriteType, Permissions, PremiumTier,
+        RoleId as SerenityRoleId, SortOrder, UserId, VideoQualityMode,
     },
     http::{HttpError, StatusCode},
     model::channel::GuildChannel,
 };
 
 use crate::features::discord_management::{
-    configuration::{ChannelKind, KnownPermission, OverwriteValue, VideoQuality},
+    configuration::{ChannelKind, ForumLayout, ForumSortOrder, KnownPermission, OverwriteValue, VideoQuality},
     domain::ManagementError,
     ids::{ChannelId, GuildId, MemberId, RoleId},
     port::{
         ChannelCatalog, ChannelCreate, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
         ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelPositionUpdate, ChannelPositionUpdateOutcome,
         ChannelPositionUpdater, ChannelSnapshot, ChannelSource, ChannelUpdate, ChannelUpdateOutcome,
-        ChannelUpdateValue, ChannelUpdater, PermissionBits,
+        ChannelUpdateValue, ChannelUpdater, ForumTagSnapshot, PermissionBits,
     },
 };
 
@@ -71,6 +71,7 @@ enum DiscordChannelType {
     Category,
     Voice,
     Stage,
+    Forum,
 }
 
 impl Serialize for DiscordChannelType {
@@ -84,6 +85,7 @@ impl Serialize for DiscordChannelType {
             Self::Category => 4,
             Self::Voice => 2,
             Self::Stage => 13,
+            Self::Forum => 15,
         })
     }
 }
@@ -171,6 +173,45 @@ enum CreateChannelRequest {
     Text(CreateTextChannelRequest),
     Category(CreateCategoryChannelRequest),
     Voice(CreateVoiceChannelRequest),
+    Forum(CreateForumChannelRequest),
+}
+
+#[derive(Debug, Serialize)]
+struct DiscordForumEmoji {
+    emoji_id: Option<DiscordSnowflake>,
+    emoji_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscordForumTag {
+    id: DiscordSnowflake,
+    name: String,
+    moderated: bool,
+    emoji_id: Option<DiscordSnowflake>,
+    emoji_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateForumChannelRequest {
+    name: String,
+    #[serde(rename = "type")]
+    channel_type: DiscordChannelType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<DiscordSnowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    topic: Option<String>,
+    nsfw: bool,
+    rate_limit_per_user: DiscordSeconds,
+    default_auto_archive_duration: DiscordMinutes,
+    default_thread_rate_limit_per_user: DiscordSeconds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_reaction_emoji: Option<DiscordForumEmoji>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_sort_order: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_forum_layout: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_overwrites: Option<Vec<DiscordPermissionOverwrite>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,6 +287,14 @@ struct ModifyChannelRequest {
     rtc_region: NullablePatchField<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     video_quality_mode: Option<u8>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    default_reaction_emoji: NullablePatchField<DiscordForumEmoji>,
+    #[serde(skip_serializing_if = "NullablePatchField::is_keep")]
+    default_sort_order: NullablePatchField<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_forum_layout: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    available_tags: Option<Vec<DiscordForumTag>>,
 }
 
 impl ChannelSource for SerenityManagementAdapter<'_> {
@@ -418,6 +467,7 @@ fn channel_snapshot(
         ChannelType::News => ChannelKind::Announcement,
         ChannelType::Voice => ChannelKind::Voice,
         ChannelType::Stage => ChannelKind::Stage,
+        ChannelType::Forum => ChannelKind::Forum,
         _ => ChannelKind::Unsupported,
     };
     let known_permission_mask = known_permission_mask(known_permissions);
@@ -449,6 +499,19 @@ fn channel_snapshot(
             VideoQualityMode::Full => Some(VideoQuality::Full),
             _ => None,
         }),
+        default_reaction: channel.default_reaction_emoji.as_ref().map(forum_emoji_string),
+        default_sort_order: channel.default_sort_order.and_then(|order| match order {
+            SortOrder::LatestActivity => Some(ForumSortOrder::LatestActivity),
+            SortOrder::CreationDate => Some(ForumSortOrder::CreationDate),
+            _ => None,
+        }),
+        default_forum_layout: channel.default_forum_layout.and_then(|layout| match layout {
+            ForumLayoutType::NotSet => Some(ForumLayout::NotSet),
+            ForumLayoutType::ListView => Some(ForumLayout::List),
+            ForumLayoutType::GalleryView => Some(ForumLayout::Gallery),
+            _ => None,
+        }),
+        available_tags: channel.available_tags.iter().map(forum_tag_snapshot).collect(),
         overwrites,
     })
 }
@@ -542,6 +605,9 @@ fn channel_edit_is_required(update: &ChannelUpdate) -> bool {
         || update.user_limit.is_some()
         || !update.rtc_region.is_keep()
         || update.video_quality.is_some()
+        || !update.default_reaction.is_keep()
+        || !update.default_sort_order.is_keep()
+        || update.default_forum_layout.is_some()
         || update.overwrites.is_some()
 }
 
@@ -653,6 +719,20 @@ fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateCh
             },
             permission_overwrites,
         }),
+        ChannelKind::Forum => CreateChannelRequest::Forum(CreateForumChannelRequest {
+            name: create.name,
+            channel_type: DiscordChannelType::Forum,
+            parent_id: create.parent_id.map(|id| DiscordSnowflake(id.get())),
+            topic: create.topic,
+            nsfw: create.nsfw,
+            rate_limit_per_user: DiscordSeconds(create.slowmode_seconds),
+            default_auto_archive_duration: DiscordMinutes(create.default_auto_archive_minutes.unwrap_or(1440)),
+            default_thread_rate_limit_per_user: DiscordSeconds(create.default_thread_slowmode_seconds),
+            default_reaction_emoji: create.default_reaction.as_deref().map(discord_forum_emoji),
+            default_sort_order: create.default_sort_order.map(forum_sort_order),
+            default_forum_layout: create.default_forum_layout.map(forum_layout),
+            permission_overwrites,
+        }),
         ChannelKind::Unsupported => unreachable!("Unsupported Channel は構成管理から作成できません"),
     }
 }
@@ -679,6 +759,69 @@ fn edit_channel_payload(guild_id: &GuildId, update: &ChannelUpdate) -> ModifyCha
             VideoQuality::Auto => 1,
             VideoQuality::Full => 2,
         }),
+        default_reaction_emoji: nullable_patch_field(&update.default_reaction, |value| discord_forum_emoji(value)),
+        default_sort_order: nullable_patch_field(&update.default_sort_order, |value| forum_sort_order(*value)),
+        default_forum_layout: update.default_forum_layout.map(forum_layout),
+        available_tags: update
+            .available_tags
+            .as_ref()
+            .map(|tags| tags.iter().map(discord_forum_tag).collect()),
+    }
+}
+
+fn forum_emoji_string(emoji: &ForumEmoji) -> String {
+    match emoji {
+        ForumEmoji::Id(id) => id.to_string(),
+        ForumEmoji::Name(name) => name.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn discord_forum_emoji(value: &str) -> DiscordForumEmoji {
+    match value.parse::<u64>() {
+        Ok(id) => DiscordForumEmoji {
+            emoji_id: Some(DiscordSnowflake(id)),
+            emoji_name: None,
+        },
+        Err(_) => DiscordForumEmoji {
+            emoji_id: None,
+            emoji_name: Some(value.to_owned()),
+        },
+    }
+}
+
+fn forum_sort_order(value: ForumSortOrder) -> u8 {
+    match value {
+        ForumSortOrder::LatestActivity => 0,
+        ForumSortOrder::CreationDate => 1,
+    }
+}
+
+fn forum_layout(value: ForumLayout) -> u8 {
+    match value {
+        ForumLayout::NotSet => 0,
+        ForumLayout::List => 1,
+        ForumLayout::Gallery => 2,
+    }
+}
+
+fn forum_tag_snapshot(tag: &serenity::all::ForumTag) -> ForumTagSnapshot {
+    ForumTagSnapshot {
+        id: tag.id.get(),
+        name: tag.name.to_string(),
+        moderated: tag.moderated,
+        emoji: tag.emoji.as_ref().map(forum_emoji_string),
+    }
+}
+
+fn discord_forum_tag(tag: &ForumTagSnapshot) -> DiscordForumTag {
+    let emoji = tag.emoji.as_deref().map(discord_forum_emoji);
+    DiscordForumTag {
+        id: DiscordSnowflake(tag.id),
+        name: tag.name.clone(),
+        moderated: tag.moderated,
+        emoji_id: emoji.as_ref().and_then(|emoji| emoji.emoji_id),
+        emoji_name: emoji.and_then(|emoji| emoji.emoji_name),
     }
 }
 
@@ -798,6 +941,9 @@ mod tests {
                 user_limit: None,
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -836,6 +982,9 @@ mod tests {
                 user_limit: None,
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -872,6 +1021,9 @@ mod tests {
                 user_limit: Some(12),
                 rtc_region: ChannelUpdateValue::Clear,
                 video_quality: Some(VideoQuality::Full),
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -901,6 +1053,9 @@ mod tests {
                 user_limit: Some(0),
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: Some(VideoQuality::Auto),
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -953,6 +1108,9 @@ mod tests {
                 user_limit: None,
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );
@@ -970,6 +1128,53 @@ mod tests {
                 }"#,
             )
         );
+    }
+
+    #[test]
+    fn forum_payload_uses_type_specific_fields_and_update_preserves_tag_ids() {
+        let create = create_channel_payload(
+            &GuildId::new(100),
+            ChannelCreate {
+                kind: ChannelKind::Forum,
+                name: "showcase".to_owned(),
+                parent_id: None,
+                topic: Some("art".to_owned()),
+                nsfw: false,
+                slowmode_seconds: 5,
+                default_auto_archive_minutes: Some(1440),
+                default_thread_slowmode_seconds: 10,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: ChannelUpdateValue::Keep,
+                video_quality: None,
+                default_reaction: Some("✅".to_owned()),
+                default_sort_order: Some(ForumSortOrder::CreationDate),
+                default_forum_layout: Some(ForumLayout::Gallery),
+                overwrites: BTreeMap::new(),
+            },
+        );
+        assert_eq!(payload_json(&create)["type"], 15);
+        assert_eq!(payload_json(&create)["default_reaction_emoji"]["emoji_name"], "✅");
+        assert_eq!(payload_json(&create)["default_forum_layout"], 2);
+
+        let update = edit_channel_payload(
+            &GuildId::new(100),
+            &ChannelUpdate {
+                default_reaction: ChannelUpdateValue::Clear,
+                default_sort_order: ChannelUpdateValue::Clear,
+                available_tags: Some(vec![ForumTagSnapshot {
+                    id: 900,
+                    name: "solved".to_owned(),
+                    moderated: true,
+                    emoji: Some("✅".to_owned()),
+                }]),
+                ..ChannelUpdate::default()
+            },
+        );
+        let json = payload_json(&update);
+        assert!(json["default_reaction_emoji"].is_null());
+        assert!(json["default_sort_order"].is_null());
+        assert_eq!(json["available_tags"][0]["id"], "900");
     }
 
     #[test]
@@ -993,6 +1198,9 @@ mod tests {
                 user_limit: None,
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(permission, OverwriteValue::Clear)])),
@@ -1053,6 +1261,9 @@ mod tests {
                 user_limit: None,
                 rtc_region: ChannelUpdateValue::Keep,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
                 overwrites: BTreeMap::new(),
             },
         );

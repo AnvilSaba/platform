@@ -53,5 +53,8 @@ Discord のお知らせ用 Channel。Text Channel と共通する属性を持つ
 **Voice Channel / Stage Channel**:
 Discord の音声用 Channel。名前・親・並び順・権限に加えて bitrate、人数制限、RTC region、映像品質を管理する。Voice の bitrate 上限は Guild の boost/VIP 条件、Stage の bitrate と人数上限は Channel 種別に従う。
 
+**Forum Channel**:
+投稿を Thread として整理する Channel。説明・年齢制限・低速モード・Thread 既定設定・既定リアクション・投稿順・表示形式を管理する。基本属性の更新では既存 Forum Tag と Tag ID を保持する。
+
 **解除指定**:
 属性の値や、その場所に固有の権限設定を明示的に取り除く指定。管理解除と異なり、希望構成への変更対象となる。

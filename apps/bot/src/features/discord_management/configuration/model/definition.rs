@@ -396,7 +396,13 @@ fn validate_order_uncategorized(
     let attributes = channel.attributes();
     if !matches!(
         attributes.kind,
-        Some(ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage)
+        Some(
+            ChannelKind::Text
+                | ChannelKind::Announcement
+                | ChannelKind::Voice
+                | ChannelKind::Stage
+                | ChannelKind::Forum
+        )
     ) {
         return Err(ManagementError::InvalidDefinition(format!(
             "order.uncategorized の Channel {logical_id} には子 Channel の type が必要です"
@@ -430,6 +436,9 @@ fn validate_order_category(logical_id: &ChannelLogicalId, channel: &ChannelDefin
         Some(ChannelKind::Voice | ChannelKind::Stage) => Err(ManagementError::InvalidDefinition(format!(
             "order の Category {logical_id} に音声 Channel を指定できません"
         ))),
+        Some(ChannelKind::Forum) => Err(ManagementError::InvalidDefinition(format!(
+            "order の Category {logical_id} に Forum Channel を指定できません"
+        ))),
         None => Err(ManagementError::InvalidDefinition(format!(
             "order の Category {logical_id} には type = \"category\" が必要です"
         ))),
@@ -458,7 +467,13 @@ fn validate_order_child(
                 "order.children の子 Channel {child_id} は Category のため指定できません"
             )));
         }
-        Some(ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage) => {}
+        Some(
+            ChannelKind::Text
+            | ChannelKind::Announcement
+            | ChannelKind::Voice
+            | ChannelKind::Stage
+            | ChannelKind::Forum,
+        ) => {}
         None => {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order.children の子 Channel {child_id} には type が必要です"
