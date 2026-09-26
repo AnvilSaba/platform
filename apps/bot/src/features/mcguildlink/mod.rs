@@ -1,8 +1,8 @@
-mod adapter;
 mod code_generator;
 mod discord;
 mod ports;
 mod queries;
+mod repository;
 mod service;
 mod types;
 

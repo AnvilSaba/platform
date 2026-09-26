@@ -1,4 +1,6 @@
-use super::{adapter::DatabaseMcGuildLinkRepository, ports::LinkCodeResult, service::LinkCodes, types::DiscordUserId};
+use super::{
+    ports::LinkCodeResult, repository::DatabaseMcGuildLinkRepository, service::LinkCodes, types::DiscordUserId,
+};
 use crate::{
     app::{AppApplicationContext, AppError, BotDataExt, BotError},
     utils::{create_safe_allowed_mentions, create_safe_message},

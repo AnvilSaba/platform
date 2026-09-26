@@ -8,17 +8,19 @@ pub enum LinkCodeResult {
     Blocked,
 }
 
-/// MCGuildLink の永続化境界。利用者を登録・更新し、行ロックを持つセッションを開始する。
+/// MCGuildLink の永続化境界。ユースケースごとに必要なセッションを提供する。
 #[async_trait]
 pub trait McGuildLinkRepository: Send + Sync {
-    type Session: McGuildLinkSession;
+    type CodeIssuance: CodeIssuanceSession;
 
-    async fn begin(&self, user_id: DiscordUserId, username: &str) -> Result<Self::Session, AppError>;
+    /// コード発行用に利用者を登録・更新し、その行ロックを保持するセッションを開始する。
+    async fn begin_code_issuance(&self, user_id: DiscordUserId, username: &str)
+    -> Result<Self::CodeIssuance, AppError>;
 }
 
-/// 発行処理全体で一つのトランザクションを保持する。未コミットで破棄した場合はロールバックする。
+/// コード発行専用の操作と、一連の発行処理全体のトランザクションを保持する。未コミットで破棄した場合はロールバックする。
 #[async_trait]
-pub trait McGuildLinkSession: Send {
+pub trait CodeIssuanceSession: Send {
     async fn is_blocked(&mut self) -> Result<bool, AppError>;
     async fn unused_code(&mut self) -> Result<Option<LinkCode>, AppError>;
     /// 保存できた場合は true、コードの衝突時は false を返す。

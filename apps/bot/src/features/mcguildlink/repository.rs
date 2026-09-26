@@ -1,5 +1,5 @@
 use super::{
-    ports::{McGuildLinkRepository, McGuildLinkSession},
+    ports::{CodeIssuanceSession, McGuildLinkRepository},
     queries,
     types::{DiscordAccountId, DiscordUserId, LinkCode},
 };
@@ -18,24 +18,28 @@ impl DatabaseMcGuildLinkRepository {
     }
 }
 
-pub struct DatabaseMcGuildLinkSession {
+pub struct DatabaseCodeIssuanceSession {
     transaction: Transaction<'static, Postgres>,
     account: DiscordAccountId,
 }
 
 #[async_trait]
 impl McGuildLinkRepository for DatabaseMcGuildLinkRepository {
-    type Session = DatabaseMcGuildLinkSession;
+    type CodeIssuance = DatabaseCodeIssuanceSession;
 
-    async fn begin(&self, user_id: DiscordUserId, username: &str) -> Result<Self::Session, AppError> {
+    async fn begin_code_issuance(
+        &self,
+        user_id: DiscordUserId,
+        username: &str,
+    ) -> Result<Self::CodeIssuance, AppError> {
         let mut transaction = self.pool.begin().await?;
         let account = queries::upsert_discord_account(&mut transaction, user_id, username).await?;
-        Ok(DatabaseMcGuildLinkSession { transaction, account })
+        Ok(DatabaseCodeIssuanceSession { transaction, account })
     }
 }
 
 #[async_trait]
-impl McGuildLinkSession for DatabaseMcGuildLinkSession {
+impl CodeIssuanceSession for DatabaseCodeIssuanceSession {
     async fn is_blocked(&mut self) -> Result<bool, AppError> {
         Ok(queries::is_discord_blocked(&mut self.transaction, self.account).await?)
     }
@@ -86,16 +90,25 @@ mod tests {
     async fn abandoned_session_rolls_back_account_and_code(pool: PgPool) {
         let repository = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
         let code = LinkCode::new("AC234679");
-        let mut abandoned = repository.begin(DiscordUserId::new(501), "before").await.unwrap();
+        let mut abandoned = repository
+            .begin_code_issuance(DiscordUserId::new(501), "before")
+            .await
+            .unwrap();
         assert!(abandoned.reserve_code(&code).await.unwrap());
         drop(abandoned);
 
-        let mut next = repository.begin(DiscordUserId::new(501), "after").await.unwrap();
+        let mut next = repository
+            .begin_code_issuance(DiscordUserId::new(501), "after")
+            .await
+            .unwrap();
         assert_eq!(next.unused_code().await.unwrap(), None);
         assert!(next.reserve_code(&code).await.unwrap());
         next.commit().await.unwrap();
 
-        let mut stored = repository.begin(DiscordUserId::new(501), "after").await.unwrap();
+        let mut stored = repository
+            .begin_code_issuance(DiscordUserId::new(501), "after")
+            .await
+            .unwrap();
         assert_eq!(stored.unused_code().await.unwrap(), Some(code));
         stored.commit().await.unwrap();
     }
