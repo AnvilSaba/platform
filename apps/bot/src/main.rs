@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 use crate::{
     app::{AppError, BotData, MainEventHandler, config::AppConfig, handle_event_error, on_error},
     core::{create_client, install_signal_handler},
-    features::{commands, event_handlers, mcguildlink::DatabaseLinkCodes},
+    features::{commands, event_handlers},
 };
 
 #[derive(Clone, Debug, Bpaf)]
@@ -81,8 +81,6 @@ async fn main() -> Result<(), AppError> {
     let database = database_config.connect().await?;
     platform_database::check_migrations(&database, &MIGRATIONS, REQUIRED_MIGRATION_VERSION).await?;
 
-    let link_codes = Arc::new(DatabaseLinkCodes::new(database.clone()));
-
     let mut client = create_client(
         config.bot.token.clone(),
         intents,
@@ -92,7 +90,7 @@ async fn main() -> Result<(), AppError> {
     )
     .framework(Box::new(framework))
     .cache_settings(settings)
-    .data(Arc::new(BotData::new(config, link_codes)))
+    .data(Arc::new(BotData::new(config, database)))
     .await
     .context("Failed to create Discord client")?;
 

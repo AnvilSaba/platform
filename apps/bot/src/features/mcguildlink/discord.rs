@@ -1,4 +1,4 @@
-use super::{ports::LinkCodeResult, types::DiscordUserId};
+use super::{adapter::DatabaseMcGuildLinkRepository, ports::LinkCodeResult, service::LinkCodes, types::DiscordUserId};
 use crate::{
     app::{AppApplicationContext, AppError, BotDataExt, BotError},
     utils::{create_safe_allowed_mentions, create_safe_message},
@@ -40,8 +40,8 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
 
     interaction.defer_ephemeral(&ctx.http).await?;
 
-    let result = data
-        .link_codes
+    let codes = LinkCodes::new(DatabaseMcGuildLinkRepository::new(data.database.clone()));
+    let result = codes
         .issue(DiscordUserId::new(interaction.user.id.get()), &interaction.user.name)
         .await;
 
