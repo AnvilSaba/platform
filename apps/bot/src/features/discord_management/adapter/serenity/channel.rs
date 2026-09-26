@@ -182,14 +182,31 @@ struct DiscordForumEmoji {
     emoji_name: Option<String>,
 }
 
+/// 新規 Tag の送信形式。ID は Discord が発行します。
 #[derive(Debug, Serialize)]
-struct DiscordForumTag {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<DiscordSnowflake>,
+struct CreateForumTagRequest {
     name: String,
     moderated: bool,
     emoji_id: Option<DiscordSnowflake>,
     emoji_name: Option<String>,
+}
+
+/// 既存 Tag の送信形式。対象 ID は必須です。
+#[derive(Debug, Serialize)]
+struct UpdateForumTagRequest {
+    id: DiscordSnowflake,
+    name: String,
+    moderated: bool,
+    emoji_id: Option<DiscordSnowflake>,
+    emoji_name: Option<String>,
+}
+
+/// Discord は作成と更新を同じ available_tags 配列で受け取ります。
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ForumTagRequest {
+    Create(CreateForumTagRequest),
+    Update(UpdateForumTagRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -295,7 +312,7 @@ struct ModifyChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     default_forum_layout: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    available_tags: Option<Vec<DiscordForumTag>>,
+    available_tags: Option<Vec<ForumTagRequest>>,
 }
 
 impl ChannelSource for SerenityManagementAdapter<'_> {
@@ -815,15 +832,25 @@ fn forum_tag_snapshot(tag: &serenity::all::ForumTag) -> ForumTagSnapshot {
     }
 }
 
-fn discord_forum_tag(tag: &ForumTagWrite) -> DiscordForumTag {
+fn discord_forum_tag(tag: &ForumTagWrite) -> ForumTagRequest {
     let attributes = tag.attributes();
     let emoji = attributes.emoji.as_deref().map(discord_forum_emoji);
-    DiscordForumTag {
-        id: tag.id().map(|id| DiscordSnowflake(id.get())),
-        name: attributes.name.clone(),
-        moderated: attributes.moderated,
-        emoji_id: emoji.as_ref().and_then(|emoji| emoji.emoji_id),
-        emoji_name: emoji.and_then(|emoji| emoji.emoji_name),
+    let emoji_id = emoji.as_ref().and_then(|emoji| emoji.emoji_id);
+    let emoji_name = emoji.and_then(|emoji| emoji.emoji_name);
+    match tag {
+        ForumTagWrite::Create(_) => ForumTagRequest::Create(CreateForumTagRequest {
+            name: attributes.name.clone(),
+            moderated: attributes.moderated,
+            emoji_id,
+            emoji_name,
+        }),
+        ForumTagWrite::Update { id, .. } => ForumTagRequest::Update(UpdateForumTagRequest {
+            id: DiscordSnowflake(id.get()),
+            name: attributes.name.clone(),
+            moderated: attributes.moderated,
+            emoji_id,
+            emoji_name,
+        }),
     }
 }
 
