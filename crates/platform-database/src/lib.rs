@@ -82,6 +82,7 @@ mod tests {
     static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
     const REQUIRED_FIXTURE_VERSION: i64 = 20260926184758;
 
+    /// 互換性のある追加の扱いを確認する。任意の追加は未適用でも許可し、必須にした場合は適用を要求する。
     #[sqlx::test(migrations = "tests/compatibility")]
     async fn known_compatible_addition_is_accepted_before_and_after_application(pool: PgPool) {
         let supported = sqlx::migrate!("tests/compatibility");
@@ -96,6 +97,7 @@ mod tests {
         check_migrations(&pool, &supported, 2).await.unwrap();
     }
 
+    /// 履歴のない DB を拒否する。検証処理が履歴テーブルを自動作成せず、テーブル未存在エラーを返す。
     #[sqlx::test(migrations = false)]
     async fn absent_history_is_rejected_without_creating_it(pool: PgPool) {
         let result = check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION).await;
@@ -105,6 +107,7 @@ mod tests {
         assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42P01"));
     }
 
+    /// 未知のマイグレーションを拒否する。対応していないバージョンを履歴に追加し、検証失敗を確認する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn unknown_migration_is_rejected(pool: PgPool) {
         sqlx::query!(
@@ -123,6 +126,7 @@ mod tests {
         );
     }
 
+    /// 適用失敗の履歴を拒否する。成功フラグを false に変更し、検証失敗を確認する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn unsuccessful_migration_is_rejected(pool: PgPool) {
         sqlx::query!("UPDATE public._sqlx_migrations SET success = false")
@@ -136,6 +140,7 @@ mod tests {
         );
     }
 
+    /// 適用済み SQL の変更を検出する。履歴のチェックサムを書き換え、検証失敗を確認する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn changed_migration_checksum_is_rejected(pool: PgPool) {
         sqlx::query!("UPDATE public._sqlx_migrations SET checksum = $1", &[0_u8][..])
@@ -149,6 +154,7 @@ mod tests {
         );
     }
 
+    /// 必須マイグレーションの未適用を拒否する。適用履歴を削除し、検証失敗を確認する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn missing_required_migration_is_rejected(pool: PgPool) {
         sqlx::query!("DELETE FROM public._sqlx_migrations")
@@ -162,6 +168,7 @@ mod tests {
         );
     }
 
+    /// 検証が読み取りのみで完了することを確認する。読み取り専用接続で正しい適用履歴を受け入れる。
     #[sqlx::test(migrations = "../../migrations")]
     async fn applied_history_is_accepted_without_schema_changes(pool: PgPool) {
         let reader = sqlx::postgres::PgPoolOptions::new()
