@@ -12,6 +12,10 @@ pub trait LinkCodes: Send + Sync {
     async fn issue(&self, user_id: u64, username: &str) -> Result<LinkCodeResult, AppError>;
 }
 
+pub trait LinkCodeGenerator: Send + Sync {
+    fn generate(&self) -> String;
+}
+
 /// Discord の通信アダプターとテスト用アダプターで差し替える応答先。
 #[async_trait]
 pub trait LinkReply: Send + Sync {
