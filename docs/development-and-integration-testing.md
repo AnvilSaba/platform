@@ -20,7 +20,7 @@
 
 紐付けコードのテストには実 PostgreSQL と `DATABASE_URL` が必要です。
 [DB のセットアップとマイグレーション](database.md)を参照してください。
-テスト専用 DB は `anvilsaba_test` とし、本番 DB には接続しないでください。
+テスト専用 DB は `platform_test` とし、本番 DB には接続しないでください。
 sqlx のテストごとの DB 作成には `CREATEDB`、権限ロールの初回作成には
 `CREATEROLE` が必要です。
 

@@ -2,19 +2,19 @@
 
 ## 共有 DB
 
-各アプリは PostgreSQL の共有 DB `anvilsaba` に接続する。
+各アプリは PostgreSQL の共有 DB `platform` に接続する。
 Helm の `postgres.database` もこの名前を使用する。
 接続先は環境変数 `DATABASE_URL` で指定し、アプリごとに異なる DB ユーザーを使う。
 
 ```text
-postgres://<ユーザー>:<パスワード>@<ホスト>:5432/anvilsaba
+postgres://<ユーザー>:<パスワード>@<ホスト>:5432/platform
 ```
 
 DB を手動で作成する場合は、管理者として以下を実行する。
 
 ```sql
 CREATE ROLE platform_migrator LOGIN;
-CREATE DATABASE anvilsaba OWNER platform_migrator;
+CREATE DATABASE platform OWNER platform_migrator;
 ```
 
 ログインユーザーのパスワードは運用環境の Secret 管理を通じて設定する。
@@ -30,7 +30,7 @@ CREATE ROLE mcguildlink_bot NOLOGIN;
 
 ```sql
 CREATE ROLE platform_bot LOGIN;
-GRANT CONNECT ON DATABASE anvilsaba TO platform_bot;
+GRANT CONNECT ON DATABASE platform TO platform_bot;
 GRANT mcguildlink_bot TO platform_bot;
 ```
 
