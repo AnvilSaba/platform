@@ -73,6 +73,15 @@ async fn main() -> Result<(), AppError> {
     let mut settings = CacheSettings::default();
     settings.max_messages = usize::MAX;
 
+    let link_codes = if config.mcguildlink.is_some() {
+        let url = std::env::var("MCGUILDLINK_DATABASE_URL")
+            .context("MCGUILDLINK_DATABASE_URL is required when mcguildlink is enabled")?;
+        Some(Arc::new(features::mcguildlink::LinkCodeService::connect(&url).await?)
+            as Arc<dyn features::mcguildlink::LinkCodes>)
+    } else {
+        None
+    };
+
     let mut client = create_client(
         config.bot.token.clone(),
         intents,
@@ -82,7 +91,11 @@ async fn main() -> Result<(), AppError> {
     )
     .framework(Box::new(framework))
     .cache_settings(settings)
-    .data(Arc::new(BotData::new(config)))
+    .data(Arc::new({
+        let mut data = BotData::new(config);
+        data.link_codes = link_codes;
+        data
+    }))
     .await
     .context("Failed to create Discord client")?;
 
