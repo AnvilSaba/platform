@@ -1,6 +1,6 @@
 use super::{
     ports::{LinkCodeResult, LinkCodes},
-    postgres::PostgresLinkCodes,
+    adapter::DatabaseLinkCodes,
     types::DiscordUserId,
 };
 use crate::{
@@ -42,7 +42,7 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
     }
     let data = ctx.bot_data();
     interaction.defer_ephemeral(&ctx.http).await?;
-    let result = PostgresLinkCodes::new(data.database.clone())
+    let result = DatabaseLinkCodes::new(data.database.clone())
         .issue(DiscordUserId::new(interaction.user.id.get()), &interaction.user.name)
         .await;
     let content = match &result {
