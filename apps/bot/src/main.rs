@@ -74,8 +74,8 @@ async fn main() -> Result<(), AppError> {
     settings.max_messages = usize::MAX;
 
     let link_codes = if config.mcguildlink.is_some() {
-        let url = std::env::var("MCGUILDLINK_DATABASE_URL")
-            .context("MCGUILDLINK_DATABASE_URL is required when mcguildlink is enabled")?;
+        let url = std::env::var("DATABASE_URL")
+            .context("DATABASE_URL is required when mcguildlink is enabled")?;
         Some(Arc::new(features::mcguildlink::LinkCodeService::connect(&url).await?)
             as Arc<dyn features::mcguildlink::LinkCodes>)
     } else {

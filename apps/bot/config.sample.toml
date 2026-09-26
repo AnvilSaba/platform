@@ -3,7 +3,7 @@ token = "TOKEN.PLACEHOLDER.NOT_A_REAL_SECRET"
 owners = [ "000000000000000000" ]
 
 # MCGuildLink を有効にする場合は以下を設定し、Bot を再起動する。
-# 接続先は環境変数 MCGUILDLINK_DATABASE_URL で指定する。
+# 共有 DB の接続先は環境変数 DATABASE_URL で指定する。
 # [mcguildlink]
 # guild_id = "000000000000000000"
 # moderator_role_id = "000000000000000000"
