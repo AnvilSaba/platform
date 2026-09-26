@@ -19,7 +19,10 @@
 ### 2.1 Rust / Bot
 
 紐付けコードのテストには実 PostgreSQL と `DATABASE_URL` が必要です。
-[設定・マイグレーション・検証手順](mcguildlink-link-codes.md)を参照してください。
+[DB のセットアップとマイグレーション](database.md)を参照してください。
+テスト専用 DB は `anvilsaba_test` とし、本番 DB には接続しないでください。
+sqlx のテストごとの DB 作成には `CREATEDB`、権限ロールの初回作成には
+`CREATEROLE` が必要です。
 
 リポジトリルートで実行します。
 
