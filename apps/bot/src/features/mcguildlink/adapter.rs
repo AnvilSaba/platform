@@ -1,73 +1,65 @@
 use super::{
-    code_generator::RandomLinkCodeGenerator,
-    ports::{LinkCodeGenerator, LinkCodeResult, LinkCodes},
+    ports::{McGuildLinkRepository, McGuildLinkSession},
     queries,
-    types::DiscordUserId,
+    types::{DiscordAccountId, DiscordUserId, LinkCode},
 };
 use crate::app::AppError;
 use serenity::async_trait;
-use sqlx::{PgConnection, PgPool};
-
-const MAX_CODE_ALLOCATION_ATTEMPTS: usize = 16;
+use sqlx::{PgPool, Postgres, Transaction};
 
 #[derive(Clone)]
-pub struct DatabaseLinkCodes<G = RandomLinkCodeGenerator> {
+pub struct DatabaseMcGuildLinkRepository {
     pool: PgPool,
-    generator: G,
 }
 
-impl DatabaseLinkCodes {
+impl DatabaseMcGuildLinkRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self::with_generator(pool, RandomLinkCodeGenerator)
+        Self { pool }
     }
 }
 
-impl<G: LinkCodeGenerator> DatabaseLinkCodes<G> {
-    pub fn with_generator(pool: PgPool, generator: G) -> Self {
-        Self { pool, generator }
-    }
+pub struct DatabaseMcGuildLinkSession {
+    transaction: Transaction<'static, Postgres>,
+    account: DiscordAccountId,
+}
 
-    async fn issue_in_transaction(
-        &self,
-        connection: &mut PgConnection,
-        user_id: DiscordUserId,
-        username: &str,
-    ) -> Result<LinkCodeResult, AppError> {
-        let account = queries::upsert_discord_account(connection, user_id, username).await?;
+#[async_trait]
+impl McGuildLinkRepository for DatabaseMcGuildLinkRepository {
+    type Session = DatabaseMcGuildLinkSession;
 
-        if queries::is_discord_blocked(connection, account).await? {
-            return Ok(LinkCodeResult::Blocked);
-        }
-
-        if let Some(code) = queries::unused_code(connection, account).await? {
-            return Ok(LinkCodeResult::Code(code));
-        }
-
-        for _ in 0..MAX_CODE_ALLOCATION_ATTEMPTS {
-            let code = self.generator.generate();
-            if queries::reserve_code(connection, account, &code).await? {
-                return Ok(LinkCodeResult::Code(code));
-            }
-        }
-
-        Err(anyhow::anyhow!("Could not allocate a unique link code"))
+    async fn begin(&self, user_id: DiscordUserId, username: &str) -> Result<Self::Session, AppError> {
+        let mut transaction = self.pool.begin().await?;
+        let account = queries::upsert_discord_account(&mut transaction, user_id, username).await?;
+        Ok(DatabaseMcGuildLinkSession { transaction, account })
     }
 }
 
 #[async_trait]
-impl<G: LinkCodeGenerator> LinkCodes for DatabaseLinkCodes<G> {
-    async fn issue(&self, user_id: DiscordUserId, username: &str) -> Result<LinkCodeResult, AppError> {
-        let mut tx = self.pool.begin().await?;
-        let result = self.issue_in_transaction(&mut tx, user_id, username).await?;
-        tx.commit().await?;
-        Ok(result)
+impl McGuildLinkSession for DatabaseMcGuildLinkSession {
+    async fn is_blocked(&mut self) -> Result<bool, AppError> {
+        Ok(queries::is_discord_blocked(&mut self.transaction, self.account).await?)
+    }
+
+    async fn unused_code(&mut self) -> Result<Option<LinkCode>, AppError> {
+        Ok(queries::unused_code(&mut self.transaction, self.account).await?)
+    }
+
+    async fn reserve_code(&mut self, code: &LinkCode) -> Result<bool, AppError> {
+        Ok(queries::reserve_code(&mut self.transaction, self.account, code).await?)
+    }
+
+    async fn commit(self) -> Result<(), AppError> {
+        self.transaction.commit().await?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::mcguildlink::{test_support, types::LinkCode};
+    use crate::features::mcguildlink::{
+        ports::LinkCodeGenerator, ports::LinkCodeResult, service::LinkCodes, test_support, types::LinkCode,
+    };
     use std::{collections::VecDeque, sync::Mutex};
 
     struct FixedCodes(Mutex<VecDeque<&'static str>>);
@@ -89,16 +81,41 @@ mod tests {
         }
     }
 
+    /// セッションの破棄でロールバックする。保存候補を確定せず破棄し、同じ利用者・コードで再発行できることを確認する。
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn abandoned_session_rolls_back_account_and_code(pool: PgPool) {
+        let repository = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+        let code = LinkCode::new("AC234679");
+        let mut abandoned = repository.begin(DiscordUserId::new(501), "before").await.unwrap();
+        assert!(abandoned.reserve_code(&code).await.unwrap());
+        drop(abandoned);
+
+        let mut next = repository.begin(DiscordUserId::new(501), "after").await.unwrap();
+        assert_eq!(next.unused_code().await.unwrap(), None);
+        assert!(next.reserve_code(&code).await.unwrap());
+        next.commit().await.unwrap();
+
+        let mut stored = repository.begin(DiscordUserId::new(501), "after").await.unwrap();
+        assert_eq!(stored.unused_code().await.unwrap(), Some(code));
+        stored.commit().await.unwrap();
+    }
+
     /// コード衝突時の再生成を確認する。固定生成器で衝突を起こし、両利用者の再表示結果も検証する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn colliding_code_is_retried_without_changing_another_users_code(pool: PgPool) {
         let pool = test_support::bot_pool(&pool).await;
-        let first = DatabaseLinkCodes::with_generator(pool.clone(), FixedCodes::new(&["AC234679"]));
+        let first = LinkCodes::with_generator(
+            DatabaseMcGuildLinkRepository::new(pool.clone()),
+            FixedCodes::new(&["AC234679"]),
+        );
         assert_eq!(
             first.issue(DiscordUserId::new(10), "first").await.unwrap(),
             LinkCodeResult::Code("AC234679".into())
         );
-        let second = DatabaseLinkCodes::with_generator(pool, FixedCodes::new(&["AC234679", "KMNPQRTU"]));
+        let second = LinkCodes::with_generator(
+            DatabaseMcGuildLinkRepository::new(pool),
+            FixedCodes::new(&["AC234679", "KMNPQRTU"]),
+        );
         assert_eq!(
             second.issue(DiscordUserId::new(20), "second").await.unwrap(),
             LinkCodeResult::Code("KMNPQRTU".into())
@@ -116,7 +133,7 @@ mod tests {
     /// 同時発行の直列化を確認する。20 件の要求が同じコードを返し、別利用者には異なるコードを発行する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn simultaneous_requests_return_one_reusable_code(pool: PgPool) {
-        let service = DatabaseLinkCodes::new(test_support::bot_pool(&pool).await);
+        let service = LinkCodes::new(DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await));
         let results =
             futures::future::join_all((0..20).map(|_| service.issue(DiscordUserId::new(123), "concurrent"))).await;
         let first = results.first().unwrap().as_ref().unwrap();
@@ -134,7 +151,7 @@ mod tests {
     /// ブロックによる発行拒否を確認する。既存コードの再表示と、コード削除後の新規発行をともに拒否する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn blocked_user_cannot_issue_or_redisplay_code(pool: PgPool) {
-        let service = DatabaseLinkCodes::new(test_support::bot_pool(&pool).await);
+        let service = LinkCodes::new(DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await));
         service.issue(DiscordUserId::new(42), "blocked").await.unwrap();
         test_support::block_test_account(&pool).await;
         assert_eq!(
@@ -151,14 +168,14 @@ mod tests {
     /// 未使用コードの永続化を確認する。最大 Discord ID で発行し、サービス再生成・名前変更後も同じコードを返す。
     #[sqlx::test(migrations = "../../migrations")]
     async fn unused_code_survives_reconnection_and_name_change(pool: PgPool) {
-        let service = DatabaseLinkCodes::new(test_support::bot_pool(&pool).await);
+        let service = LinkCodes::new(DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await));
         let first = service.issue(DiscordUserId::new(u64::MAX), "before").await.unwrap();
         let LinkCodeResult::Code(code) = &first else {
             panic!("expected code")
         };
         assert_eq!(code.as_ref().len(), 8);
         assert_eq!(
-            DatabaseLinkCodes::new(test_support::bot_pool(&pool).await)
+            LinkCodes::new(DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await))
                 .issue(DiscordUserId::new(u64::MAX), "after")
                 .await
                 .unwrap(),

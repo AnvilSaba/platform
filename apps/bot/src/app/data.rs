@@ -4,20 +4,17 @@ use poise::ApplicationContext;
 use serenity::all::prelude::Context;
 use tokio::sync::RwLock;
 
-use crate::{
-    app::{AppApplicationContext, AppContext, AppError, config::AppConfig},
-    features::mcguildlink::LinkCodes,
-};
+use crate::app::{AppApplicationContext, AppContext, AppError, config::AppConfig};
 
 pub struct BotData {
-    pub link_codes: Arc<dyn LinkCodes>,
+    pub database: sqlx::PgPool,
     config: RwLock<Arc<AppConfig>>,
 }
 
 impl BotData {
-    pub fn new(config: AppConfig, link_codes: Arc<dyn LinkCodes>) -> Self {
+    pub fn new(config: AppConfig, database: sqlx::PgPool) -> Self {
         Self {
-            link_codes,
+            database,
             config: RwLock::new(Arc::new(config)),
         }
     }
