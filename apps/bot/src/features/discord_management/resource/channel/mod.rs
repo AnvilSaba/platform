@@ -14,6 +14,8 @@ use super::super::{
 };
 
 pub(crate) mod apply;
+mod tag;
+use tag::TagPlan;
 
 use super::{compare_position_then_id, display_quoted_string, render_change_line, stable_relative_order};
 
@@ -89,6 +91,7 @@ impl<T> NullableValueChange<T> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AttributeChanges {
+    tags: Option<TagPlan>,
     name: Option<ValueChange<String>>,
     parent: Option<NullableValueChange<ChannelId>>,
     planned_parent: Option<PlannedParentChange>,
@@ -228,7 +231,9 @@ impl AttributeChanges {
             ));
         }
 
+        let tags = TagPlan::between(logical_id, &desired.tags, state, &actual.available_tags)?;
         let changes = Self {
+            tags,
             name,
             parent,
             planned_parent,
@@ -251,6 +256,10 @@ impl AttributeChanges {
     }
 
     fn is_empty(&self) -> bool {
+        self.tags.is_none() && self.other_attributes_empty()
+    }
+
+    fn other_attributes_empty(&self) -> bool {
         self.name.is_none()
             && self.parent.is_none()
             && self.planned_parent.is_none()
@@ -355,12 +364,36 @@ impl AttributeChanges {
             default_reaction: nullable_update(self.default_reaction.as_ref()),
             default_sort_order: nullable_update(self.default_sort_order.as_ref()),
             default_forum_layout: self.default_forum_layout.as_ref().map(|change| *change.desired()),
-            available_tags: matches!(actual.kind, ChannelKind::Forum).then(|| actual.available_tags.clone()),
+            available_tags: self
+                .tags
+                .as_ref()
+                .filter(|tags| tags.write)
+                .map(|tags| tags.payload.clone())
+                .or_else(|| matches!(actual.kind, ChannelKind::Forum).then(|| actual.available_tags.clone())),
             overwrites: (self.synced_overwrites.is_some() || !self.overwrites.is_empty()).then_some(overwrites),
         })
     }
 
     fn render(&self, logical_id: &ChannelLogicalId, discord_id: &ChannelId, output: &mut String) {
+        if let Some(tags) = &self.tags {
+            for id in &tags.settled {
+                output.push_str(&format!("~ Tag {logical_id}/{id} の実構成を確認して結果不明を解消\n"));
+            }
+
+            for id in tags.created.keys() {
+                output.push_str(&format!("+ Tag {logical_id}/{id} を作成\n"));
+            }
+            output.push_str(&format!("    available_tags: {:?}\n", tags.payload));
+            for id in &tags.changed {
+                output.push_str(&format!("~ Tag {logical_id}/{id} を更新\n"));
+            }
+            for id in &tags.released {
+                output.push_str(&format!("- Tag {logical_id}/{id} の管理を解除\n"));
+            }
+            for id in &tags.deleted {
+                output.push_str(&format!("- Tag {logical_id}/{id} を削除\n"));
+            }
+        }
         if let Some(change) = &self.name {
             render_change_line(
                 output,
@@ -656,6 +689,7 @@ impl OrderPlan {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CreateDesired {
+    tags: Option<TagPlan>,
     payload: ChannelCreate,
     parent_logical_id: Option<ChannelLogicalId>,
 }
@@ -729,7 +763,15 @@ impl Plan {
     }
 
     pub(crate) fn contains_deletions(&self) -> bool {
-        self.changes.values().any(Change::is_delete)
+        self.changes.values().any(|change| {
+            change.is_delete()
+                || match change {
+                    Change::Update { attributes, .. } => {
+                        attributes.tags.as_ref().is_some_and(|tags| !tags.deleted.is_empty())
+                    }
+                    _ => false,
+                }
+        })
     }
 
     pub(super) fn insert(&mut self, logical_id: ChannelLogicalId, change: Change) {
@@ -790,6 +832,12 @@ impl Plan {
 }
 
 fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
+    if let Some(tags) = &desired.tags {
+        for id in tags.created.keys() {
+            output.push_str(&format!("  + Tag {id} を作成\n"));
+        }
+        output.push_str(&format!("    tags: {:?}\n", tags.payload));
+    }
     let payload = &desired.payload;
     output.push_str("  desired:\n");
     output.push_str(&format!("    type: {}\n", payload.kind.as_str()));
@@ -971,6 +1019,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
                 logical_id.clone(),
                 Change::Create,
                 CreateDesired {
+                    tags: TagPlan::between(logical_id, &attributes.tags, state, &[])?,
                     payload,
                     parent_logical_id,
                 },

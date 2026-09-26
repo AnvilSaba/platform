@@ -228,3 +228,18 @@ pub(crate) type ChannelLogicalId = LogicalId<ChannelLogicalIdTag>;
 pub(crate) type MemberLogicalId = LogicalId<MemberLogicalIdTag>;
 pub(crate) type MessageLogicalId = LogicalId<MessageLogicalIdTag>;
 pub(crate) type ChannelSettingsSetId = LogicalId<ChannelSettingsSetIdTag>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum TagIdTag {}
+impl DiscordIdTag for TagIdTag {
+    const LABEL: &'static str = "Tag ID";
+}
+pub(crate) type TagId = DiscordId<TagIdTag>;
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum TagLogicalIdTag {}
+impl fmt::Display for TagLogicalIdTag {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+pub(crate) type TagLogicalId = LogicalId<TagLogicalIdTag>;

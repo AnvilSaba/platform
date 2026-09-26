@@ -317,6 +317,7 @@ pub(crate) enum OverwriteValue {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ChannelAttributes {
+    pub(crate) tags: BTreeMap<crate::features::discord_management::ids::TagLogicalId, TagDefinition>,
     pub(crate) kind: Option<ChannelKind>,
     pub(crate) name: Option<ChannelValue<String>>,
     pub(crate) parent: Option<ChannelValue<crate::features::discord_management::ids::ChannelLogicalId>>,
@@ -339,6 +340,7 @@ pub(crate) struct ChannelAttributes {
 
 impl ChannelAttributes {
     pub(crate) fn merge(&mut self, later: &Self) {
+        self.tags.extend(later.tags.clone());
         if later.kind.is_some() {
             self.kind = later.kind;
         }
@@ -520,11 +522,20 @@ impl ChannelAttributes {
                 "Category {logical_id} には permissions_sync を指定できません"
             )));
         }
+        if !self.tags.is_empty() && kind != ChannelKind::Forum {
+            return Err(ManagementError::InvalidDefinition(
+                "tags は Forum Channel だけで指定できます".into(),
+            ));
+        }
+        for tag in self.tags.values() {
+            tag.validate()?;
+        }
         Ok(())
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.kind.is_none()
+        self.tags.is_empty()
+            && self.kind.is_none()
             && self.name.is_none()
             && self.parent.is_none()
             && self.topic.is_none()
@@ -547,6 +558,8 @@ impl ChannelAttributes {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawChannelAttributes {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tags: BTreeMap<crate::features::discord_management::ids::TagLogicalId, TagDefinition>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub(crate) kind: Option<RawChannelKind>,
     #[validate(length(min = 1, max = 100, message = "name は1文字以上かつ100文字以内で指定してください"))]
@@ -621,8 +634,12 @@ impl RawChannelAttributes {
             default_sort_order,
             default_forum_layout,
             permissions_sync,
+            tags,
             overwrites,
         } = self;
+        for tag in tags.values() {
+            tag.validate()?;
+        }
         let kind = kind.map(ChannelKind::from);
         let overwrites = resolve_overwrites(overwrites, logical_id, vocabulary)?;
         Ok(ChannelAttributes {
@@ -642,6 +659,7 @@ impl RawChannelAttributes {
             default_sort_order,
             default_forum_layout,
             permissions_sync,
+            tags,
             overwrites,
         })
     }
@@ -869,3 +887,70 @@ pub(crate) struct ChannelSettingsSet {
 }
 
 use super::*;
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TagDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ensure: Option<Ensure>,
+    #[serde(default, skip_serializing_if = "RoleMode::is_managed")]
+    pub(crate) mode: RoleMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<ChannelValue<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) moderated: Option<ChannelValue<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) emoji: Option<ChannelValue<String>>,
+}
+impl TagDefinition {
+    pub(crate) fn is_absent(&self) -> bool {
+        self.ensure == Some(Ensure::Absent)
+    }
+    pub(crate) fn is_reference(&self) -> bool {
+        self.mode == RoleMode::Reference
+    }
+    pub(crate) fn validate(&self) -> Result<(), ManagementError> {
+        if (self.is_absent() || self.is_reference())
+            && (self.name.is_some() || self.moderated.is_some() || self.emoji.is_some())
+        {
+            return Err(ManagementError::InvalidDefinition(
+                "削除・参照専用 Tag に管理属性は指定できません".into(),
+            ));
+        }
+        if self.is_absent() && self.is_reference() {
+            return Err(ManagementError::InvalidDefinition(
+                "Tag の reference と absent は併用できません".into(),
+            ));
+        }
+        if let Some(name) = &self.name {
+            match name {
+                ChannelValue::Value(value) if (1..=20).contains(&value.chars().count()) => {}
+                _ => {
+                    return Err(ManagementError::InvalidDefinition(
+                        "Tag name は1文字以上20文字以内の値で指定してください".into(),
+                    ));
+                }
+            }
+        }
+        if matches!(self.moderated, Some(ChannelValue::Clear)) {
+            return Err(ManagementError::InvalidDefinition(
+                "Tag moderated は clear を指定できません".into(),
+            ));
+        }
+        if let Some(ChannelValue::Value(emoji)) = &self.emoji {
+            if emoji.is_empty() || emoji.chars().count() > 100 {
+                return Err(ManagementError::InvalidDefinition(
+                    "Tag emoji は1文字以上100文字以内で指定してください".into(),
+                ));
+            }
+            if emoji.bytes().all(|byte| byte.is_ascii_digit())
+                && emoji.parse::<u64>().ok().is_none_or(|id| id == 0 || id == u64::MAX)
+            {
+                return Err(ManagementError::InvalidDefinition(
+                    "Tag の custom emoji ID が不正です".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}

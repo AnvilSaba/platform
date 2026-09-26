@@ -232,6 +232,7 @@ impl ChannelLifecycleTarget for BlockingCanManageRolesChannelSource {
 
 #[derive(Clone)]
 struct ApplyingFakeChannelSource {
+    fail_update_at: Option<usize>,
     catalog: Arc<Mutex<ChannelCatalog>>,
     updates: Arc<Mutex<Vec<ChannelUpdate>>>,
     position_updates: Arc<Mutex<Vec<Vec<ChannelPositionUpdate>>>>,
@@ -278,6 +279,9 @@ impl ChannelUpdater for ApplyingFakeChannelSource {
     ) -> Result<ChannelUpdateOutcome, ManagementError> {
         self.events.lock().unwrap().push(format!("update:{channel_id}"));
         self.updates.lock().unwrap().push(update.clone());
+        if self.fail_update_at == Some(self.updates.lock().unwrap().len()) {
+            return Err(ManagementError::ChannelSource("テスト用の更新失敗".into()));
+        }
         let mut catalog = self.catalog.lock().unwrap();
         let channel = catalog
             .channels
@@ -285,6 +289,13 @@ impl ChannelUpdater for ApplyingFakeChannelSource {
             .find(|channel| channel.id == *channel_id)
             .expect("更新対象 Channel がカタログに存在します");
         update.apply_to(channel);
+        for tag in &mut channel.available_tags {
+            if tag.id == 0 {
+                let mut next_id = self.next_id.lock().unwrap();
+                tag.id = *next_id;
+                *next_id += 1;
+            }
+        }
         Ok(ChannelUpdateOutcome::Applied)
     }
 }
@@ -432,6 +443,7 @@ impl ChannelUpdater for UnknownChannelUpdateSource {
 
 fn lifecycle_channel_source(catalog: ChannelCatalog) -> ApplyingFakeChannelSource {
     ApplyingFakeChannelSource {
+        fail_update_at: None,
         catalog: Arc::new(Mutex::new(catalog)),
         updates: Arc::new(Mutex::new(Vec::new())),
         position_updates: Arc::new(Mutex::new(Vec::new())),
@@ -4095,4 +4107,479 @@ async fn forum_creation_requires_community_and_rejects_invalid_archive_duration(
     .await
     .unwrap_err();
     assert!(error.to_string().contains("default_auto_archive_minutes"));
+}
+
+#[tokio::test]
+async fn forum_tag_export_preserves_logical_ids_and_roundtrips_same_names() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
+    forum.available_tags = vec![
+        ForumTagSnapshot {
+            id: 901,
+            name: "same".into(),
+            moderated: false,
+            emoji: None,
+        },
+        ForumTagSnapshot {
+            id: 902,
+            name: "same".into(),
+            moderated: true,
+            emoji: Some("✅".into()),
+        },
+    ];
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![forum] },
+    };
+    let files = export_channels(&source, guild_id(100), None).await.unwrap();
+    assert!(files.definition_toml.contains("tags.tag_901"));
+    assert!(files.state_json.contains("\"tag_902\": \"902\""));
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &files.definition_toml,
+        &files.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty(), "{}", plan.render());
+    let again = export_channels(&source, guild_id(100), Some(&files.state_json))
+        .await
+        .unwrap();
+    assert_eq!(again, files);
+}
+
+#[tokio::test]
+async fn forum_tag_rename_keeps_id_and_unmanaged_tags_and_release_keeps_discord_tag() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
+    forum.available_tags = vec![
+        ForumTagSnapshot {
+            id: 901,
+            name: "same".into(),
+            moderated: false,
+            emoji: None,
+        },
+        ForumTagSnapshot {
+            id: 902,
+            name: "same".into(),
+            moderated: true,
+            emoji: None,
+        },
+    ];
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![forum] });
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"},"tags":{"forum":{"adopted":"901"}}}"#;
+    let definition =
+        "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.adopted]\nname = 'renamed'\n";
+    let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .unwrap();
+    assert!(!plan.is_empty());
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let tags = source.updates.lock().unwrap()[0].available_tags.clone().unwrap();
+    assert_eq!(tags[0].id, 901);
+    assert_eq!(tags[0].name, "renamed");
+    assert_eq!(tags[1].id, 902);
+    let released = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n";
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        released,
+        &result.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(!plan.is_empty());
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        released,
+        &result.state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    assert!(!result.state_json.contains("adopted"));
+    assert_eq!(source.catalog.lock().unwrap().channels[0].available_tags.len(), 2);
+}
+
+#[tokio::test]
+async fn forum_tag_explicit_deletion_requires_permission_and_reinsertion_creates_new_id() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
+    forum.available_tags.push(ForumTagSnapshot {
+        id: 901,
+        name: "delete".into(),
+        moderated: false,
+        emoji: None,
+    });
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![forum] });
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"},"tags":{"forum":{"adopted":"901"}}}"#;
+    let definition =
+        "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.adopted]\nensure = 'absent'\n";
+    let plan = plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let workflow_lock = GuildApplyLock::default();
+    let vocabulary = test_permission_vocabulary();
+    let workflow = ChannelApplyWorkflow::new(&workflow_lock, &source, &vocabulary);
+    let denied = workflow
+        .apply_channels_with_options(
+            guild_id(100),
+            definition,
+            state,
+            &plan,
+            ChannelApplyOptions::default(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status, ChannelApplyStatus::DeletionPermissionRequired);
+    assert!(source.updates.lock().unwrap().is_empty());
+    let result = workflow
+        .apply_channels_with_options(
+            guild_id(100),
+            definition,
+            state,
+            &plan,
+            ChannelApplyOptions { allow_deletions: true },
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    assert!(result.state_json.contains("deleted"));
+    assert!(
+        plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let present =
+        "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.adopted]\nname = 'restored'\n";
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), present, &result.state_json)
+        .await
+        .unwrap();
+    let result = workflow
+        .apply_channels_with_options(
+            guild_id(100),
+            present,
+            &result.state_json,
+            &plan,
+            ChannelApplyOptions::default(),
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let state = StateFile::parse_for_guild(&result.state_json, guild_id(100)).unwrap();
+    assert_ne!(
+        state.tags[&ChannelLogicalId::parse("forum").unwrap()][&TagLogicalId::parse("adopted").unwrap()].get(),
+        901
+    );
+}
+
+impl ResourceSource for ChannelCatalogSource {
+    async fn lookup_resource(&self, _: &GuildId, _: u64) -> Result<Option<ResourceLookup>, ManagementError> {
+        Ok(None)
+    }
+    async fn lookup_forum_tag(
+        &self,
+        guild: &GuildId,
+        parent: ChannelId,
+        id: u64,
+    ) -> Result<Option<ResourceLookup>, ManagementError> {
+        Ok(self
+            .catalog
+            .channels
+            .iter()
+            .find(|channel| channel.id == parent && channel.kind == ChannelKind::Forum)
+            .filter(|channel| channel.available_tags.iter().any(|tag| tag.id == id))
+            .map(|_| ResourceLookup {
+                resource_type: ResourceType::Tag,
+                guild_id: *guild,
+            }))
+    }
+}
+#[tokio::test]
+async fn forum_tag_bind_validates_parent_and_duplicate_ids() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
+    forum.available_tags.push(ForumTagSnapshot {
+        id: 901,
+        name: "same".into(),
+        moderated: false,
+        emoji: None,
+    });
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![forum] },
+    };
+    let vocabulary = test_permission_vocabulary();
+    let workflow = BindWorkflow::new(&source, &vocabulary);
+    let definition = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.first]\nname = 'new'\n[channels.forum.tags.second]\nname = 'same'\n";
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"}}"#;
+    let bound = workflow
+        .bind_resource(
+            guild_id(100),
+            definition,
+            state,
+            ResourceType::Tag,
+            "forum/first",
+            "901",
+        )
+        .await
+        .unwrap();
+    assert!(bound.state_json.contains("\"first\": \"901\""));
+    assert!(
+        workflow
+            .bind_resource(
+                guild_id(100),
+                definition,
+                &bound.state_json,
+                ResourceType::Tag,
+                "forum/second",
+                "901"
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        workflow
+            .bind_resource(
+                guild_id(100),
+                definition,
+                state,
+                ResourceType::Tag,
+                "forum/first",
+                "999"
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        workflow
+            .bind_resource(
+                guild_id(200),
+                definition,
+                state,
+                ResourceType::Tag,
+                "forum/first",
+                "901"
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn forum_tag_new_channel_creation_returns_tag_ids_and_replans_without_changes() {
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![] });
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{}}"#;
+    let definition = "schema_version = 1\n[channels.forum]\ntype = 'forum'\nname = 'new forum'\n[channels.forum.tags.first]\nname = 'same'\n[channels.forum.tags.second]\nname = 'same'\n";
+    let vocabulary = test_permission_vocabulary();
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let parsed = StateFile::parse_for_guild(&result.state_json, guild_id(100)).unwrap();
+    assert_eq!(parsed.tags[&ChannelLogicalId::parse("forum").unwrap()].len(), 2);
+    assert!(
+        plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn forum_tag_unknown_creation_blocks_duplicate_creation_until_bind() {
+    let source = UnknownChannelUpdateSource {
+        catalog: Arc::new(Mutex::new(ChannelCatalog {
+            channels: vec![channel_snapshot("700", ChannelKind::Forum, "forum", None)],
+        })),
+        outcome: ChannelUpdateOutcome::ResponseUnknown,
+        apply_update: false,
+    };
+    let definition =
+        "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.first]\nname = 'new'\n";
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"}}"#;
+    let vocabulary = test_permission_vocabulary();
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let lock = GuildApplyLock::default();
+    let workflow = ChannelApplyWorkflow::new(&lock, &source, &vocabulary);
+    let result = workflow
+        .apply_channel_updates(
+            guild_id(100),
+            definition,
+            state,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::ResponseUnknown);
+    assert!(result.state_json.contains("response_unknown"));
+    let error = plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("bind"));
+}
+
+#[tokio::test]
+async fn forum_tag_plan_rejects_over_capacity_long_names_and_duplicate_state_keys() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
+    forum.available_tags = (1..=20)
+        .map(|id| ForumTagSnapshot {
+            id,
+            name: "outside".into(),
+            moderated: false,
+            emoji: None,
+        })
+        .collect();
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![forum] },
+    };
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"}}"#;
+    let definition = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.new]\nname = 'new'\n";
+    assert!(
+        plan_channels(&source, &test_permission_vocabulary(), guild_id(100), definition, state)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("20")
+    );
+    let long = definition.replace("'new'", "'123456789012345678901'");
+    assert!(DefinitionFile::parse(&long, &test_permission_vocabulary()).is_err());
+    let duplicate = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"},"tags":{"forum":{"same":"1","same":"2"}}}"#;
+    assert!(StateFile::parse_for_guild(duplicate, guild_id(100)).is_err());
+}
+
+#[tokio::test]
+async fn forum_tag_unknown_update_is_settled_by_replanning_actual_state() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
+    forum.available_tags.push(ForumTagSnapshot {
+        id: 901,
+        name: "old".into(),
+        moderated: false,
+        emoji: None,
+    });
+    let source = UnknownChannelUpdateSource {
+        catalog: Arc::new(Mutex::new(ChannelCatalog { channels: vec![forum] })),
+        outcome: ChannelUpdateOutcome::ResponseUnknown,
+        apply_update: true,
+    };
+    let definition =
+        "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.first]\nname = 'new'\n";
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"},"tags":{"forum":{"first":"901"}}}"#;
+    let vocabulary = test_permission_vocabulary();
+    let lock = GuildApplyLock::default();
+    let workflow = ChannelApplyWorkflow::new(&lock, &source, &vocabulary);
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let result = workflow
+        .apply_channel_updates(
+            guild_id(100),
+            definition,
+            state,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::ResponseUnknown);
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+        .await
+        .unwrap();
+    let settled = workflow
+        .apply_channel_updates(
+            guild_id(100),
+            definition,
+            &result.state_json,
+            &plan,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, ChannelApplyStatus::Complete);
+    assert!(!settled.state_json.contains("response_unknown"));
+    assert!(
+        plan_channels(&source, &vocabulary, guild_id(100), definition, &settled.state_json)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn forum_tag_partial_failure_keeps_successful_ids_for_replanning() {
+    let mut source = lifecycle_channel_source(ChannelCatalog {
+        channels: vec![
+            channel_snapshot("700", ChannelKind::Forum, "first", None),
+            channel_snapshot("800", ChannelKind::Forum, "second", None),
+        ],
+    });
+    source.fail_update_at = Some(2);
+    let definition = "schema_version = 1\n[channels.first]\ntype = 'forum'\n[channels.first.tags.tag]\nname = 'one'\n[channels.second]\ntype = 'forum'\n[channels.second.tags.tag]\nname = 'two'\n";
+    let state = r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"first":"700","second":"800"}}"#;
+    let vocabulary = test_permission_vocabulary();
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result.status, ChannelApplyStatus::Failed(_)));
+    let parsed = StateFile::parse_for_guild(&result.state_json, guild_id(100)).unwrap();
+    let first_id = parsed.tags[&ChannelLogicalId::parse("first").unwrap()][&TagLogicalId::parse("tag").unwrap()];
+    source.fail_update_at = None;
+    let remaining = plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    let done = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &result.state_json,
+        &remaining,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done.status, ChannelApplyStatus::Complete);
+    let parsed = StateFile::parse_for_guild(&done.state_json, guild_id(100)).unwrap();
+    assert_eq!(
+        parsed.tags[&ChannelLogicalId::parse("first").unwrap()][&TagLogicalId::parse("tag").unwrap()],
+        first_id
+    );
+    assert_eq!(source.catalog.lock().unwrap().channels[0].available_tags.len(), 1);
 }

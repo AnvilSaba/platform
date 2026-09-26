@@ -170,6 +170,14 @@ pub(super) async fn export_roles<S: RoleSource>(
             .as_ref()
             .map(|state| state.channels.clone())
             .unwrap_or_default(),
+        tag_results: previous_state
+            .as_ref()
+            .map(|state| state.tag_results.clone())
+            .unwrap_or_default(),
+        tags: previous_state
+            .as_ref()
+            .map(|state| state.tags.clone())
+            .unwrap_or_default(),
         members: previous_state
             .as_ref()
             .map(|state| state.members.clone())
@@ -234,6 +242,10 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .cloned()
         .collect::<Vec<_>>();
 
+    let mut exported_tags = previous_state
+        .as_ref()
+        .map(|state| state.tags.clone())
+        .unwrap_or_default();
     let mut logical_ids = BTreeMap::<ChannelId, ChannelLogicalId>::new();
     let mut mappings = previous_mappings.clone();
     for channel in &channels {
@@ -455,6 +467,48 @@ pub(super) async fn export_channels<S: ChannelSource>(
             });
             attributes.video_quality = channel.video_quality.map(ChannelValue::Value);
         }
+        if kind == ChannelKind::Forum {
+            let mappings = exported_tags.entry(logical_id.clone()).or_default();
+            for tag in &channel.available_tags {
+                let tag_id = super::ids::TagId::new(tag.id);
+                let tag_logical_id = mappings
+                    .iter()
+                    .find(|(_, id)| **id == tag_id)
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| {
+                        super::ids::TagLogicalId::parse(format!("tag_{}", tag.id))
+                            .expect("生成した Tag 論理 ID は有効です")
+                    });
+                if mappings.get(&tag_logical_id).is_some_and(|id| *id != tag_id) {
+                    return Err(ManagementError::InvalidState(format!(
+                        "Tag {tag_logical_id} の生成 ID が既存対応と衝突します"
+                    )));
+                }
+                mappings.insert(tag_logical_id.clone(), tag_id);
+                attributes.tags.insert(
+                    tag_logical_id,
+                    super::configuration::TagDefinition {
+                        name: Some(ChannelValue::Value(tag.name.clone())),
+                        moderated: Some(ChannelValue::Value(tag.moderated)),
+                        emoji: Some(
+                            tag.emoji
+                                .clone()
+                                .map(ChannelValue::Value)
+                                .unwrap_or(ChannelValue::Clear),
+                        ),
+                        ..Default::default()
+                    },
+                );
+            }
+            if mappings
+                .values()
+                .any(|id| !channel.available_tags.iter().any(|tag| tag.id == id.get()))
+            {
+                return Err(ManagementError::InvalidState(format!(
+                    "Channel {logical_id} の管理 Tag が予期せず消失しています"
+                )));
+            }
+        }
         if is_permissions_sync {
             attributes.permissions_sync = Some(true);
         } else {
@@ -509,6 +563,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
         roles: exported_roles,
         channels: mappings,
         members: exported_members,
+        tags: exported_tags,
+        tag_results: previous_state
+            .as_ref()
+            .map(|state| state.tag_results.clone())
+            .unwrap_or_default(),
     })
     .map_err(|error| ManagementError::SerializeState(error.to_string()))?;
 

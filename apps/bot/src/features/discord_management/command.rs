@@ -153,8 +153,8 @@ pub async fn bind(
     ctx: AppContext<'_>,
     #[description = "希望構成の TOML"] definition: Attachment,
     #[description = "現在の対応 state JSON"] state: Attachment,
-    #[description = "role、channel、member のいずれか"] resource_type: String,
-    #[description = "definition にある論理 ID"] logical_id: String,
+    #[description = "role、channel、member、tag のいずれか"] resource_type: String,
+    #[description = "論理 ID（tag は Channel論理ID/Tag論理ID）"] logical_id: String,
     #[description = "所有者が確認した Discord ID"] discord_id: String,
 ) -> Result<(), AppError> {
     ctx.defer_ephemeral().await?;

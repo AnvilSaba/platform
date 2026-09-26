@@ -184,7 +184,8 @@ struct DiscordForumEmoji {
 
 #[derive(Debug, Serialize)]
 struct DiscordForumTag {
-    id: DiscordSnowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<DiscordSnowflake>,
     name: String,
     moderated: bool,
     emoji_id: Option<DiscordSnowflake>,
@@ -817,7 +818,7 @@ fn forum_tag_snapshot(tag: &serenity::all::ForumTag) -> ForumTagSnapshot {
 fn discord_forum_tag(tag: &ForumTagSnapshot) -> DiscordForumTag {
     let emoji = tag.emoji.as_deref().map(discord_forum_emoji);
     DiscordForumTag {
-        id: DiscordSnowflake(tag.id),
+        id: (tag.id != 0).then_some(DiscordSnowflake(tag.id)),
         name: tag.name.clone(),
         moderated: tag.moderated,
         emoji_id: emoji.as_ref().and_then(|emoji| emoji.emoji_id),
@@ -1175,6 +1176,21 @@ mod tests {
         assert!(json["default_reaction_emoji"].is_null());
         assert!(json["default_sort_order"].is_null());
         assert_eq!(json["available_tags"][0]["id"], "900");
+        let create_tag = edit_channel_payload(
+            &GuildId::new(100),
+            &ChannelUpdate {
+                available_tags: Some(vec![ForumTagSnapshot {
+                    id: 0,
+                    name: "new".into(),
+                    moderated: false,
+                    emoji: Some("123456".into()),
+                }]),
+                ..Default::default()
+            },
+        );
+        let json = payload_json(&create_tag);
+        assert!(json["available_tags"][0].get("id").is_none());
+        assert_eq!(json["available_tags"][0]["emoji_id"], "123456");
     }
 
     #[test]

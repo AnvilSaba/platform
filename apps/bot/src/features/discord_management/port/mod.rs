@@ -123,6 +123,18 @@ pub(super) struct ResourceLookup {
 
 /// Resource の存在と所属を検証するための Port です。
 pub(super) trait ResourceSource {
+    /// Tag の親と型も同時に照合します。Tag の ID は親 Channel なしで探索しません。
+    async fn lookup_forum_tag(
+        &self,
+        _guild_id: &GuildId,
+        _parent_id: ChannelId,
+        _tag_id: u64,
+    ) -> Result<Option<ResourceLookup>, ManagementError> {
+        Err(ManagementError::ResourceSource(
+            "Forum Tag の照合に対応していません".into(),
+        ))
+    }
+
     async fn lookup_resource(
         &self,
         guild_id: &GuildId,
