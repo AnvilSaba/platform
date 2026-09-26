@@ -1,6 +1,6 @@
 use super::{
     code_generator::RandomLinkCodeGenerator,
-    ports::{LinkCodeGenerator, LinkCodeResult, McGuildLinkRepository, McGuildLinkSession},
+    ports::{CodeIssuanceSession, LinkCodeGenerator, LinkCodeResult, McGuildLinkRepository},
     types::DiscordUserId,
 };
 use crate::app::AppError;
@@ -24,13 +24,13 @@ impl<R: McGuildLinkRepository, G: LinkCodeGenerator> LinkCodes<R, G> {
     }
 
     pub async fn issue(&self, user_id: DiscordUserId, username: &str) -> Result<LinkCodeResult, AppError> {
-        let mut session = self.repository.begin(user_id, username).await?;
+        let mut session = self.repository.begin_code_issuance(user_id, username).await?;
         let result = self.issue_in_session(&mut session).await?;
         session.commit().await?;
         Ok(result)
     }
 
-    async fn issue_in_session(&self, session: &mut R::Session) -> Result<LinkCodeResult, AppError> {
+    async fn issue_in_session(&self, session: &mut R::CodeIssuance) -> Result<LinkCodeResult, AppError> {
         if session.is_blocked().await? {
             return Ok(LinkCodeResult::Blocked);
         }
@@ -68,16 +68,16 @@ mod tests {
     #[derive(Clone, Default)]
     struct MemoryRepository(Arc<Mutex<State>>);
 
-    struct MemorySession {
+    struct MemoryCodeIssuanceSession {
         store: MemoryRepository,
         pending: State,
     }
 
     #[async_trait]
     impl McGuildLinkRepository for MemoryRepository {
-        type Session = MemorySession;
-        async fn begin(&self, _: DiscordUserId, _: &str) -> Result<Self::Session, AppError> {
-            Ok(MemorySession {
+        type CodeIssuance = MemoryCodeIssuanceSession;
+        async fn begin_code_issuance(&self, _: DiscordUserId, _: &str) -> Result<Self::CodeIssuance, AppError> {
+            Ok(MemoryCodeIssuanceSession {
                 store: self.clone(),
                 pending: self.0.lock().unwrap().clone(),
             })
@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl McGuildLinkSession for MemorySession {
+    impl CodeIssuanceSession for MemoryCodeIssuanceSession {
         async fn is_blocked(&mut self) -> Result<bool, AppError> {
             Ok(self.pending.blocked)
         }
