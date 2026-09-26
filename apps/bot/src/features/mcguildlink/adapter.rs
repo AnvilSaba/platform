@@ -11,18 +11,18 @@ use sqlx::{PgConnection, PgPool};
 const MAX_CODE_ALLOCATION_ATTEMPTS: usize = 16;
 
 #[derive(Clone)]
-pub struct PostgresLinkCodes<G = RandomLinkCodeGenerator> {
+pub struct DatabaseLinkCodes<G = RandomLinkCodeGenerator> {
     pool: PgPool,
     generator: G,
 }
 
-impl PostgresLinkCodes {
+impl DatabaseLinkCodes {
     pub fn new(pool: PgPool) -> Self {
         Self::with_generator(pool, RandomLinkCodeGenerator)
     }
 }
 
-impl<G: LinkCodeGenerator> PostgresLinkCodes<G> {
+impl<G: LinkCodeGenerator> DatabaseLinkCodes<G> {
     pub fn with_generator(pool: PgPool, generator: G) -> Self {
         Self { pool, generator }
     }
@@ -51,7 +51,7 @@ impl<G: LinkCodeGenerator> PostgresLinkCodes<G> {
 }
 
 #[async_trait]
-impl<G: LinkCodeGenerator> LinkCodes for PostgresLinkCodes<G> {
+impl<G: LinkCodeGenerator> LinkCodes for DatabaseLinkCodes<G> {
     async fn issue(&self, user_id: DiscordUserId, username: &str) -> Result<LinkCodeResult, AppError> {
         let mut tx = self.pool.begin().await?;
         let result = self.issue_in_transaction(&mut tx, user_id, username).await?;
@@ -89,12 +89,12 @@ mod tests {
     /// コード衝突時の再生成を確認する。固定生成器で衝突を起こし、両利用者の再表示結果も検証する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn colliding_code_is_retried_without_changing_another_users_code(pool: PgPool) {
-        let first = PostgresLinkCodes::with_generator(pool.clone(), FixedCodes::new(&["AC234679"]));
+        let first = DatabaseLinkCodes::with_generator(pool.clone(), FixedCodes::new(&["AC234679"]));
         assert_eq!(
             first.issue(DiscordUserId::new(10), "first").await.unwrap(),
             LinkCodeResult::Code("AC234679".into())
         );
-        let second = PostgresLinkCodes::with_generator(pool, FixedCodes::new(&["AC234679", "KMNPQRTU"]));
+        let second = DatabaseLinkCodes::with_generator(pool, FixedCodes::new(&["AC234679", "KMNPQRTU"]));
         assert_eq!(
             second.issue(DiscordUserId::new(20), "second").await.unwrap(),
             LinkCodeResult::Code("KMNPQRTU".into())
@@ -149,7 +149,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn bot_role_can_issue_but_cannot_change_schema_or_unrelated_data(pool: PgPool) {
         let bot = bot_pool(&pool).await;
-        let service = PostgresLinkCodes::new(bot.clone());
+        let service = DatabaseLinkCodes::new(bot.clone());
         platform_database::check_migrations(&bot, &MIGRATIONS, crate::REQUIRED_MIGRATION_VERSION)
             .await
             .unwrap();
@@ -170,7 +170,7 @@ mod tests {
     /// 同時発行の直列化を確認する。20 件の要求が同じコードを返し、別利用者には異なるコードを発行する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn simultaneous_requests_return_one_reusable_code(pool: PgPool) {
-        let service = PostgresLinkCodes::new(pool);
+        let service = DatabaseLinkCodes::new(pool);
         let results =
             futures::future::join_all((0..20).map(|_| service.issue(DiscordUserId::new(123), "concurrent"))).await;
         let first = results.first().unwrap().as_ref().unwrap();
@@ -188,7 +188,7 @@ mod tests {
     /// ブロックによる発行拒否を確認する。既存コードの再表示と、コード削除後の新規発行をともに拒否する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn blocked_user_cannot_issue_or_redisplay_code(pool: PgPool) {
-        let service = PostgresLinkCodes::new(pool.clone());
+        let service = DatabaseLinkCodes::new(pool.clone());
         service.issue(DiscordUserId::new(42), "blocked").await.unwrap();
         sqlx::query!(
             "INSERT INTO mcguildlink.block_groups (root_discord_account_id)
@@ -221,14 +221,14 @@ mod tests {
     /// 未使用コードの永続化を確認する。最大 Discord ID で発行し、サービス再生成・名前変更後も同じコードを返す。
     #[sqlx::test(migrations = "../../migrations")]
     async fn unused_code_survives_reconnection_and_name_change(pool: PgPool) {
-        let service = PostgresLinkCodes::new(pool.clone());
+        let service = DatabaseLinkCodes::new(pool.clone());
         let first = service.issue(DiscordUserId::new(u64::MAX), "before").await.unwrap();
         let LinkCodeResult::Code(code) = &first else {
             panic!("expected code")
         };
         assert_eq!(code.as_ref().len(), 8);
         assert_eq!(
-            PostgresLinkCodes::new(pool)
+            DatabaseLinkCodes::new(pool)
                 .issue(DiscordUserId::new(u64::MAX), "after")
                 .await
                 .unwrap(),

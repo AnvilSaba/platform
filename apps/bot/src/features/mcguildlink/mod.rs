@@ -1,7 +1,7 @@
 mod code_generator;
 mod discord;
 mod ports;
-mod postgres;
+mod adapter;
 mod queries;
 mod types;
 
