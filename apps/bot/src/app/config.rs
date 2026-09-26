@@ -17,9 +17,11 @@ use serenity::{
 use tokio::fs::read_to_string;
 
 use crate::app::AppError;
+use crate::features::mcguildlink::McGuildLinkConfig;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
+    pub mcguildlink: Option<McGuildLinkConfig>,
     pub bot: BotConfig,
     pub auth: AuthConfig,
     pub auto_kick: AutoKickConfig,

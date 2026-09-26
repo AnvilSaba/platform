@@ -2,12 +2,26 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "crates/**", "migrations/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "crates/**", "migrations/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: platform_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:test-password@localhost:5432/platform_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
