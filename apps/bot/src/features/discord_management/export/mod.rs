@@ -470,7 +470,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
         if kind == ChannelKind::Forum {
             let mappings = exported_tags.entry(logical_id.clone()).or_default();
             for tag in &channel.available_tags {
-                let tag_id = super::ids::TagId::new(tag.id);
+                let tag_id = tag.id;
                 let tag_logical_id = mappings
                     .iter()
                     .find(|(_, id)| **id == tag_id)
@@ -502,7 +502,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
             }
             if mappings
                 .values()
-                .any(|id| !channel.available_tags.iter().any(|tag| tag.id == id.get()))
+                .any(|id| !channel.available_tags.iter().any(|tag| tag.id == *id))
             {
                 return Err(ManagementError::InvalidState(format!(
                     "Channel {logical_id} の管理 Tag が予期せず消失しています"

@@ -20,7 +20,7 @@ use crate::features::discord_management::{
         ChannelCatalog, ChannelCreate, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
         ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelPositionUpdate, ChannelPositionUpdateOutcome,
         ChannelPositionUpdater, ChannelSnapshot, ChannelSource, ChannelUpdate, ChannelUpdateOutcome,
-        ChannelUpdateValue, ChannelUpdater, ForumTagSnapshot, PermissionBits,
+        ChannelUpdateValue, ChannelUpdater, ForumTagSnapshot, ForumTagWrite, PermissionBits,
     },
 };
 
@@ -808,19 +808,20 @@ fn forum_layout(value: ForumLayout) -> u8 {
 
 fn forum_tag_snapshot(tag: &serenity::all::ForumTag) -> ForumTagSnapshot {
     ForumTagSnapshot {
-        id: tag.id.get(),
+        id: crate::features::discord_management::ids::TagId::new(tag.id.get()),
         name: tag.name.to_string(),
         moderated: tag.moderated,
         emoji: tag.emoji.as_ref().map(forum_emoji_string),
     }
 }
 
-fn discord_forum_tag(tag: &ForumTagSnapshot) -> DiscordForumTag {
-    let emoji = tag.emoji.as_deref().map(discord_forum_emoji);
+fn discord_forum_tag(tag: &ForumTagWrite) -> DiscordForumTag {
+    let attributes = tag.attributes();
+    let emoji = attributes.emoji.as_deref().map(discord_forum_emoji);
     DiscordForumTag {
-        id: (tag.id != 0).then_some(DiscordSnowflake(tag.id)),
-        name: tag.name.clone(),
-        moderated: tag.moderated,
+        id: tag.id().map(|id| DiscordSnowflake(id.get())),
+        name: attributes.name.clone(),
+        moderated: attributes.moderated,
         emoji_id: emoji.as_ref().and_then(|emoji| emoji.emoji_id),
         emoji_name: emoji.and_then(|emoji| emoji.emoji_name),
     }
@@ -871,6 +872,7 @@ fn overwrite_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::discord_management::port::ForumTagAttributes;
 
     fn payload_json<T: Serialize>(payload: &T) -> serde_json::Value {
         serde_json::to_value(payload).expect("payload は必ず JSON に直列化できます")
@@ -1163,11 +1165,13 @@ mod tests {
             &ChannelUpdate {
                 default_reaction: ChannelUpdateValue::Clear,
                 default_sort_order: ChannelUpdateValue::Clear,
-                available_tags: Some(vec![ForumTagSnapshot {
-                    id: 900,
-                    name: "solved".to_owned(),
-                    moderated: true,
-                    emoji: Some("✅".to_owned()),
+                available_tags: Some(vec![ForumTagWrite::Update {
+                    id: crate::features::discord_management::ids::TagId::new(900),
+                    attributes: ForumTagAttributes {
+                        name: "solved".to_owned(),
+                        moderated: true,
+                        emoji: Some("✅".to_owned()),
+                    },
                 }]),
                 ..ChannelUpdate::default()
             },
@@ -1179,18 +1183,28 @@ mod tests {
         let create_tag = edit_channel_payload(
             &GuildId::new(100),
             &ChannelUpdate {
-                available_tags: Some(vec![ForumTagSnapshot {
-                    id: 0,
-                    name: "new".into(),
-                    moderated: false,
-                    emoji: Some("123456".into()),
-                }]),
+                available_tags: Some(vec![
+                    ForumTagWrite::Update {
+                        id: crate::features::discord_management::ids::TagId::new(900),
+                        attributes: ForumTagAttributes {
+                            name: "existing".into(),
+                            moderated: true,
+                            emoji: None,
+                        },
+                    },
+                    ForumTagWrite::Create(ForumTagAttributes {
+                        name: "new".into(),
+                        moderated: false,
+                        emoji: Some("123456".into()),
+                    }),
+                ]),
                 ..Default::default()
             },
         );
         let json = payload_json(&create_tag);
-        assert!(json["available_tags"][0].get("id").is_none());
-        assert_eq!(json["available_tags"][0]["emoji_id"], "123456");
+        assert_eq!(json["available_tags"][0]["id"], "900");
+        assert!(json["available_tags"][1].get("id").is_none());
+        assert_eq!(json["available_tags"][1]["emoji_id"], "123456");
     }
 
     #[test]

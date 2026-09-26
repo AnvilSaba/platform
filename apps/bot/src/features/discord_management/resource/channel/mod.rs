@@ -369,7 +369,15 @@ impl AttributeChanges {
                 .as_ref()
                 .filter(|tags| tags.write)
                 .map(|tags| tags.payload.clone())
-                .or_else(|| matches!(actual.kind, ChannelKind::Forum).then(|| actual.available_tags.clone())),
+                .or_else(|| {
+                    matches!(actual.kind, ChannelKind::Forum).then(|| {
+                        actual
+                            .available_tags
+                            .iter()
+                            .map(crate::features::discord_management::port::ForumTagWrite::from)
+                            .collect()
+                    })
+                }),
             overwrites: (self.synced_overwrites.is_some() || !self.overwrites.is_empty()).then_some(overwrites),
         })
     }

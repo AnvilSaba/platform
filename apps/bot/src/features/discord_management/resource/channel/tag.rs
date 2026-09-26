@@ -1,14 +1,14 @@
 use crate::features::discord_management::{
     configuration::{ChannelValue, StateFile, TagDefinition, TagResult},
     domain::ManagementError,
-    ids::{ChannelLogicalId, TagId, TagLogicalId},
-    port::ForumTagSnapshot,
+    ids::{ChannelLogicalId, TagLogicalId},
+    port::{ForumTagAttributes, ForumTagSnapshot, ForumTagWrite},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct TagPlan {
-    pub(super) payload: Vec<ForumTagSnapshot>,
+    pub(super) payload: Vec<ForumTagWrite>,
     pub(super) released: Vec<TagLogicalId>,
     pub(super) settled: Vec<TagLogicalId>,
     pub(super) deleted: Vec<TagLogicalId>,
@@ -27,7 +27,7 @@ impl TagPlan {
         let empty = BTreeMap::new();
         let mappings = state.tags.get(channel).unwrap_or(&empty);
         let mut plan = Self {
-            payload: actual.to_vec(),
+            payload: actual.iter().map(ForumTagWrite::from).collect(),
             ..Default::default()
         };
         if let Some(results) = state.tag_results.get(channel) {
@@ -54,11 +54,11 @@ impl TagPlan {
             }
             let declaration = declaration.unwrap();
             if declaration.is_absent() {
-                plan.payload.retain(|tag| tag.id != id.get());
+                plan.payload.retain(|tag| tag.id() != Some(*id));
                 plan.deleted.push(logical_id.clone());
                 continue;
             }
-            if !actual.iter().any(|tag| tag.id == id.get()) {
+            if !actual.iter().any(|tag| tag.id == *id) {
                 return Err(ManagementError::InvalidState(format!(
                     "Tag {channel}/{logical_id} の ID {id} が親 Channel に存在しません"
                 )));
@@ -81,10 +81,10 @@ impl TagPlan {
                 let tag = plan
                     .payload
                     .iter_mut()
-                    .find(|tag| tag.id == id.get())
+                    .find(|tag| tag.id() == Some(*id))
                     .expect("Tag の存在は検証済みです");
                 let before = tag.clone();
-                update_tag(tag, declaration);
+                update_tag(tag.attributes_mut(), declaration);
                 if *tag != before {
                     plan.changed.push(logical_id.clone());
                 }
@@ -94,15 +94,14 @@ impl TagPlan {
                         "新規 Tag {channel}/{logical_id} には name が必要です"
                     )));
                 };
-                let mut tag = ForumTagSnapshot {
-                    id: 0,
+                let mut tag = ForumTagAttributes {
                     name: name.clone(),
                     moderated: false,
                     emoji: None,
                 };
                 update_tag(&mut tag, declaration);
                 plan.created.insert(logical_id.clone(), plan.payload.len());
-                plan.payload.push(tag);
+                plan.payload.push(ForumTagWrite::Create(tag));
             }
         }
         if plan.payload.len() > 20 {
@@ -110,7 +109,7 @@ impl TagPlan {
                 "Channel {channel} の管理外 Tag を含む全 Tag は20個以内で指定してください"
             )));
         }
-        plan.write = plan.payload != actual;
+        plan.write = plan.payload != actual.iter().map(ForumTagWrite::from).collect::<Vec<_>>();
         Ok(
             (plan.write || !plan.released.is_empty() || !plan.deleted.is_empty() || !plan.settled.is_empty())
                 .then_some(plan),
@@ -146,22 +145,14 @@ impl TagPlan {
         // 名前は一意ではないため、ID と応答配列の位置の両方を検証します。
         if self.write
             && (actual.len() != self.payload.len()
-                || !actual.iter().zip(&self.payload).all(|(got, want)| {
-                    (want.id == 0 || got.id == want.id)
-                        && got.name == want.name
-                        && got.moderated == want.moderated
-                        && got.emoji == want.emoji
-                }))
+                || !actual.iter().zip(&self.payload).all(|(got, want)| want.matches(got)))
         {
             return Err(ManagementError::InvalidState(
                 "Tag 更新後の配列が希望値と一致しません".into(),
             ));
         }
         let mut ids = BTreeSet::new();
-        if actual
-            .iter()
-            .any(|tag| tag.id == 0 || tag.id == u64::MAX || !ids.insert(tag.id))
-        {
+        if actual.iter().any(|tag| tag.id.get() == 0 || !ids.insert(tag.id)) {
             return Err(ManagementError::InvalidState(
                 "Tag 更新応答の ID が不正または重複しています".into(),
             ));
@@ -172,12 +163,12 @@ impl TagPlan {
         }
         for (logical_id, index) in &self.created {
             let id = actual[*index].id;
-            if id == 0 || mappings.values().any(|existing| existing.get() == id) {
+            if id.get() == 0 || mappings.values().any(|existing| *existing == id) {
                 return Err(ManagementError::InvalidState(
                     "作成 Tag ID が既存対応と衝突しています".into(),
                 ));
             }
-            mappings.insert(logical_id.clone(), TagId::new(id));
+            mappings.insert(logical_id.clone(), id);
         }
         if mappings.is_empty() {
             state.tags.remove(channel);
@@ -203,7 +194,7 @@ impl TagPlan {
         Ok(())
     }
 }
-fn update_tag(tag: &mut ForumTagSnapshot, declaration: &TagDefinition) {
+fn update_tag(tag: &mut ForumTagAttributes, declaration: &TagDefinition) {
     if let Some(ChannelValue::Value(name)) = &declaration.name {
         tag.name.clone_from(name);
     }

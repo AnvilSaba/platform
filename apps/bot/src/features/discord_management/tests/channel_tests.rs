@@ -288,14 +288,12 @@ impl ChannelUpdater for ApplyingFakeChannelSource {
             .iter_mut()
             .find(|channel| channel.id == *channel_id)
             .expect("更新対象 Channel がカタログに存在します");
-        update.apply_to(channel);
-        for tag in &mut channel.available_tags {
-            if tag.id == 0 {
-                let mut next_id = self.next_id.lock().unwrap();
-                tag.id = *next_id;
-                *next_id += 1;
-            }
-        }
+        update.apply_to(channel, || {
+            let mut next_id = self.next_id.lock().unwrap();
+            let id = TagId::new(*next_id);
+            *next_id += 1;
+            id
+        });
         Ok(ChannelUpdateOutcome::Applied)
     }
 }
@@ -435,7 +433,7 @@ impl ChannelUpdater for UnknownChannelUpdateSource {
                 .iter_mut()
                 .find(|channel| channel.id == *channel_id)
                 .expect("更新対象 Channel がカタログに存在します");
-            update.apply_to(channel);
+            update.apply_to(channel, || TagId::new(999));
         }
         Ok(self.outcome)
     }
@@ -4023,7 +4021,7 @@ async fn forum_apply_preserves_available_tags_and_supports_nullable_defaults() {
     forum.default_sort_order = Some(ForumSortOrder::LatestActivity);
     forum.default_forum_layout = Some(ForumLayout::List);
     forum.available_tags.push(ForumTagSnapshot {
-        id: 900,
+        id: TagId::new(900),
         name: "solved".to_owned(),
         moderated: true,
         emoji: Some("✅".to_owned()),
@@ -4066,7 +4064,10 @@ async fn forum_apply_preserves_available_tags_and_supports_nullable_defaults() {
     let updates = source.updates.lock().unwrap();
     assert_eq!(updates[0].default_reaction, ChannelUpdateValue::Clear);
     assert_eq!(updates[0].default_sort_order, ChannelUpdateValue::Clear);
-    assert_eq!(updates[0].available_tags.as_ref().unwrap()[0].id, 900);
+    assert_eq!(
+        updates[0].available_tags.as_ref().unwrap()[0].id(),
+        Some(TagId::new(900))
+    );
 }
 
 #[tokio::test]
@@ -4114,13 +4115,13 @@ async fn forum_tag_export_preserves_logical_ids_and_roundtrips_same_names() {
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
     forum.available_tags = vec![
         ForumTagSnapshot {
-            id: 901,
+            id: TagId::new(901),
             name: "same".into(),
             moderated: false,
             emoji: None,
         },
         ForumTagSnapshot {
-            id: 902,
+            id: TagId::new(902),
             name: "same".into(),
             moderated: true,
             emoji: Some("✅".into()),
@@ -4153,13 +4154,13 @@ async fn forum_tag_rename_keeps_id_and_unmanaged_tags_and_release_keeps_discord_
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
     forum.available_tags = vec![
         ForumTagSnapshot {
-            id: 901,
+            id: TagId::new(901),
             name: "same".into(),
             moderated: false,
             emoji: None,
         },
         ForumTagSnapshot {
-            id: 902,
+            id: TagId::new(902),
             name: "same".into(),
             moderated: true,
             emoji: None,
@@ -4185,9 +4186,9 @@ async fn forum_tag_rename_keeps_id_and_unmanaged_tags_and_release_keeps_discord_
     .unwrap();
     assert_eq!(result.status, ChannelApplyStatus::Complete);
     let tags = source.updates.lock().unwrap()[0].available_tags.clone().unwrap();
-    assert_eq!(tags[0].id, 901);
-    assert_eq!(tags[0].name, "renamed");
-    assert_eq!(tags[1].id, 902);
+    assert_eq!(tags[0].id(), Some(TagId::new(901)));
+    assert_eq!(tags[0].attributes().name, "renamed");
+    assert_eq!(tags[1].id(), Some(TagId::new(902)));
     let released = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n";
     let plan = plan_channels(
         &source,
@@ -4218,7 +4219,7 @@ async fn forum_tag_rename_keeps_id_and_unmanaged_tags_and_release_keeps_discord_
 async fn forum_tag_explicit_deletion_requires_permission_and_reinsertion_creates_new_id() {
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
     forum.available_tags.push(ForumTagSnapshot {
-        id: 901,
+        id: TagId::new(901),
         name: "delete".into(),
         moderated: false,
         emoji: None,
@@ -4304,7 +4305,7 @@ impl ResourceSource for ChannelCatalogSource {
             .channels
             .iter()
             .find(|channel| channel.id == parent && channel.kind == ChannelKind::Forum)
-            .filter(|channel| channel.available_tags.iter().any(|tag| tag.id == id))
+            .filter(|channel| channel.available_tags.iter().any(|tag| tag.id.get() == id))
             .map(|_| ResourceLookup {
                 resource_type: ResourceType::Tag,
                 guild_id: *guild,
@@ -4315,7 +4316,7 @@ impl ResourceSource for ChannelCatalogSource {
 async fn forum_tag_bind_validates_parent_and_duplicate_ids() {
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
     forum.available_tags.push(ForumTagSnapshot {
-        id: 901,
+        id: TagId::new(901),
         name: "same".into(),
         moderated: false,
         emoji: None,
@@ -4451,7 +4452,7 @@ async fn forum_tag_plan_rejects_over_capacity_long_names_and_duplicate_state_key
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
     forum.available_tags = (1..=20)
         .map(|id| ForumTagSnapshot {
-            id,
+            id: TagId::new(id),
             name: "outside".into(),
             moderated: false,
             emoji: None,
@@ -4479,7 +4480,7 @@ async fn forum_tag_plan_rejects_over_capacity_long_names_and_duplicate_state_key
 async fn forum_tag_unknown_update_is_settled_by_replanning_actual_state() {
     let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
     forum.available_tags.push(ForumTagSnapshot {
-        id: 901,
+        id: TagId::new(901),
         name: "old".into(),
         moderated: false,
         emoji: None,
