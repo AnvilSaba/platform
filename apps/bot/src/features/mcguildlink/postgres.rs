@@ -86,6 +86,7 @@ mod tests {
         }
     }
 
+    /// コード衝突時の再生成を確認する。固定生成器で衝突を起こし、両利用者の再表示結果も検証する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn colliding_code_is_retried_without_changing_another_users_code(pool: PgPool) {
         let first = PostgresLinkCodes::with_generator(pool.clone(), FixedCodes::new(&["AC234679"]));
@@ -108,6 +109,7 @@ mod tests {
         );
     }
 
+    /// DB の INSERT 制限を確認する。未ブロック時は成功し、ブロック済みのコード発行と双方の紐付けは拒否される。
     #[sqlx::test(migrations = "../../migrations")]
     async fn database_rejects_inserts_for_blocked_accounts(pool: PgPool) {
         sqlx::raw_sql("INSERT INTO mcguildlink.discord_accounts (user_id, last_known_username) VALUES (1, 'blocked'), (2, 'allowed');
@@ -143,6 +145,7 @@ mod tests {
             .unwrap()
     }
 
+    /// Bot の最小権限を確認する。実運用ロールで発行・再表示・履歴照合を行い、DDL や対象外操作は拒否される。
     #[sqlx::test(migrations = "../../migrations")]
     async fn bot_role_can_issue_but_cannot_change_schema_or_unrelated_data(pool: PgPool) {
         let bot = bot_pool(&pool).await;
@@ -164,6 +167,7 @@ mod tests {
         }
     }
 
+    /// 同時発行の直列化を確認する。20 件の要求が同じコードを返し、別利用者には異なるコードを発行する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn simultaneous_requests_return_one_reusable_code(pool: PgPool) {
         let service = PostgresLinkCodes::new(pool);
@@ -181,6 +185,7 @@ mod tests {
         );
     }
 
+    /// ブロックによる発行拒否を確認する。既存コードの再表示と、コード削除後の新規発行をともに拒否する。
     #[sqlx::test(migrations = "../../migrations")]
     async fn blocked_user_cannot_issue_or_redisplay_code(pool: PgPool) {
         let service = PostgresLinkCodes::new(pool.clone());
@@ -213,6 +218,7 @@ mod tests {
         );
     }
 
+    /// 未使用コードの永続化を確認する。最大 Discord ID で発行し、サービス再生成・名前変更後も同じコードを返す。
     #[sqlx::test(migrations = "../../migrations")]
     async fn unused_code_survives_reconnection_and_name_change(pool: PgPool) {
         let service = PostgresLinkCodes::new(pool.clone());
