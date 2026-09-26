@@ -1,10 +1,6 @@
-use super::{
-    ports::{LinkCodeResult, LinkCodes},
-    adapter::DatabaseLinkCodes,
-    types::DiscordUserId,
-};
+use super::{ports::LinkCodeResult, types::DiscordUserId};
 use crate::{
-    app::{AppApplicationContext, AppError, BotDataExt},
+    app::{AppApplicationContext, AppError, BotDataExt, BotError},
     utils::{create_safe_allowed_mentions, create_safe_message},
 };
 use bot_macros::event_handler;
@@ -41,10 +37,14 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
         return Ok(());
     }
     let data = ctx.bot_data();
+
     interaction.defer_ephemeral(&ctx.http).await?;
-    let result = DatabaseLinkCodes::new(data.database.clone())
+
+    let result = data
+        .link_codes
         .issue(DiscordUserId::new(interaction.user.id.get()), &interaction.user.name)
         .await;
+
     let content = match &result {
         Ok(LinkCodeResult::Code(code)) => format!(
             "Minecraft 26.3 で以下のサーバーに接続し、表示される入力欄にコードを入力してください。\n\nサーバーアドレス:\n```\n{}\n```\nコード:\n```\n{code}\n```",
@@ -55,6 +55,7 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
         }
         Err(_) => "コードを取得できませんでした。時間をおいて再度お試しください。".into(),
     };
+
     interaction
         .edit_response(
             &ctx.http,
@@ -63,6 +64,7 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
                 .allowed_mentions(create_safe_allowed_mentions()),
         )
         .await?;
+
     result.map(|_| ())
 }
 
@@ -78,13 +80,7 @@ pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError
             .as_ref()
             .is_some_and(|member| member.roles.contains(&config.moderator_role_id))
     {
-        ctx.send(
-            CreateReply::default()
-                .allowed_mentions(create_safe_allowed_mentions())
-                .content("この操作を実行する権限がありません。"),
-        )
-        .await?;
-        return Ok(());
+        return Err(BotError::HasNoRole.into());
     }
 
     ctx.defer_ephemeral().await?;
