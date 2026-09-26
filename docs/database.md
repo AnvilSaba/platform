@@ -26,7 +26,7 @@ CREATE DATABASE platform OWNER platform_migrator;
 事前に作成すれば、マイグレーションユーザーにロール作成権限を与える必要はない。
 
 ```sql
-CREATE ROLE mcguildlink_bot NOLOGIN;
+CREATE ROLE platform_bot_runtime NOLOGIN;
 ```
 
 マイグレーション適用後、Bot のログインユーザーを作成し、必要な権限ロールを付与する。
@@ -34,11 +34,13 @@ CREATE ROLE mcguildlink_bot NOLOGIN;
 ```sql
 CREATE ROLE platform_bot LOGIN;
 GRANT CONNECT ON DATABASE platform TO platform_bot;
-GRANT mcguildlink_bot TO platform_bot;
+GRANT platform_bot_runtime TO platform_bot;
 ```
 
 Bot に DB 所有権、スキーマ作成権限、マイグレーションロールは与えない。
-`mcguildlink_bot` の権限はマイグレーションで定義し、必要なテーブルと列に限定する。
+`platform_bot_runtime` は Bot 全体の権限ロール。ログインユーザーと分離し、
+各機能のマイグレーションで必要なテーブル・列の権限だけを追加する。
+将来のテーブルへ一括で権限を付与するデフォルト権限は設定しない。
 
 ## マイグレーション
 
@@ -77,7 +79,7 @@ sqlx migrate revert
 
 初期マイグレーションの down は `mcguildlink` スキーマと保存データを削除する。
 開発用の空 DB での往復検証に使い、データを保持する切り戻しには使わない。
-クラスタ共有の `mcguildlink_bot` ロールは down 後も保持する。
+クラスタ共有の `platform_bot_runtime` ロールは down 後も保持する。
 
 ## SQL のコンパイル時検証
 

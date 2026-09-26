@@ -36,19 +36,46 @@ CREATE TABLE mcguildlink.blocked_minecraft_accounts (
     block_group_id bigint NOT NULL REFERENCES mcguildlink.block_groups(id)
 );
 
+-- アプリの経路を通さない INSERT にも、ブロック済みアカウントの制限を適用する。
+CREATE FUNCTION mcguildlink.reject_blocked_link_request() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts
+               WHERE discord_account_id = NEW.discord_account_id) THEN
+        RAISE EXCEPTION 'blocked discord account cannot create link request' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER prevent_blocked_link_request BEFORE INSERT ON mcguildlink.link_requests
+    FOR EACH ROW EXECUTE FUNCTION mcguildlink.reject_blocked_link_request();
+
+CREATE FUNCTION mcguildlink.reject_blocked_account_link() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts
+               WHERE discord_account_id = NEW.discord_account_id)
+       OR EXISTS (SELECT FROM mcguildlink.blocked_minecraft_accounts
+                  WHERE minecraft_account_id = NEW.minecraft_account_id) THEN
+        RAISE EXCEPTION 'blocked account cannot be linked' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER prevent_blocked_account_link BEFORE INSERT ON mcguildlink.account_links
+    FOR EACH ROW EXECUTE FUNCTION mcguildlink.reject_blocked_account_link();
+
 -- ログイン用ユーザーは運用側が作成し、この権限ロールを付与する。
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mcguildlink_bot') THEN
-        CREATE ROLE mcguildlink_bot NOLOGIN;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'platform_bot_runtime') THEN
+        CREATE ROLE platform_bot_runtime NOLOGIN;
     END IF;
 EXCEPTION WHEN duplicate_object OR unique_violation THEN
     -- 独立した DB の初期化が同時に同じクラスタ共有ロールを作る場合。
     NULL;
 END $$;
-GRANT USAGE ON SCHEMA mcguildlink TO mcguildlink_bot;
-GRANT SELECT (version, success, checksum) ON public._sqlx_migrations TO mcguildlink_bot;
+GRANT USAGE ON SCHEMA mcguildlink TO platform_bot_runtime;
+GRANT SELECT (version, success, checksum) ON public._sqlx_migrations TO platform_bot_runtime;
 GRANT SELECT ON mcguildlink.discord_accounts,
-    mcguildlink.link_requests, mcguildlink.blocked_discord_accounts TO mcguildlink_bot;
-GRANT INSERT ON mcguildlink.discord_accounts, mcguildlink.link_requests TO mcguildlink_bot;
-GRANT UPDATE (last_known_username) ON mcguildlink.discord_accounts TO mcguildlink_bot;
-GRANT USAGE ON SEQUENCE mcguildlink.discord_accounts_id_seq TO mcguildlink_bot;
+    mcguildlink.link_requests, mcguildlink.blocked_discord_accounts TO platform_bot_runtime;
+GRANT INSERT ON mcguildlink.discord_accounts, mcguildlink.link_requests TO platform_bot_runtime;
+GRANT UPDATE (last_known_username) ON mcguildlink.discord_accounts TO platform_bot_runtime;
+GRANT USAGE ON SEQUENCE mcguildlink.discord_accounts_id_seq TO platform_bot_runtime;

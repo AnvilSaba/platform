@@ -28,6 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
 bot-macros = { path = "../../crates/bot-macros" }
 platform-database = { path = "../../crates/platform-database" }
+nutype = "0.8.0"
 
 [dependencies.serenity]
 git = "https://github.com/serenity-rs/serenity"
