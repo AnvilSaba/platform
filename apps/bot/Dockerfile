@@ -54,6 +54,8 @@ RUN case "$TARGETARCH" in \
     rustup target add "$rust_target"
 
 COPY --from=planner /recipe.json ./recipe.json
+COPY .sqlx ./.sqlx
+ENV SQLX_OFFLINE=true
 
 RUN rust_target="$(cat /tmp/rust-target)" && \
     cargo chef cook \

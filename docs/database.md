@@ -4,11 +4,14 @@
 
 各アプリは PostgreSQL の共有 DB `platform` に接続する。
 Helm の `postgres.database` もこの名前を使用する。
-接続先は環境変数 `DATABASE_URL` で指定し、アプリごとに異なる DB ユーザーを使う。
+アプリごとに異なる DB ユーザーを使い、接続先は必須の環境変数 `DATABASE_URL` に設定する。
 
 ```text
-postgres://<ユーザー>:<パスワード>@<ホスト>:5432/platform
+postgres://platform_bot:<パスワード>@<ホスト>:5432/platform
 ```
+
+設定の不足・不正、DB 接続失敗、スキーマ非互換では Bot は起動しない。
+sqlx-cli と統合テストも `DATABASE_URL` を使用する。
 
 DB を手動で作成する場合は、管理者として以下を実行する。
 
@@ -64,3 +67,21 @@ sqlx migrate revert
 初期マイグレーションの down は `mcguildlink` スキーマと保存データを削除する。
 開発用の空 DB での往復検証に使い、データを保持する切り戻しには使わない。
 クラスタ共有の `mcguildlink_bot` ロールは down 後も保持する。
+
+## SQL のコンパイル時検証
+
+SQL は `sqlx::query!` と `sqlx::query_scalar!` でコンパイル時に検証する。
+リポジトリの `.sqlx/` に保存したメタデータを使うため、通常のビルドは DB 接続を必要としない。
+`.cargo/config.toml` は `SQLX_OFFLINE=true` を設定する。
+
+SQL またはスキーマを変更した場合は、開発用 DB にマイグレーションを適用し、
+その接続先を `DATABASE_URL` に指定してメタデータを更新する。
+
+```powershell
+sqlx migrate run
+cargo sqlx prepare --workspace -- --all-targets --locked
+cargo sqlx prepare --check --workspace -- --all-targets --locked
+```
+
+`prepare` は DB に接続して検証する。更新された `.sqlx/` もコミットする。
+CI はマイグレーション適用後の DB とメタデータの一致を確認する。

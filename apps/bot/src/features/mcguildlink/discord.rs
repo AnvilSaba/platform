@@ -1,4 +1,4 @@
-use super::{ports::LinkReply, start_link::start_link};
+use super::{ports::LinkReply, postgres::PostgresLinkCodes, start_link::start_link};
 use crate::app::{AppApplicationContext, AppError, BotDataExt};
 use bot_macros::event_handler;
 use poise::CreateReply;
@@ -53,19 +53,13 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
         return Ok(());
     }
     let config = ctx.app_config().await;
-    let Some(config) = &config.mcguildlink else {
-        return Ok(());
-    };
+    let config = &config.mcguildlink;
     if interaction.guild_id != Some(config.guild_id) {
         return Ok(());
     }
     let data = ctx.bot_data();
-    let codes = data
-        .link_codes
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("MCGuildLink DB is not configured"))?;
     start_link(
-        codes.as_ref(),
+        &PostgresLinkCodes::new(data.database.clone()),
         &DiscordReply { ctx, interaction },
         interaction.user.id.get(),
         &interaction.user.name,
@@ -78,11 +72,7 @@ pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), A
 #[poise::command(slash_command, ephemeral, guild_only)]
 pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError> {
     let config = ctx.app_config().await;
-    let Some(config) = &config.mcguildlink else {
-        ctx.send(CreateReply::default().content("紐付け機能は設定されていません。"))
-            .await?;
-        return Ok(());
-    };
+    let config = &config.mcguildlink;
     if ctx.guild_id() != Some(config.guild_id)
         || !ctx
             .interaction

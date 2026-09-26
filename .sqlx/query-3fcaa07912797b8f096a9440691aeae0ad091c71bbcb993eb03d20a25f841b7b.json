@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mcguildlink.schema_compatibility SET minimum_version = 2, maximum_version = 2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3fcaa07912797b8f096a9440691aeae0ad091c71bbcb993eb03d20a25f841b7b"
+}

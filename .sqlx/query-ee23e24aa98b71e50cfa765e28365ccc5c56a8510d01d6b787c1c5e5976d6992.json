@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT minimum_version <= 1 AND maximum_version >= 1 AS \"compatible!\"\n         FROM mcguildlink.schema_compatibility WHERE singleton",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "compatible!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ee23e24aa98b71e50cfa765e28365ccc5c56a8510d01d6b787c1c5e5976d6992"
+}

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "apps/bot",
     "crates/bot-macros",
+    "crates/platform-database",
 ]
 
 [profile.release]
