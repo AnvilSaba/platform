@@ -6,6 +6,8 @@ mod features;
 mod utils;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+// 紐付けコード発行のスキーマを必須とする。互換追加だけではこの番号を更新しない。
+const REQUIRED_MIGRATION_VERSION: i64 = 20260926184758;
 
 use std::sync::Arc;
 
@@ -87,7 +89,7 @@ async fn main() -> Result<(), AppError> {
     settings.max_messages = usize::MAX;
 
     let database = database_config.connect().await?;
-    platform_database::check_migrations(&database, &MIGRATIONS, 20260926184758).await?;
+    platform_database::check_migrations(&database, &MIGRATIONS, REQUIRED_MIGRATION_VERSION).await?;
 
     let mut client = create_client(
         config.bot.token.clone(),

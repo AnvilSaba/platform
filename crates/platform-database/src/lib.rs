@@ -80,6 +80,7 @@ mod tests {
     }
 
     static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+    const REQUIRED_FIXTURE_VERSION: i64 = 20260926184758;
 
     #[sqlx::test(migrations = "tests/compatibility")]
     async fn known_compatible_addition_is_accepted_before_and_after_application(pool: PgPool) {
@@ -97,7 +98,7 @@ mod tests {
 
     #[sqlx::test(migrations = false)]
     async fn absent_history_is_rejected_without_creating_it(pool: PgPool) {
-        let result = check_migrations(&pool, &MIGRATIONS, 20260926184758).await;
+        let result = check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION).await;
         let Err(MigrationHistoryError::Read(error)) = result else {
             panic!("expected missing history error")
         };
@@ -115,7 +116,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+        assert!(
+            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+                .await
+                .is_err()
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -124,7 +129,11 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+        assert!(
+            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+                .await
+                .is_err()
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -133,7 +142,11 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+        assert!(
+            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+                .await
+                .is_err()
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -142,7 +155,11 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+        assert!(
+            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+                .await
+                .is_err()
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -159,7 +176,9 @@ mod tests {
             .connect_with((*pool.connect_options()).clone())
             .await
             .unwrap();
-        check_migrations(&reader, &MIGRATIONS, 20260926184758).await.unwrap();
+        check_migrations(&reader, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+            .await
+            .unwrap();
     }
 }
 

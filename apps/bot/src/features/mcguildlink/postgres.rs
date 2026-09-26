@@ -89,7 +89,7 @@ mod tests {
     async fn bot_role_can_issue_but_cannot_change_schema_or_unrelated_data(pool: PgPool) {
         let bot = bot_pool(&pool).await;
         let service = PostgresLinkCodes::new(bot.clone());
-        platform_database::check_migrations(&bot, &MIGRATIONS, 20260926184758)
+        platform_database::check_migrations(&bot, &MIGRATIONS, crate::REQUIRED_MIGRATION_VERSION)
             .await
             .unwrap();
         let first = service.issue(321, "restricted").await.unwrap();
