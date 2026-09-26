@@ -5,6 +5,10 @@
         Paths         = @(
             "apps/bot/**"
             "crates/bot-macros/**"
+            "crates/platform-database/**"
+            "migrations/**"
+            ".sqlx/**"
+            ".cargo/**"
             "Cargo.toml"
             "Cargo.lock"
 

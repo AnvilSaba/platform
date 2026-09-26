@@ -6,5 +6,5 @@ license = "MIT"
 publish = false
 
 [dependencies]
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres" ] }
+sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros" ] }
 thiserror = "2"

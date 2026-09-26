@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO public._sqlx_migrations (version, description, success, checksum, execution_time)\n             VALUES ($1, 'unknown future change', true, $2, 0)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ecc71bcbca3d9b454f60537fa52f5907d5537016eb0344ea87f72bac99897d5"
+}

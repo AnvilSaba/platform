@@ -15,17 +15,6 @@ impl PostgresLinkCodes {
     }
 }
 
-pub async fn check_schema(pool: &PgPool) -> Result<(), AppError> {
-    let compatible = sqlx::query_scalar!(
-        "SELECT minimum_version <= 1 AND maximum_version >= 1 AS \"compatible!\"
-         FROM mcguildlink.schema_compatibility WHERE singleton"
-    )
-    .fetch_one(pool)
-    .await?;
-    anyhow::ensure!(compatible, "MCGuildLink schema is incompatible with Bot version 1");
-    Ok(())
-}
-
 #[async_trait]
 impl LinkCodes for PostgresLinkCodes {
     async fn issue(&self, user_id: u64, username: &str) -> Result<LinkCodeResult, AppError> {
@@ -81,6 +70,7 @@ impl LinkCodes for PostgresLinkCodes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
     async fn bot_pool(pool: &PgPool) -> PgPool {
         sqlx::postgres::PgPoolOptions::new()
@@ -99,28 +89,21 @@ mod tests {
     async fn bot_role_can_issue_but_cannot_change_schema_or_unrelated_data(pool: PgPool) {
         let bot = bot_pool(&pool).await;
         let service = PostgresLinkCodes::new(bot.clone());
-        check_schema(&bot).await.unwrap();
+        platform_database::check_migrations(&bot, &MIGRATIONS, 20260926184758)
+            .await
+            .unwrap();
         let first = service.issue(321, "restricted").await.unwrap();
         assert_eq!(service.issue(321, "updated").await.unwrap(), first);
         for forbidden in [
             "CREATE TABLE mcguildlink.forbidden (id integer)",
             "DELETE FROM mcguildlink.link_requests",
-            "UPDATE mcguildlink.schema_compatibility SET minimum_version = 2",
+            "DELETE FROM public._sqlx_migrations",
             "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ('00000000-0000-0000-0000-000000000001', 'player')",
             "SELECT * FROM mcguildlink.block_groups",
         ] {
             let error = sqlx::query(forbidden).execute(&bot).await.unwrap_err();
             assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42501"));
         }
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn incompatible_schema_is_rejected_before_serving_requests(pool: PgPool) {
-        sqlx::query!("UPDATE mcguildlink.schema_compatibility SET minimum_version = 2, maximum_version = 2")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert!(check_schema(&bot_pool(&pool).await).await.is_err());
     }
 
     #[sqlx::test(migrations = "../../migrations")]

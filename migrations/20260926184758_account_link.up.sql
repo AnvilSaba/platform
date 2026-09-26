@@ -1,13 +1,6 @@
 CREATE SCHEMA mcguildlink;
 REVOKE ALL ON SCHEMA mcguildlink FROM PUBLIC;
 
-CREATE TABLE mcguildlink.schema_compatibility (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-    minimum_version integer NOT NULL,
-    maximum_version integer NOT NULL CHECK (maximum_version >= minimum_version)
-);
-INSERT INTO mcguildlink.schema_compatibility VALUES (true, 1, 1);
-
 CREATE TABLE mcguildlink.discord_accounts (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id numeric(20, 0) NOT NULL UNIQUE CHECK (user_id BETWEEN 1 AND 18446744073709551615),
@@ -53,7 +46,8 @@ EXCEPTION WHEN duplicate_object OR unique_violation THEN
     NULL;
 END $$;
 GRANT USAGE ON SCHEMA mcguildlink TO mcguildlink_bot;
-GRANT SELECT ON mcguildlink.schema_compatibility, mcguildlink.discord_accounts,
+GRANT SELECT (version, success, checksum) ON public._sqlx_migrations TO mcguildlink_bot;
+GRANT SELECT ON mcguildlink.discord_accounts,
     mcguildlink.link_requests, mcguildlink.blocked_discord_accounts TO mcguildlink_bot;
 GRANT INSERT ON mcguildlink.discord_accounts, mcguildlink.link_requests TO mcguildlink_bot;
 GRANT UPDATE (last_known_username) ON mcguildlink.discord_accounts TO mcguildlink_bot;

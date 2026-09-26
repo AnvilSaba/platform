@@ -4,6 +4,144 @@ use sqlx::{
 };
 use thiserror::Error;
 
+/// 対応済み履歴を照合し、required_through までの適用を必須とする。DDL は実行しない。
+pub async fn check_migrations(
+    pool: &PgPool,
+    migrations: &sqlx::migrate::Migrator,
+    required_through: i64,
+) -> Result<(), MigrationHistoryError> {
+    let applied = sqlx::query!("SELECT version, success, checksum FROM public._sqlx_migrations ORDER BY version")
+        .fetch_all(pool)
+        .await?;
+    if let Some(entry) = applied.iter().find(|entry| !entry.success) {
+        return Err(MigrationHistoryError::Unsuccessful(entry.version));
+    }
+    for entry in &applied {
+        if !migrations
+            .iter()
+            .any(|migration| migration.migration_type.is_up_migration() && migration.version == entry.version)
+        {
+            return Err(MigrationHistoryError::Unsupported(entry.version));
+        }
+    }
+    for migration in migrations
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+    {
+        let Some(entry) = applied.iter().find(|entry| entry.version == migration.version) else {
+            if migration.version <= required_through {
+                return Err(MigrationHistoryError::Missing(migration.version));
+            }
+            continue;
+        };
+        if entry.checksum.as_slice() != migration.checksum.as_ref() {
+            return Err(MigrationHistoryError::ChecksumMismatch(migration.version));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum MigrationHistoryError {
+    #[error("Required migration {0} has not been applied")]
+    Missing(i64),
+    #[error("Migration {0} checksum does not match this application")]
+    ChecksumMismatch(i64),
+    #[error("Migration {0} has an unsuccessful execution record")]
+    Unsuccessful(i64),
+    #[error("Migration {0} is not supported by this application")]
+    Unsupported(i64),
+    #[error("Failed to read migration history")]
+    Read(#[from] sqlx::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
+    #[sqlx::test(migrations = "tests/compatibility")]
+    async fn known_compatible_addition_is_accepted_before_and_after_application(pool: PgPool) {
+        let supported = sqlx::migrate!("tests/compatibility");
+        supported.undo(&pool, 1).await.unwrap();
+        check_migrations(&pool, &supported, 1).await.unwrap();
+        assert!(matches!(
+            check_migrations(&pool, &supported, 2).await,
+            Err(MigrationHistoryError::Missing(2))
+        ));
+        supported.run(&pool).await.unwrap();
+        check_migrations(&pool, &supported, 1).await.unwrap();
+        check_migrations(&pool, &supported, 2).await.unwrap();
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn absent_history_is_rejected_without_creating_it(pool: PgPool) {
+        let result = check_migrations(&pool, &MIGRATIONS, 20260926184758).await;
+        let Err(MigrationHistoryError::Read(error)) = result else {
+            panic!("expected missing history error")
+        };
+        assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42P01"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unknown_migration_is_rejected(pool: PgPool) {
+        sqlx::query!(
+            "INSERT INTO public._sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES ($1, 'unknown future change', true, $2, 0)",
+            20990101000000_i64,
+            &[0_u8][..]
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unsuccessful_migration_is_rejected(pool: PgPool) {
+        sqlx::query!("UPDATE public._sqlx_migrations SET success = false")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn changed_migration_checksum_is_rejected(pool: PgPool) {
+        sqlx::query!("UPDATE public._sqlx_migrations SET checksum = $1", &[0_u8][..])
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn missing_required_migration_is_rejected(pool: PgPool) {
+        sqlx::query!("DELETE FROM public._sqlx_migrations")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(check_migrations(&pool, &MIGRATIONS, 20260926184758).await.is_err());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn applied_history_is_accepted_without_schema_changes(pool: PgPool) {
+        let reader = sqlx::postgres::PgPoolOptions::new()
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query!("SET default_transaction_read_only = on")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap();
+        check_migrations(&reader, &MIGRATIONS, 20260926184758).await.unwrap();
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DatabaseError {
     #[error("DATABASE_URL must be set to a valid PostgreSQL connection URL")]
