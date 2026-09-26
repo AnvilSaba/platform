@@ -17,11 +17,10 @@ use serenity::{
 use tokio::fs::read_to_string;
 
 use crate::app::AppError;
-use crate::features::mcguildlink::McGuildLinkConfig;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
-    pub mcguildlink: Option<McGuildLinkConfig>,
+    pub mcguildlink: McGuildLinkConfig,
     pub bot: BotConfig,
     pub auth: AuthConfig,
     pub auto_kick: AutoKickConfig,
@@ -40,6 +39,13 @@ impl AppConfig {
             .with_context(|| format!("Failed to read config file: {path}"))?;
         toml::from_str(&text).with_context(|| format!("Failed to parse config file: {path}"))
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McGuildLinkConfig {
+    pub guild_id: GuildId,
+    pub moderator_role_id: RoleId,
+    pub display_server_address: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,10 @@
+[package]
+name = "platform-database"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres" ] }
+thiserror = "2"

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mcguildlink.link_requests (discord_account_id, code) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "82e800d95f63b2849ba768baa82da384c5bdc1d798ca0cdc5214df174e952ab9"
+}

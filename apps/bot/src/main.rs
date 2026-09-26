@@ -52,6 +52,7 @@ async fn main() -> Result<(), AppError> {
     init_tracing(output.clone());
 
     let config = AppConfig::from_file("config.toml").await?;
+    let database_config = platform_database::DatabaseConfig::from_env()?;
 
     let options = options().run();
 
@@ -83,14 +84,8 @@ async fn main() -> Result<(), AppError> {
     let mut settings = CacheSettings::default();
     settings.max_messages = usize::MAX;
 
-    let link_codes = if config.mcguildlink.is_some() {
-        let url = std::env::var("DATABASE_URL")
-            .context("DATABASE_URL is required when mcguildlink is enabled")?;
-        Some(Arc::new(features::mcguildlink::LinkCodeService::connect(&url).await?)
-            as Arc<dyn features::mcguildlink::LinkCodes>)
-    } else {
-        None
-    };
+    let database = database_config.connect().await?;
+    features::mcguildlink::check_schema(&database).await?;
 
     let mut client = create_client(
         config.bot.token.clone(),
@@ -101,11 +96,7 @@ async fn main() -> Result<(), AppError> {
     )
     .framework(Box::new(framework))
     .cache_settings(settings)
-    .data(Arc::new({
-        let mut data = BotData::new(config);
-        data.link_codes = link_codes;
-        data
-    }))
+    .data(Arc::new(BotData::new(config, database)))
     .await
     .context("Failed to create Discord client")?;
 

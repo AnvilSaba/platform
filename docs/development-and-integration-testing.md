@@ -70,6 +70,7 @@ Botの設定構文を確認します。
 
 ```powershell
 podman run --rm `
+  --env DATABASE_URL=postgres://platform_bot:dev-password@postgres:5432/platform `
   --volume "${PWD}/apps/bot/config.sample.toml:/app/config.toml:ro" `
   localhost/anvilsaba/bot:test --check-config
 ```

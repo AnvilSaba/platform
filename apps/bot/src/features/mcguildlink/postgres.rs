@@ -5,62 +5,56 @@ use serenity::async_trait;
 use sqlx::PgPool;
 
 #[derive(Clone)]
-pub struct LinkCodeService {
+pub struct PostgresLinkCodes {
     pool: PgPool,
 }
 
-impl LinkCodeService {
+impl PostgresLinkCodes {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+}
 
-    pub async fn connect(url: &str) -> Result<Self, AppError> {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(10)
-            .connect(url)
-            .await?;
-        let service = Self::new(pool);
-        service.check_schema().await?;
-        Ok(service)
-    }
-
-    pub async fn check_schema(&self) -> Result<(), AppError> {
-        let compatible: bool = sqlx::query_scalar(
-            "SELECT minimum_version <= 1 AND maximum_version >= 1 FROM mcguildlink.schema_compatibility WHERE singleton"
-        ).fetch_one(&self.pool).await?;
-        anyhow::ensure!(compatible, "MCGuildLink schema is incompatible with Bot version 1");
-        Ok(())
-    }
+pub async fn check_schema(pool: &PgPool) -> Result<(), AppError> {
+    let compatible = sqlx::query_scalar!(
+        "SELECT minimum_version <= 1 AND maximum_version >= 1 AS \"compatible!\"
+         FROM mcguildlink.schema_compatibility WHERE singleton"
+    )
+    .fetch_one(pool)
+    .await?;
+    anyhow::ensure!(compatible, "MCGuildLink schema is incompatible with Bot version 1");
+    Ok(())
 }
 
 #[async_trait]
-impl LinkCodes for LinkCodeService {
+impl LinkCodes for PostgresLinkCodes {
     async fn issue(&self, user_id: u64, username: &str) -> Result<LinkCodeResult, AppError> {
         let mut tx = self.pool.begin().await?;
         // UPSERT の行ロックで同一アカウントの要求を直列化する。
-        let account: i64 = sqlx::query_scalar(
+        let account = sqlx::query_scalar!(
             "INSERT INTO mcguildlink.discord_accounts (user_id, last_known_username) VALUES ($1::text::numeric, $2)
              ON CONFLICT (user_id) DO UPDATE SET last_known_username = EXCLUDED.last_known_username RETURNING id",
+            user_id.to_string(),
+            username
         )
-        .bind(user_id.to_string())
-        .bind(username)
         .fetch_one(&mut *tx)
         .await?;
-        let blocked: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1)",
+        let blocked = sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1) AS \"blocked!\"",
+            account
         )
-        .bind(account)
         .fetch_one(&mut *tx)
         .await?;
         if blocked {
             tx.commit().await?;
             return Ok(LinkCodeResult::Blocked);
         }
-        let existing: Option<String> =
-            sqlx::query_scalar("SELECT code FROM mcguildlink.link_requests WHERE discord_account_id = $1")
-                .bind(account)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let existing: Option<String> = sqlx::query_scalar!(
+            "SELECT code FROM mcguildlink.link_requests WHERE discord_account_id = $1",
+            account
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
         if let Some(code) = existing {
             tx.commit().await?;
             return Ok(LinkCodeResult::Code(code));
@@ -70,9 +64,11 @@ impl LinkCodes for LinkCodeService {
             let code: String = (0..8)
                 .map(|_| CHARS[rand::rng().random_range(0..CHARS.len())] as char)
                 .collect();
-            let inserted = sqlx::query(
-                "INSERT INTO mcguildlink.link_requests (discord_account_id, code) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING"
-            ).bind(account).bind(&code).execute(&mut *tx).await?;
+            let inserted = sqlx::query!(
+                "INSERT INTO mcguildlink.link_requests (discord_account_id, code) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING",
+                account,
+                code
+            ).execute(&mut *tx).await?;
             if inserted.rows_affected() == 1 {
                 tx.commit().await?;
                 return Ok(LinkCodeResult::Code(code));
@@ -90,7 +86,7 @@ mod tests {
         sqlx::postgres::PgPoolOptions::new()
             .after_connect(|connection, _| {
                 Box::pin(async move {
-                    sqlx::query("SET ROLE mcguildlink_bot").execute(connection).await?;
+                    sqlx::query!("SET ROLE mcguildlink_bot").execute(connection).await?;
                     Ok(())
                 })
             })
@@ -102,8 +98,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn bot_role_can_issue_but_cannot_change_schema_or_unrelated_data(pool: PgPool) {
         let bot = bot_pool(&pool).await;
-        let service = LinkCodeService::new(bot.clone());
-        service.check_schema().await.unwrap();
+        let service = PostgresLinkCodes::new(bot.clone());
+        check_schema(&bot).await.unwrap();
         let first = service.issue(321, "restricted").await.unwrap();
         assert_eq!(service.issue(321, "updated").await.unwrap(), first);
         for forbidden in [
@@ -120,21 +116,16 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn incompatible_schema_is_rejected_before_serving_requests(pool: PgPool) {
-        sqlx::query("UPDATE mcguildlink.schema_compatibility SET minimum_version = 2, maximum_version = 2")
+        sqlx::query!("UPDATE mcguildlink.schema_compatibility SET minimum_version = 2, maximum_version = 2")
             .execute(&pool)
             .await
             .unwrap();
-        assert!(
-            LinkCodeService::new(bot_pool(&pool).await)
-                .check_schema()
-                .await
-                .is_err()
-        );
+        assert!(check_schema(&bot_pool(&pool).await).await.is_err());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn simultaneous_requests_return_one_reusable_code(pool: PgPool) {
-        let service = LinkCodeService::new(pool);
+        let service = PostgresLinkCodes::new(pool);
         let results = futures::future::join_all((0..20).map(|_| service.issue(123, "concurrent"))).await;
         let first = results.first().unwrap().as_ref().unwrap();
         assert!(matches!(first, LinkCodeResult::Code(_)));
@@ -147,19 +138,24 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn blocked_user_cannot_issue_or_redisplay_code(pool: PgPool) {
-        let service = LinkCodeService::new(pool.clone());
+        let service = PostgresLinkCodes::new(pool.clone());
         service.issue(42, "blocked").await.unwrap();
-        sqlx::raw_sql(
+        sqlx::query!(
             "INSERT INTO mcguildlink.block_groups (root_discord_account_id)
-            SELECT id FROM mcguildlink.discord_accounts WHERE user_id = 42;
-            INSERT INTO mcguildlink.blocked_discord_accounts (discord_account_id, block_group_id)
-            SELECT root_discord_account_id, id FROM mcguildlink.block_groups;",
+            SELECT id FROM mcguildlink.discord_accounts WHERE user_id = 42"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "INSERT INTO mcguildlink.blocked_discord_accounts (discord_account_id, block_group_id)
+            SELECT root_discord_account_id, id FROM mcguildlink.block_groups"
         )
         .execute(&pool)
         .await
         .unwrap();
         assert_eq!(service.issue(42, "blocked").await.unwrap(), LinkCodeResult::Blocked);
-        sqlx::query("DELETE FROM mcguildlink.link_requests")
+        sqlx::query!("DELETE FROM mcguildlink.link_requests")
             .execute(&pool)
             .await
             .unwrap();
@@ -168,14 +164,14 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn unused_code_survives_reconnection_and_name_change(pool: PgPool) {
-        let service = LinkCodeService::new(pool.clone());
+        let service = PostgresLinkCodes::new(pool.clone());
         let first = service.issue(u64::MAX, "before").await.unwrap();
         let LinkCodeResult::Code(code) = &first else {
             panic!("expected code")
         };
         assert_eq!(code.len(), 8);
         assert_eq!(
-            LinkCodeService::new(pool).issue(u64::MAX, "after").await.unwrap(),
+            PostgresLinkCodes::new(pool).issue(u64::MAX, "after").await.unwrap(),
             first
         );
     }

@@ -2,12 +2,13 @@
 token = "TOKEN.PLACEHOLDER.NOT_A_REAL_SECRET"
 owners = [ "000000000000000000" ]
 
-# MCGuildLink を有効にする場合は以下を設定し、Bot を再起動する。
-# 共有 DB の接続先は環境変数 DATABASE_URL で指定する。
-# [mcguildlink]
-# guild_id = "000000000000000000"
-# moderator_role_id = "000000000000000000"
-# display_server_address = "link.example.com"
+# 共有 DB の接続先は必須の環境変数 DATABASE_URL に設定する。
+# 例: postgres://platform_bot:CHANGE_ME@postgres:5432/platform
+
+[mcguildlink]
+guild_id = "000000000000000000"
+moderator_role_id = "000000000000000000"
+display_server_address = "link.example.com"
 
 
 [auth]

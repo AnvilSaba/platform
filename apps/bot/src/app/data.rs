@@ -7,14 +7,14 @@ use tokio::sync::RwLock;
 use crate::app::{AppApplicationContext, AppContext, AppError, config::AppConfig};
 
 pub struct BotData {
-    pub link_codes: Option<Arc<dyn crate::features::mcguildlink::LinkCodes>>,
+    pub database: sqlx::PgPool,
     config: RwLock<Arc<AppConfig>>,
 }
 
 impl BotData {
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(config: AppConfig, database: sqlx::PgPool) -> Self {
         Self {
-            link_codes: None,
+            database,
             config: RwLock::new(Arc::new(config)),
         }
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mcguildlink.link_requests",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e2047803f32487677a7775628452587806cac66603e482bbdd859cd501fd0216"
+}
