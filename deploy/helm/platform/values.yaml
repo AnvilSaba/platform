@@ -29,8 +29,8 @@ postgres:
     repository: postgres
     tag: "18.6-trixie"
     pullPolicy: IfNotPresent
-  database: anvilsaba
-  username: anvilsaba
+  database: platform
+  username: platform_migrator
   storageSize: 10Gi
   storageClassName: ""
   secretName: postgres
