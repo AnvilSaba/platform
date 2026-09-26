@@ -103,6 +103,14 @@ impl DiscordIdTag for MemberIdTag {
     const LABEL: &'static str = "Member ID";
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum EmojiIdTag {}
+
+impl DiscordIdTag for EmojiIdTag {
+    const LABEL: &'static str = "Emoji ID";
+}
+
+pub(crate) type EmojiId = DiscordId<EmojiIdTag>;
 pub(crate) type GuildId = DiscordId<GuildIdTag>;
 pub(crate) type RoleId = DiscordId<RoleIdTag>;
 pub(crate) type ChannelId = DiscordId<ChannelIdTag>;

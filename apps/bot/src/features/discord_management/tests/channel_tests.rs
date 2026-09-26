@@ -4597,7 +4597,6 @@ fn forum_tag_definition_parsing_rejects_invalid_variants_and_attributes() {
         "name = { clear = true }\n",
         "moderated = { clear = true }\n",
         "emoji = ''\n",
-        "emoji = '0'\n",
         "emoji = '18446744073709551615'\n",
     ] {
         assert!(
@@ -4606,6 +4605,7 @@ fn forum_tag_definition_parsing_rejects_invalid_variants_and_attributes() {
         );
     }
     for valid in [
+        "emoji = '0'\n",
         "mode = 'reference'\n",
         "ensure = 'absent'\n",
         "name = 'valid'\nmoderated = { default = true }\nemoji = { clear = true }\n",

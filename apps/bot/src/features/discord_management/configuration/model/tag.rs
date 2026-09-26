@@ -2,7 +2,7 @@ use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelValue, Ensure, RoleMode};
-use crate::features::discord_management::domain::ManagementError;
+use crate::features::discord_management::{domain::ManagementError, ids::EmojiId};
 
 /// ファイルの入力形式。解析後の処理へは渡しません。
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -41,12 +41,6 @@ pub(crate) struct TagAttributes {
 pub(crate) struct TagName(String);
 
 #[nutype(
-    validate(predicate = |id: &u64| *id != 0 && *id != u64::MAX),
-    derive(Clone, Copy, Debug, PartialEq, Eq, Display)
-)]
-pub(crate) struct TagEmojiId(u64);
-
-#[nutype(
     validate(predicate = |emoji: &str| (1..=100).contains(&emoji.chars().count())
         && !emoji.bytes().all(|byte| byte.is_ascii_digit())),
     derive(Clone, Debug, PartialEq, Eq)
@@ -55,7 +49,7 @@ pub(crate) struct TagUnicodeEmoji(String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TagEmoji {
-    Custom(TagEmojiId),
+    Custom(EmojiId),
     Unicode(TagUnicodeEmoji),
 }
 
@@ -63,8 +57,7 @@ impl TagEmoji {
     fn parse(value: String) -> Result<Self, ManagementError> {
         let invalid = || ManagementError::InvalidDefinition("Tag emoji の値または custom emoji ID が不正です".into());
         if value.bytes().all(|byte| byte.is_ascii_digit()) {
-            let id = value.parse::<u64>().map_err(|_| invalid())?;
-            TagEmojiId::try_new(id).map(Self::Custom).map_err(|_| invalid())
+            value.parse::<EmojiId>().map(Self::Custom).map_err(|_| invalid())
         } else {
             TagUnicodeEmoji::try_new(value)
                 .map(Self::Unicode)
