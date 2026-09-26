@@ -23,6 +23,14 @@ spec:
           image: "{{ .Values.bot.image.repository }}:{{ required "bot.image.tag is required" .Values.bot.image.tag }}"
           imagePullPolicy: {{ .Values.bot.image.pullPolicy }}
           workingDir: /app
+          env:
+            - name: DATABASE_URL
+              value: {{ printf "postgres://%s@%s:%v/%s" .Values.bot.databaseUsername .Values.postgres.serviceName .Values.postgres.port .Values.postgres.database | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bot.databaseSecretName }}
+                  key: password
           securityContext:
             {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           volumeMounts:

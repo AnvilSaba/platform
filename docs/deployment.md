@@ -25,7 +25,7 @@ UbuntuまたはDebianなどのLinuxサーバーを用意します。k3sはWindow
 - GHCRからイメージを取得する権限
 - Cloudflare remotely-managed Tunnelとtoken
 - Bot・MCGuildLinkの本番設定
-- PostgreSQL password
+- PostgreSQL の初期化ユーザー用パスワードと Bot 専用 DB ロールのパスワード
 
 ### 2.2 k3s
 
@@ -124,6 +124,10 @@ sudo kubectl -n anvilsaba create secret generic postgres \
   --from-literal=password='<POSTGRES_PASSWORD>' \
   --dry-run=client -o yaml | sudo kubectl apply -f -
 
+sudo kubectl -n anvilsaba create secret generic bot-database \
+  --from-literal=password='<BOT_DB_PASSWORD>' \
+  --dry-run=client -o yaml | sudo kubectl apply -f -
+
 sudo kubectl -n anvilsaba create secret generic cloudflare-tunnel \
   --from-literal=token='<TUNNEL_TOKEN>' \
   --dry-run=client -o yaml | sudo kubectl apply -f -
@@ -133,6 +137,10 @@ kubectl -n anvilsaba create secret docker-registry ghcr-pull \
   --docker-username='<GITHUB USERNAME>' \
   --docker-password='GITHUB PERSONAL ACCESS TOKEN>'
 ```
+
+`postgres` Secret は PostgreSQL コンテナのパスワード、`bot-database` Secret は
+`platform_bot` ロールのパスワードを保持します。Bot の接続先とユーザー名は Helm の
+`postgres.serviceName`、`postgres.port`、`postgres.database`、`bot.databaseUsername` で設定します。
 
 ### 2.5 Cloudflare Tunnel
 

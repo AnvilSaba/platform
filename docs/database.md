@@ -10,6 +10,9 @@ Helm の `postgres.database` もこの名前を使用する。
 postgres://platform_bot:<パスワード>@<ホスト>:5432/platform
 ```
 
+`DATABASE_PASSWORD` を設定した場合は URL 内のパスワードより優先する。
+Helm 配備では `DATABASE_URL` にパスワードを含めず、Bot 専用の Secret から `DATABASE_PASSWORD` を渡す。
+
 設定の不足・不正、DB 接続失敗、スキーマ非互換では Bot は起動しない。
 sqlx-cli と統合テストも `DATABASE_URL` を使用する。
 
@@ -32,10 +35,14 @@ CREATE ROLE platform_bot_runtime NOLOGIN;
 マイグレーション適用後、Bot のログインユーザーを作成し、必要な権限ロールを付与する。
 
 ```sql
-CREATE ROLE platform_bot LOGIN;
+CREATE ROLE platform_bot LOGIN PASSWORD '<Bot 専用パスワード>';
 GRANT CONNECT ON DATABASE platform TO platform_bot;
 GRANT platform_bot_runtime TO platform_bot;
 ```
+
+Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `password` には
+`platform_bot` のパスワードを設定する。Helm は `bot.databaseUsername`、
+`postgres.serviceName`、`postgres.port`、`postgres.database` から `DATABASE_URL` を作る。
 
 Bot に DB 所有権、スキーマ作成権限、マイグレーションロールは与えない。
 `platform_bot_runtime` は Bot 全体の権限ロール。ログインユーザーと分離し、
@@ -65,12 +72,14 @@ Job のデプロイ構成は後続のデプロイ Issue で扱う。
 起動時は `public._sqlx_migrations` を読み取り、必須の適用履歴・チェックサム・成功状態を検証する。
 Bot ロールには `version`・`success`・`checksum` の読み取り権限だけを付与する。
 履歴テーブルの作成や未適用マイグレーションの実行は起動処理で行わない。
-履歴の欠落、不一致、失敗記録、アプリが対応していない履歴があれば起動を拒否する。
-
-対応済みマイグレーションのうち、アプリが必須とする番号までの適用を要求する。
-必須番号より後の対応済み変更は、未適用・適用済みの両方を許容する。
-互換追加の前に、その履歴に対応した旧版・新版を用意し、互換性を確認してから適用する。
-非互換変更では互換期間を終え、対応していない旧版への切り戻しを行わない。
+各アプリは利用するスキーマに必要なマイグレーション ID を明示的に列挙する。
+必須 ID がアプリに埋め込まれた定義にない場合、DB に未適用の場合、適用失敗または
+チェックサム不一致の場合は起動を拒否する。期待チェックサムには `sqlx::migrate!()` の定義を使う。
+必須でない履歴は、未知・未適用・失敗・チェックサム不一致のいずれも、それだけでは起動を拒否しない。
+必要な推移的依存関係は必須リストに列挙し、レビューで確認する。
+DB 全体の履歴の整合性と適用は専用マイグレーション Job が管理する。
+未知の変更が互換的かどうかを起動時に自動判定するものではない。
+破壊的変更は影響するアプリを先に対応させ、旧版停止後に適用する。
 適用済みのマイグレーションファイルは変更せず、新しいファイルを追加する。
 
 ```powershell
