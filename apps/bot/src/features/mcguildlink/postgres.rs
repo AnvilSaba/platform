@@ -1,65 +1,47 @@
-use super::ports::{LinkCodeResult, LinkCodes};
+use super::{
+    code_generator::RandomLinkCodeGenerator,
+    ports::{LinkCodeGenerator, LinkCodeResult, LinkCodes},
+    queries,
+};
 use crate::app::AppError;
-use rand::RngExt;
 use serenity::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
+
+const MAX_CODE_ALLOCATION_ATTEMPTS: usize = 16;
 
 #[derive(Clone)]
-pub struct PostgresLinkCodes {
+pub struct PostgresLinkCodes<G = RandomLinkCodeGenerator> {
     pool: PgPool,
+    generator: G,
 }
 
 impl PostgresLinkCodes {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self::with_generator(pool, RandomLinkCodeGenerator)
     }
 }
 
-#[async_trait]
-impl LinkCodes for PostgresLinkCodes {
-    async fn issue(&self, user_id: u64, username: &str) -> Result<LinkCodeResult, AppError> {
-        let mut tx = self.pool.begin().await?;
-        // UPSERT の行ロックで同一アカウントの要求を直列化する。
-        let account = sqlx::query_scalar!(
-            "INSERT INTO mcguildlink.discord_accounts (user_id, last_known_username) VALUES ($1::text::numeric, $2)
-             ON CONFLICT (user_id) DO UPDATE SET last_known_username = EXCLUDED.last_known_username RETURNING id",
-            user_id.to_string(),
-            username
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        let blocked = sqlx::query_scalar!(
-            "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1) AS \"blocked!\"",
-            account
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if blocked {
-            tx.commit().await?;
+impl<G: LinkCodeGenerator> PostgresLinkCodes<G> {
+    pub fn with_generator(pool: PgPool, generator: G) -> Self {
+        Self { pool, generator }
+    }
+
+    async fn issue_in_transaction(
+        &self,
+        connection: &mut PgConnection,
+        user_id: u64,
+        username: &str,
+    ) -> Result<LinkCodeResult, AppError> {
+        let account = queries::upsert_discord_account(connection, user_id, username).await?;
+        if queries::is_discord_blocked(connection, account).await? {
             return Ok(LinkCodeResult::Blocked);
         }
-        let existing: Option<String> = sqlx::query_scalar!(
-            "SELECT code FROM mcguildlink.link_requests WHERE discord_account_id = $1",
-            account
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(code) = existing {
-            tx.commit().await?;
+        if let Some(code) = queries::unused_code(connection, account).await? {
             return Ok(LinkCodeResult::Code(code));
         }
-        const CHARS: &[u8] = b"ACDEFGHJKMNPQRTUVWXYZacdefghjkmnpqrtuvwxyz234679";
-        for _ in 0..16 {
-            let code: String = (0..8)
-                .map(|_| CHARS[rand::rng().random_range(0..CHARS.len())] as char)
-                .collect();
-            let inserted = sqlx::query!(
-                "INSERT INTO mcguildlink.link_requests (discord_account_id, code) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING",
-                account,
-                code
-            ).execute(&mut *tx).await?;
-            if inserted.rows_affected() == 1 {
-                tx.commit().await?;
+        for _ in 0..MAX_CODE_ALLOCATION_ATTEMPTS {
+            let code = self.generator.generate();
+            if queries::reserve_code(connection, account, &code).await? {
                 return Ok(LinkCodeResult::Code(code));
             }
         }
@@ -67,10 +49,62 @@ impl LinkCodes for PostgresLinkCodes {
     }
 }
 
+#[async_trait]
+impl<G: LinkCodeGenerator> LinkCodes for PostgresLinkCodes<G> {
+    async fn issue(&self, user_id: u64, username: &str) -> Result<LinkCodeResult, AppError> {
+        let mut tx = self.pool.begin().await?;
+        let result = self.issue_in_transaction(&mut tx, user_id, username).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::VecDeque, sync::Mutex};
     static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
+    struct FixedCodes(Mutex<VecDeque<&'static str>>);
+
+    impl FixedCodes {
+        fn new(codes: &[&'static str]) -> Self {
+            Self(Mutex::new(codes.iter().copied().collect()))
+        }
+    }
+
+    impl LinkCodeGenerator for FixedCodes {
+        fn generate(&self) -> String {
+            self.0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unexpected code generation")
+                .into()
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn colliding_code_is_retried_without_changing_another_users_code(pool: PgPool) {
+        let first = PostgresLinkCodes::with_generator(pool.clone(), FixedCodes::new(&["AC234679"]));
+        assert_eq!(
+            first.issue(10, "first").await.unwrap(),
+            LinkCodeResult::Code("AC234679".into())
+        );
+        let second = PostgresLinkCodes::with_generator(pool, FixedCodes::new(&["AC234679", "KMNPQRTU"]));
+        assert_eq!(
+            second.issue(20, "second").await.unwrap(),
+            LinkCodeResult::Code("KMNPQRTU".into())
+        );
+        assert_eq!(
+            first.issue(10, "first").await.unwrap(),
+            LinkCodeResult::Code("AC234679".into())
+        );
+        assert_eq!(
+            second.issue(20, "second").await.unwrap(),
+            LinkCodeResult::Code("KMNPQRTU".into())
+        );
+    }
 
     async fn bot_pool(pool: &PgPool) -> PgPool {
         sqlx::postgres::PgPoolOptions::new()
