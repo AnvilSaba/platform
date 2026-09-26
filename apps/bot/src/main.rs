@@ -5,6 +5,8 @@ mod extensions;
 mod features;
 mod utils;
 
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -85,7 +87,7 @@ async fn main() -> Result<(), AppError> {
     settings.max_messages = usize::MAX;
 
     let database = database_config.connect().await?;
-    features::mcguildlink::check_schema(&database).await?;
+    platform_database::check_migrations(&database, &MIGRATIONS, 20260926184758).await?;
 
     let mut client = create_client(
         config.bot.token.clone(),

@@ -55,6 +55,7 @@ RUN case "$TARGETARCH" in \
 
 COPY --from=planner /recipe.json ./recipe.json
 COPY .sqlx ./.sqlx
+COPY migrations ./migrations
 ENV SQLX_OFFLINE=true
 
 RUN rust_target="$(cat /tmp/rust-target)" && \

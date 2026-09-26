@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM public._sqlx_migrations",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4a48efbd3a9a94ea1730586ddf870349e4ade0ee6700c243663f58571fc6c284"
+}
