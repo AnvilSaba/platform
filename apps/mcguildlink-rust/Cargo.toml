@@ -1,0 +1,20 @@
+[package]
+name = "mcguildlink-rust"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+mc_protocol = { version = "2.2.0", default-features = false }
+na_nbt = "0.2.1"
+aes = "0.9.3"
+cfb8 = "0.9.1"
+rand = "0.8"
+rsa = "0.9"
+sha1 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+enum_dispatch = "0.3.13"
