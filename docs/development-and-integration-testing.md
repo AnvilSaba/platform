@@ -70,7 +70,7 @@ Botの設定構文を確認します。
 
 ```powershell
 podman run --rm `
-  --env DATABASE_URL=postgres://platform_bot:dev-password@postgres:5432/platform `
+  --env DATABASE_URL=postgres://platform_bot:bot-dev-password@postgres:5432/platform `
   --volume "${PWD}/apps/bot/config.sample.toml:/app/config.toml:ro" `
   localhost/anvilsaba/bot:test --check-config
 ```
@@ -115,6 +115,10 @@ kubectl create namespace anvilsaba --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n anvilsaba create secret generic bot-config `
   --from-file=config.toml=apps/bot/config.sample.toml `
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n anvilsaba create secret generic bot-database `
+  --from-literal=password=bot-dev-password `
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n anvilsaba create secret generic mcguildlink-config `

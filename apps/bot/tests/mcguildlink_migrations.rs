@@ -44,13 +44,12 @@ async fn bot_pool(pool: &PgPool) -> PgPool {
 #[sqlx::test(migrations = "../../migrations")]
 async fn bot_role_allows_code_storage_but_rejects_schema_and_unrelated_changes(pool: PgPool) {
     let bot = bot_pool(&pool).await;
-    let required = MIGRATIONS
+    let required: Vec<_> = MIGRATIONS
         .iter()
         .filter(|m| m.migration_type.is_up_migration())
         .map(|m| m.version)
-        .max()
-        .unwrap();
-    platform_database::check_migrations(&bot, &MIGRATIONS, required)
+        .collect();
+    platform_database::check_migrations(&bot, &MIGRATIONS, &required)
         .await
         .unwrap();
     for allowed in [

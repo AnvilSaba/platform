@@ -12,38 +12,29 @@ fn install_crypto_provider_if_absent() {
     }
 }
 
-/// 対応済み履歴を照合し、required_through までの適用を必須とする。DDL は実行しない。
+/// このアプリが必要とする履歴だけを照合する。DDL は実行しない。
 pub async fn check_migrations(
     pool: &PgPool,
     migrations: &sqlx::migrate::Migrator,
-    required_through: i64,
+    required: &[i64],
 ) -> Result<(), MigrationHistoryError> {
     let applied = sqlx::query!("SELECT version, success, checksum FROM public._sqlx_migrations ORDER BY version")
         .fetch_all(pool)
         .await?;
-    if let Some(entry) = applied.iter().find(|entry| !entry.success) {
-        return Err(MigrationHistoryError::Unsuccessful(entry.version));
-    }
-    for entry in &applied {
-        if !migrations
+    for &version in required {
+        let migration = migrations
             .iter()
-            .any(|migration| migration.migration_type.is_up_migration() && migration.version == entry.version)
-        {
-            return Err(MigrationHistoryError::Unsupported(entry.version));
+            .find(|migration| migration.migration_type.is_up_migration() && migration.version == version)
+            .ok_or(MigrationHistoryError::Undefined(version))?;
+        let entry = applied
+            .iter()
+            .find(|entry| entry.version == version)
+            .ok_or(MigrationHistoryError::Missing(version))?;
+        if !entry.success {
+            return Err(MigrationHistoryError::Unsuccessful(version));
         }
-    }
-    for migration in migrations
-        .iter()
-        .filter(|migration| migration.migration_type.is_up_migration())
-    {
-        let Some(entry) = applied.iter().find(|entry| entry.version == migration.version) else {
-            if migration.version <= required_through {
-                return Err(MigrationHistoryError::Missing(migration.version));
-            }
-            continue;
-        };
         if entry.checksum.as_slice() != migration.checksum.as_ref() {
-            return Err(MigrationHistoryError::ChecksumMismatch(migration.version));
+            return Err(MigrationHistoryError::ChecksumMismatch(version));
         }
     }
     Ok(())
@@ -51,14 +42,14 @@ pub async fn check_migrations(
 
 #[derive(Debug, Error)]
 pub enum MigrationHistoryError {
+    #[error("Required migration {0} is not defined by this application")]
+    Undefined(i64),
     #[error("Required migration {0} has not been applied")]
     Missing(i64),
     #[error("Migration {0} checksum does not match this application")]
     ChecksumMismatch(i64),
     #[error("Migration {0} has an unsuccessful execution record")]
     Unsuccessful(i64),
-    #[error("Migration {0} is not supported by this application")]
-    Unsupported(i64),
     #[error("Failed to read migration history")]
     Read(#[from] sqlx::Error),
 }
@@ -87,29 +78,33 @@ mod tests {
     async fn known_compatible_addition_is_accepted_before_and_after_application(pool: PgPool) {
         let supported = sqlx::migrate!("tests/compatibility");
         supported.undo(&pool, 1).await.unwrap();
-        check_migrations(&pool, &supported, 1).await.unwrap();
+        check_migrations(&pool, &supported, &[1]).await.unwrap();
         assert!(matches!(
-            check_migrations(&pool, &supported, 2).await,
+            check_migrations(&pool, &supported, &[2]).await,
             Err(MigrationHistoryError::Missing(2))
         ));
         supported.run(&pool).await.unwrap();
-        check_migrations(&pool, &supported, 1).await.unwrap();
-        check_migrations(&pool, &supported, 2).await.unwrap();
+        check_migrations(&pool, &supported, &[1]).await.unwrap();
+        check_migrations(&pool, &supported, &[2]).await.unwrap();
+        assert!(matches!(
+            check_migrations(&pool, &supported, &[3]).await,
+            Err(MigrationHistoryError::Undefined(3))
+        ));
     }
 
     /// 履歴のない DB を拒否する。検証処理が履歴テーブルを自動作成せず、テーブル未存在エラーを返す。
     #[sqlx::test(migrations = false)]
     async fn absent_history_is_rejected_without_creating_it(pool: PgPool) {
-        let result = check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION).await;
+        let result = check_migrations(&pool, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION]).await;
         let Err(MigrationHistoryError::Read(error)) = result else {
             panic!("expected missing history error")
         };
         assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42P01"));
     }
 
-    /// 未知のマイグレーションを拒否する。対応していないバージョンを履歴に追加し、検証失敗を確認する。
+    /// 他アプリの未知の履歴は、必須履歴の検証に影響しない。
     #[sqlx::test(migrations = "../../migrations")]
-    async fn unknown_migration_is_rejected(pool: PgPool) {
+    async fn unknown_migration_is_accepted(pool: PgPool) {
         sqlx::query!(
             "INSERT INTO public._sqlx_migrations (version, description, success, checksum, execution_time)
              VALUES ($1, 'unknown future change', true, $2, 0)",
@@ -119,11 +114,21 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(
-            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
-                .await
-                .is_err()
-        );
+        check_migrations(&pool, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION])
+            .await
+            .unwrap();
+    }
+
+    /// 任意の履歴は失敗やチェックサム不一致でも Bot の起動判定に含めない。
+    #[sqlx::test(migrations = "tests/compatibility")]
+    async fn optional_migration_history_is_ignored(pool: PgPool) {
+        let supported = sqlx::migrate!("tests/compatibility");
+        sqlx::query("UPDATE public._sqlx_migrations SET success = false, checksum = $1 WHERE version = 2")
+        .bind(&[0_u8][..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        check_migrations(&pool, &supported, &[1]).await.unwrap();
     }
 
     /// 適用失敗の履歴を拒否する。成功フラグを false に変更し、検証失敗を確認する。
@@ -133,11 +138,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(
-            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            check_migrations(&pool, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION]).await,
+            Err(MigrationHistoryError::Unsuccessful(REQUIRED_FIXTURE_VERSION))
+        ));
     }
 
     /// 適用済み SQL の変更を検出する。履歴のチェックサムを書き換え、検証失敗を確認する。
@@ -147,11 +151,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(
-            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            check_migrations(&pool, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION]).await,
+            Err(MigrationHistoryError::ChecksumMismatch(REQUIRED_FIXTURE_VERSION))
+        ));
     }
 
     /// 必須マイグレーションの未適用を拒否する。適用履歴を削除し、検証失敗を確認する。
@@ -161,11 +164,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(
-            check_migrations(&pool, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            check_migrations(&pool, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION]).await,
+            Err(MigrationHistoryError::Missing(REQUIRED_FIXTURE_VERSION))
+        ));
     }
 
     /// 検証が読み取りのみで完了することを確認する。読み取り専用接続で正しい適用履歴を受け入れる。
@@ -183,7 +185,7 @@ mod tests {
             .connect_with((*pool.connect_options()).clone())
             .await
             .unwrap();
-        check_migrations(&reader, &MIGRATIONS, REQUIRED_FIXTURE_VERSION)
+        check_migrations(&reader, &MIGRATIONS, &[REQUIRED_FIXTURE_VERSION])
             .await
             .unwrap();
     }
@@ -195,6 +197,8 @@ pub enum DatabaseError {
     Environment(#[source] std::env::VarError),
     #[error("DATABASE_URL is not a valid PostgreSQL connection URL")]
     InvalidUrl(#[source] sqlx::Error),
+    #[error("DATABASE_PASSWORD is not valid Unicode")]
+    InvalidPassword(#[source] std::env::VarError),
     #[error("Failed to connect to PostgreSQL")]
     Connection(#[source] sqlx::Error),
 }
@@ -207,7 +211,12 @@ pub struct DatabaseConfig {
 impl DatabaseConfig {
     pub fn from_env() -> Result<Self, DatabaseError> {
         let url = std::env::var("DATABASE_URL").map_err(DatabaseError::Environment)?;
-        let options = url.parse().map_err(DatabaseError::InvalidUrl)?;
+        let mut options: PgConnectOptions = url.parse().map_err(DatabaseError::InvalidUrl)?;
+        match std::env::var("DATABASE_PASSWORD") {
+            Ok(password) => options = options.password(&password),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => return Err(DatabaseError::InvalidPassword(error)),
+        }
         Ok(Self { options })
     }
 
