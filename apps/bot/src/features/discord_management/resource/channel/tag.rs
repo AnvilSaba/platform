@@ -1,5 +1,5 @@
 use crate::features::discord_management::{
-    configuration::{ChannelValue, StateFile, TagDefinition, TagResult},
+    configuration::{StateFile, TagAttributes, TagDefinition, TagEmojiUpdate, TagResult},
     domain::ManagementError,
     ids::{ChannelLogicalId, TagLogicalId},
     port::{ForumTagAttributes, ForumTagSnapshot, ForumTagWrite},
@@ -65,18 +65,18 @@ impl TagPlan {
             }
         }
         for (logical_id, declaration) in declarations {
-            declaration.validate()?;
-            if declaration.is_absent() {
-                continue;
-            }
-            if declaration.is_reference() {
-                if !mappings.contains_key(logical_id) {
-                    return Err(ManagementError::InvalidState(format!(
-                        "参照専用 Tag {channel}/{logical_id} の対応がありません"
-                    )));
+            let attributes = match declaration {
+                TagDefinition::Absent => continue,
+                TagDefinition::Reference => {
+                    if !mappings.contains_key(logical_id) {
+                        return Err(ManagementError::InvalidState(format!(
+                            "参照専用 Tag {channel}/{logical_id} の対応がありません"
+                        )));
+                    }
+                    continue;
                 }
-                continue;
-            }
+                TagDefinition::Managed { attributes } => attributes,
+            };
             if let Some(id) = mappings.get(logical_id) {
                 let tag = plan
                     .payload
@@ -84,22 +84,22 @@ impl TagPlan {
                     .find(|tag| tag.id() == Some(*id))
                     .expect("Tag の存在は検証済みです");
                 let before = tag.clone();
-                update_tag(tag.attributes_mut(), declaration);
+                update_tag(tag.attributes_mut(), attributes);
                 if *tag != before {
                     plan.changed.push(logical_id.clone());
                 }
             } else {
-                let Some(ChannelValue::Value(name)) = &declaration.name else {
+                let Some(name) = &attributes.name else {
                     return Err(ManagementError::InvalidDefinition(format!(
                         "新規 Tag {channel}/{logical_id} には name が必要です"
                     )));
                 };
                 let mut tag = ForumTagAttributes {
-                    name: name.clone(),
+                    name: name.clone().into_inner(),
                     moderated: false,
                     emoji: None,
                 };
-                update_tag(&mut tag, declaration);
+                update_tag(&mut tag, attributes);
                 plan.created.insert(logical_id.clone(), plan.payload.len());
                 plan.payload.push(ForumTagWrite::Create(tag));
             }
@@ -194,14 +194,17 @@ impl TagPlan {
         Ok(())
     }
 }
-fn update_tag(tag: &mut ForumTagAttributes, declaration: &TagDefinition) {
-    if let Some(ChannelValue::Value(name)) = &declaration.name {
-        tag.name.clone_from(name);
+fn update_tag(tag: &mut ForumTagAttributes, attributes: &TagAttributes) {
+    if let Some(name) = &attributes.name {
+        tag.name = name.clone().into_inner();
     }
-    if let Some(moderated) = &declaration.moderated {
-        tag.moderated = moderated.resolve(false, false);
+    if let Some(moderated) = attributes.moderated {
+        tag.moderated = moderated;
     }
-    if let Some(emoji) = &declaration.emoji {
-        tag.emoji = emoji.resolve_optional(None);
+    if let Some(emoji) = &attributes.emoji {
+        tag.emoji = match emoji {
+            TagEmojiUpdate::Set(value) => Some(value.clone().into_string()),
+            TagEmojiUpdate::Clear => None,
+        };
     }
 }

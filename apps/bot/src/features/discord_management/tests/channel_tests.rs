@@ -4584,3 +4584,109 @@ async fn forum_tag_partial_failure_keeps_successful_ids_for_replanning() {
     );
     assert_eq!(source.catalog.lock().unwrap().channels[0].available_tags.len(), 1);
 }
+
+#[test]
+fn forum_tag_definition_parsing_rejects_invalid_variants_and_attributes() {
+    let base = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.tag]\n";
+    for invalid in [
+        "ensure = 'absent'\nname = 'forbidden'\n",
+        "ensure = 'absent'\nmode = 'reference'\n",
+        "mode = 'reference'\nmoderated = false\n",
+        "mode = 'reference'\nensure = 'present'\n",
+        "name = { default = true }\n",
+        "name = { clear = true }\n",
+        "moderated = { clear = true }\n",
+        "emoji = ''\n",
+        "emoji = '0'\n",
+        "emoji = '18446744073709551615'\n",
+    ] {
+        assert!(
+            DefinitionFile::parse(&format!("{base}{invalid}"), &test_permission_vocabulary()).is_err(),
+            "{invalid}"
+        );
+    }
+    for valid in [
+        "mode = 'reference'\n",
+        "ensure = 'absent'\n",
+        "name = 'valid'\nmoderated = { default = true }\nemoji = { clear = true }\n",
+    ] {
+        assert!(
+            DefinitionFile::parse(&format!("{base}{valid}"), &test_permission_vocabulary()).is_ok(),
+            "{valid}"
+        );
+    }
+    let unused_settings =
+        "schema_version = 1\n[settings_sets.channel.unused.tags.invalid]\nname = { default = true }\n";
+    assert!(DefinitionFile::parse(unused_settings, &test_permission_vocabulary()).is_err());
+}
+
+#[tokio::test]
+async fn forum_tag_parsed_defaults_apply_and_roundtrip_without_changes() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "forum", None);
+    forum.available_tags.push(ForumTagSnapshot {
+        id: TagId::new(901),
+        name: "existing".into(),
+        moderated: true,
+        emoji: Some("✅".into()),
+    });
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![forum] });
+    let definition = "schema_version = 1\n[channels.forum]\ntype = 'forum'\n[channels.forum.tags.tag]\nmoderated = { default = true }\nemoji = { default = true }\n";
+    let state =
+        r#"{"schema_version":1,"guild_id":"100","roles":{},"channels":{"forum":"700"},"tags":{"forum":{"tag":"901"}}}"#;
+    let vocabulary = test_permission_vocabulary();
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), definition, state)
+        .await
+        .unwrap();
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let catalog = source.catalog.lock().unwrap();
+    let tag = &catalog.channels[0].available_tags[0];
+    assert_eq!(tag.id, TagId::new(901));
+    assert_eq!(tag.name, "existing");
+    assert!(!tag.moderated);
+    assert_eq!(tag.emoji, None);
+    drop(catalog);
+    assert!(
+        plan_channels(&source, &vocabulary, guild_id(100), definition, &result.state_json)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let custom = definition.replace("emoji = { default = true }", "emoji = '000123'");
+    let plan = plan_channels(&source, &vocabulary, guild_id(100), &custom, &result.state_json)
+        .await
+        .unwrap();
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        &custom,
+        &result.state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    assert_eq!(
+        source.catalog.lock().unwrap().channels[0].available_tags[0]
+            .emoji
+            .as_deref(),
+        Some("123")
+    );
+    assert!(
+        plan_channels(&source, &vocabulary, guild_id(100), &custom, &result.state_json)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

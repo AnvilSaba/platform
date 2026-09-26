@@ -487,7 +487,7 @@ pub(super) async fn export_channels<S: ChannelSource>(
                 mappings.insert(tag_logical_id.clone(), tag_id);
                 attributes.tags.insert(
                     tag_logical_id,
-                    super::configuration::TagDefinition {
+                    super::configuration::RawTagDefinition {
                         name: Some(ChannelValue::Value(tag.name.clone())),
                         moderated: Some(ChannelValue::Value(tag.moderated)),
                         emoji: Some(
