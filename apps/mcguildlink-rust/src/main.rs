@@ -31,9 +31,16 @@ async fn main() -> AppResult<()> {
     let linker = LinkStore::connect().await?;
     let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
     let listener = TcpListener::bind(config.server.listen).await?;
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+    platform_signal::install_signal_handler(move || {
+        let _ = shutdown_tx.send(());
+    })?;
     eprintln!("MCGuildLink 26.3 listening on {}", config.server.listen);
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = tokio::select! {
+            result = listener.accept() => result?,
+            _ = &mut shutdown_rx => break,
+        };
         let server = Arc::clone(&server);
         tokio::spawn(async move {
             if let Err(error) = server.serve(stream).await {
@@ -41,4 +48,5 @@ async fn main() -> AppResult<()> {
             }
         });
     }
+    Ok(())
 }

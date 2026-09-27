@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     app::{AppError, BotData, MainEventHandler, config::AppConfig, handle_event_error, on_error},
-    core::{create_client, install_signal_handler},
+    core::create_client,
     features::{commands, event_handlers},
 };
 
@@ -94,7 +94,11 @@ async fn main() -> Result<(), AppError> {
     .await
     .context("Failed to create Discord client")?;
 
-    install_signal_handler(&client);
+    let shutdown = client.shard_manager.get_shutdown_trigger();
+    platform_signal::install_signal_handler(move || {
+        shutdown();
+    })
+    .context("Could not register shutdown signal handler")?;
 
     if let Err(error) = client.start().await.context("Discord client stopped with an error") {
         error!("Client error: {error:#}");

@@ -5,6 +5,7 @@ members = [
     "apps/bot",
     "crates/bot-macros",
     "crates/platform-database",
+    "crates/platform-signal",
 ]
 
 [profile.release]

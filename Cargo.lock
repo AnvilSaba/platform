@@ -238,6 +238,7 @@ dependencies = [
  "itertools",
  "nutype",
  "platform-database",
+ "platform-signal",
  "poise",
  "rand 0.10.3",
  "regex",
@@ -1724,6 +1725,7 @@ dependencies = [
  "mc_protocol",
  "nutype",
  "platform-database",
+ "platform-signal",
  "reqwest",
  "rsa",
  "serde",
@@ -2077,6 +2079,13 @@ dependencies = [
  "rustls",
  "sqlx",
  "thiserror",
+]
+
+[[package]]
+name = "platform-signal"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
