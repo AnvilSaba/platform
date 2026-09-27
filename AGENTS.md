@@ -1,7 +1,12 @@
-## 言語と実行環境
+## Language and execution environment
 
-- ユーザーに伝えるプレーンテキストは日本語で記述する。
-- gh コマンドは必ずサンドボックス外で実行する。ネットワークまたは認証エラー後にサンドボックス内で再試行しない。
+- Write user-facing plain text in Japanese.
+- Always run `gh` commands outside the sandbox. Do not retry `gh` inside the sandbox after a network or authentication failure.
+
+## Commit and PR titles
+
+- Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for commit messages and PR titles, using previous commits and PRs as examples.
+- Write the summary in Japanese, for example: `feat(scope): 日本語の要約`.
 
 ## Agent skills
 
