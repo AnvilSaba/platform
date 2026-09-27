@@ -4,6 +4,14 @@ use sqlx::{
 };
 use thiserror::Error;
 
+/// 既存のプロバイダーを尊重し、未登録の場合だけ既定値を設定する。
+fn install_crypto_provider_if_absent() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        // 確認後に別の処理が先に登録した場合も、そのプロバイダーを使う。
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+}
+
 /// このアプリが必要とする履歴だけを照合する。DDL は実行しない。
 pub async fn check_migrations(
     pool: &PgPool,
@@ -51,6 +59,18 @@ mod tests {
     use super::*;
     static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
     const REQUIRED_FIXTURE_VERSION: i64 = 20260926184758;
+
+    #[test]
+    fn existing_crypto_provider_is_preserved() {
+        install_crypto_provider_if_absent();
+        let provider = rustls::crypto::CryptoProvider::get_default().unwrap().clone();
+        install_crypto_provider_if_absent();
+        assert!(std::sync::Arc::ptr_eq(
+            &provider,
+            rustls::crypto::CryptoProvider::get_default().unwrap()
+        ));
+        let _ = rustls::ClientConfig::builder();
+    }
 
     /// 互換性のある追加の扱いを確認する。任意の追加は未適用でも許可し、必須にした場合は適用を要求する。
     #[sqlx::test(migrations = "tests/compatibility")]
@@ -200,6 +220,7 @@ impl DatabaseConfig {
     }
 
     pub async fn connect(self) -> Result<PgPool, DatabaseError> {
+        install_crypto_provider_if_absent();
         PgPoolOptions::new()
             .max_connections(10)
             .connect_with(self.options)
