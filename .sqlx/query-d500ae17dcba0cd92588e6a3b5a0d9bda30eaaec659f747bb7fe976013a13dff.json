@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ($1, $2) ON CONFLICT (uuid) DO UPDATE SET last_known_name = EXCLUDED.last_known_name RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d500ae17dcba0cd92588e6a3b5a0d9bda30eaaec659f747bb7fe976013a13dff"
+}

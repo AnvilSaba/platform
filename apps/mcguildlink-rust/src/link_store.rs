@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tokio::runtime::Runtime;
 
 use crate::{AppResult, session::SessionProfile};
@@ -41,85 +41,81 @@ impl LinkStore {
 
 async fn consume(pool: &PgPool, code: &str, player: &SessionProfile) -> Result<LinkResult, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(code)
+    sqlx::query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", code)
         .execute(&mut *tx)
         .await?;
-    let request = sqlx::query(
-        "SELECT d.id, d.user_id::text AS user_id, d.last_known_username \
+    let request = sqlx::query!(
+        "SELECT d.id, d.user_id::text AS \"user_id!\", d.last_known_username \
          FROM mcguildlink.link_requests r \
          JOIN mcguildlink.discord_accounts d ON d.id = r.discord_account_id \
          WHERE r.code = $1",
+        code
     )
-    .bind(code)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(request) = request else {
         return Ok(LinkResult::InvalidCode);
     };
-    let discord_id: i64 = request.get("id");
-    let user_id: String = request.get("user_id");
-    let username: String = request.get("last_known_username");
+    let discord_id = request.id;
+    let user_id = request.user_id;
+    let username = request.last_known_username;
 
-    let blocked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1)",
+    let blocked: bool = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1) AS \"blocked!\"",
+        discord_id
     )
-    .bind(discord_id)
     .fetch_one(&mut *tx)
     .await?;
     if blocked {
         return Ok(LinkResult::Blocked);
     }
 
-    let minecraft_id: i64 = sqlx::query_scalar(
+    let minecraft_id: i64 = sqlx::query_scalar!(
         "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ($1, $2) \
          ON CONFLICT (uuid) DO UPDATE SET last_known_name = EXCLUDED.last_known_name RETURNING id",
+        player.id,
+        player.name.as_ref()
     )
-    .bind(player.id)
-    .bind(player.name.as_ref())
     .fetch_one(&mut *tx)
     .await?;
 
-    let blocked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_minecraft_accounts WHERE minecraft_account_id = $1)",
+    let blocked: bool = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_minecraft_accounts WHERE minecraft_account_id = $1) AS \"blocked!\"",
+        minecraft_id
     )
-    .bind(minecraft_id)
     .fetch_one(&mut *tx)
     .await?;
     if blocked {
         return Ok(LinkResult::Blocked);
     }
 
-    let linked: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT FROM mcguildlink.account_links WHERE discord_account_id = $1 AND minecraft_account_id = $2)",
+    let linked: bool = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT FROM mcguildlink.account_links WHERE discord_account_id = $1 AND minecraft_account_id = $2) AS \"linked!\"",
+        discord_id,
+        minecraft_id
     )
-    .bind(discord_id)
-    .bind(minecraft_id)
     .fetch_one(&mut *tx)
     .await?;
     if linked {
         return Ok(LinkResult::AlreadyLinked);
     }
 
-    sqlx::query("INSERT INTO mcguildlink.account_links (discord_account_id, minecraft_account_id) VALUES ($1, $2)")
-        .bind(discord_id)
-        .bind(minecraft_id)
+    sqlx::query!("INSERT INTO mcguildlink.account_links (discord_account_id, minecraft_account_id) VALUES ($1, $2)", discord_id, minecraft_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM mcguildlink.link_requests WHERE discord_account_id = $1")
-        .bind(discord_id)
+    sqlx::query!("DELETE FROM mcguildlink.link_requests WHERE discord_account_id = $1", discord_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO mcguildlink.audit_logs \
          (event_type, actor_type, actor_minecraft_uuid, actor_minecraft_name, \
           target_discord_user_id, target_discord_username, target_minecraft_uuid, target_minecraft_name) \
-         VALUES ('link_succeeded', 'minecraft_player', $1, $2, $3::numeric, $4, $1, $2)",
+         VALUES ('link_succeeded', 'minecraft_player', $1, $2, $3::text::numeric, $4, $1, $2)",
+        player.id,
+        player.name.as_ref(),
+        &user_id,
+        &username
     )
-    .bind(player.id)
-    .bind(player.name.as_ref())
-    .bind(&user_id)
-    .bind(&username)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
