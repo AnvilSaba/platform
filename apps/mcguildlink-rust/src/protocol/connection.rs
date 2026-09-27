@@ -1,6 +1,6 @@
 use std::{
     io::{self, Cursor, ErrorKind, Read, Write},
-    net::TcpStream,
+    net::{Shutdown, TcpStream},
     time::{Duration, Instant},
 };
 
@@ -163,5 +163,31 @@ impl Connection {
         self.reader = Reader::Encrypted(Box::new(Cfb8Reader::new(reader, key)));
         self.writer = Box::new(Cfb8Writer::new(self.stream.try_clone()?, key));
         Ok(())
+    }
+
+    pub(crate) fn close_after_send(&mut self) -> io::Result<()> {
+        self.stream.shutdown(Shutdown::Write)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            self.reader.set_read_timeout(Some(remaining))?;
+            match ConnectionReader::read(&mut self.reader, &mut buffer) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::ConnectionReset
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 }

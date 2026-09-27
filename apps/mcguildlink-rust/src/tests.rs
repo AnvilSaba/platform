@@ -69,6 +69,19 @@ fn older_protocol_never_reaches_login() {
             next_state: VarInt(2),
         },
     );
+    send_packet(
+        &mut client,
+        &LoginHello {
+            name: "TestPlayer".into(),
+            uuid: Uuid::nil(),
+        },
+    );
+    client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let disconnect = read_packet(&mut client);
+    assert_eq!(disconnect.packet_id, LoginDisconnect::PACKET_ID);
+    let reason: LoginDisconnect = decode_exact(&disconnect.payload).unwrap();
+    assert!(reason.reason_json.contains("26.3"));
+    drop(client);
     assert!(server.join().unwrap().is_err());
 }
 

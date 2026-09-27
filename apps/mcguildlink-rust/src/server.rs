@@ -44,6 +44,7 @@ where
             connection.send(&LoginDisconnect {
                 reason_json: serde_json::json!({ "text": "Minecraft Java 26.3 を使用してください。" }).to_string(),
             })?;
+            connection.close_after_send()?;
             Err(invalid("unsupported Minecraft protocol version"))
         }
         _ => Err(invalid("unsupported next state")),
