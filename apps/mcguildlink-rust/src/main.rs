@@ -1,5 +1,6 @@
 mod identity;
 mod link_flow;
+mod link_store;
 mod protocol;
 mod server;
 mod session;
@@ -20,15 +21,17 @@ fn invalid(reason: &'static str) -> Box<dyn Error + Send + Sync> {
 #[cfg(test)]
 mod tests;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> AppResult<()> {
+    let store = link_store::LinkStore::connect()?;
     let address = std::env::var("MCGUILDLINK_LISTEN").unwrap_or_else(|_| "127.0.0.1:25565".into());
     let listener = TcpListener::bind(&address)?;
     eprintln!("MCGuildLink 26.3 listening on {address}");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let store = store.clone();
                 std::thread::spawn(move || {
-                    if let Err(error) = server::serve(stream) {
+                    if let Err(error) = server::serve(stream, &store) {
                         eprintln!("Minecraft connection ended: {error}");
                     }
                 });
