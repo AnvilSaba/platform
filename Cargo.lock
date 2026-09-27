@@ -292,6 +292,7 @@ dependencies = [
  "itertools",
  "nutype",
  "platform-database",
+ "platform-signal",
  "poise",
  "public-api",
  "rand 0.10.3",
@@ -1798,6 +1799,7 @@ dependencies = [
  "mc_protocol",
  "nutype",
  "platform-database",
+ "platform-signal",
  "reqwest",
  "rsa",
  "serde",
@@ -2187,6 +2189,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "platform-signal"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "poise"
 version = "0.6.1"
 source = "git+https://github.com/serenity-rs/poise?rev=b189f7c1cfd47eb4e7863683a49c389a9702ce23#b189f7c1cfd47eb4e7863683a49c389a9702ce23"
@@ -2272,6 +2281,7 @@ dependencies = [
  "http-body-util",
  "httpdate",
  "platform-database",
+ "platform-signal",
  "serde",
  "serde_json",
  "sha2",

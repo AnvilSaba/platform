@@ -32,9 +32,13 @@ async fn main() -> AppResult<()> {
     let linker = LinkStore::connect().await?;
     let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
     let listener = TcpListener::bind(address).await?;
+    let mut shutdown_rx = platform_signal::shutdown_receiver()?;
     eprintln!("MC Link Server 26.3 listening on {}", address);
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = tokio::select! {
+            result = listener.accept() => result?,
+            _ = &mut shutdown_rx => break,
+        };
         let server = Arc::clone(&server);
         tokio::spawn(async move {
             if let Err(error) = server.serve(stream).await {
@@ -42,4 +46,5 @@ async fn main() -> AppResult<()> {
             }
         });
     }
+    Ok(())
 }

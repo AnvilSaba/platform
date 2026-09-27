@@ -9,6 +9,7 @@ publish = false
 anyhow = "1"
 async-stream = "0.3"
 bot-macros = { path = "../../crates/bot-macros" }
+platform-signal = { path = "../../crates/platform-signal" }
 bpaf = { version = "0.9", features = [ "derive" ] }
 chrono = "0.4"
 dashmap = "6.1"

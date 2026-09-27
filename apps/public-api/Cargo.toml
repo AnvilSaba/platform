@@ -10,6 +10,7 @@ axum = "0.8"
 chrono = "0.4"
 httpdate = "1"
 platform-database = { path = "../../crates/platform-database" }
+platform-signal = { path = "../../crates/platform-signal" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

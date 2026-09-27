@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     app::{AppError, BotData, MainEventHandler, config::AppConfig, handle_event_error, on_error},
-    core::{create_client, install_signal_handler},
+    core::create_client,
     features::{commands, event_handlers},
 };
 
@@ -110,7 +110,11 @@ async fn main() -> Result<(), AppError> {
         .await
         .context("Failed to create Discord client")?;
 
-    install_signal_handler(&client);
+    let shutdown = client.shard_manager.get_shutdown_trigger();
+    platform_signal::install_signal_handler(move || {
+        shutdown();
+    })
+    .context("Could not register shutdown signal handler")?;
     tokio::spawn(features::mcguildlink::audit::run_delivery(data, client.http.clone()));
     let shutdown = client.shard_manager.get_shutdown_trigger();
     tokio::spawn(console::run(client.http.clone(), shutdown, output));
