@@ -1,13 +1,35 @@
-use std::io::{Read, Write};
+use std::{
+    borrow::Cow,
+    io::{Error as StdIOError, Read, Write},
+};
 
+use fastnbt::{DeOpts, SerOpts};
 use mc_protocol::{
     Packet,
-    ser::{Deserialize, SerializationError, Serialize},
+    ser::{
+        Deserialize, MAX_STRING_LENGTH, SerializationError, Serialize, deserialize_string_with_max,
+        serialize_string_with_max,
+    },
     varint::VarInt,
 };
 use uuid::Uuid;
 
-pub struct RemainingBytes(pub Vec<u8>);
+use crate::identity::Name;
+
+impl Serialize for Name {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        serialize_string_with_max(self.as_ref(), writer, MAX_STRING_LENGTH)
+    }
+}
+
+impl Deserialize for Name {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        Ok(Name::try_new(deserialize_string_with_max(reader, MAX_STRING_LENGTH)?).map_err(StdIOError::other)?)
+    }
+}
+
+#[derive(Debug)]
+struct RemainingBytes(Vec<u8>);
 
 impl Serialize for RemainingBytes {
     fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
@@ -26,138 +48,264 @@ impl Deserialize for RemainingBytes {
 
 #[derive(Packet)]
 #[packet(0)]
-pub struct Handshake {
-    pub version: VarInt,
-    pub host: String,
-    pub port: u16,
-    pub next_state: VarInt,
+pub(crate) struct Handshake {
+    pub(crate) version: VarInt,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) next_state: VarInt,
 }
 
 #[derive(Packet)]
 #[packet(0)]
-pub struct StatusRequest {}
+pub(crate) struct StatusRequest {}
 
-#[derive(Packet)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TextComponent<'a> {
+    pub(crate) text: Cow<'a, str>,
+}
+
+impl<'a> TextComponent<'a> {
+    pub(crate) fn new(text: impl Into<Cow<'a, str>>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+impl Serialize for TextComponent<'_> {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        serialize_string_with_max(
+            &serde_json::to_string(&self).map_err(StdIOError::other)?,
+            writer,
+            MAX_STRING_LENGTH,
+        )
+    }
+}
+
+impl Deserialize for TextComponent<'_> {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        Ok(
+            serde_json::from_str::<Self>(&deserialize_string_with_max(reader, MAX_STRING_LENGTH)?)
+                .map_err(StdIOError::other)?,
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct NbtTextComponent<'a> {
+    pub(crate) text: Cow<'a, str>,
+}
+
+impl<'a> NbtTextComponent<'a> {
+    pub(crate) fn new(text: impl Into<Cow<'a, str>>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+impl Serialize for NbtTextComponent<'_> {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        Ok(fastnbt::to_writer_with_opts(writer, &self, SerOpts::network_nbt()).map_err(StdIOError::other)?)
+    }
+}
+
+impl Deserialize for NbtTextComponent<'_> {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        Ok(fastnbt::from_reader_with_opts(reader, DeOpts::network_nbt()).map_err(StdIOError::other)?)
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StatusVersion<'a> {
+    name: Cow<'a, str>,
+    protocol: i32,
+}
+
+impl<'a> StatusVersion<'a> {
+    pub(crate) fn new(name: impl Into<Cow<'a, str>>, protocol: i32) -> Self {
+        Self {
+            name: name.into(),
+            protocol,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StatusPlayers {
+    max: i32,
+    online: i32,
+}
+
+impl StatusPlayers {
+    pub(crate) fn new(max: i32, online: i32) -> Self {
+        Self { max, online }
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Status<'a> {
+    version: StatusVersion<'a>,
+    players: StatusPlayers,
+    description: TextComponent<'a>,
+}
+
+impl<'a> Status<'a> {
+    pub(crate) fn new(version: StatusVersion<'a>, players: StatusPlayers, description: TextComponent<'a>) -> Self {
+        Self {
+            version,
+            players,
+            description,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn version_name(&self) -> &str {
+        &self.version.name
+    }
+
+    #[cfg(test)]
+    pub(crate) fn version_protocol(&self) -> i32 {
+        self.version.protocol
+    }
+}
+
+impl Serialize for Status<'_> {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        serialize_string_with_max(
+            &serde_json::to_string(&self).map_err(StdIOError::other)?,
+            writer,
+            MAX_STRING_LENGTH,
+        )
+    }
+}
+
+impl Deserialize for Status<'_> {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        Ok(
+            serde_json::from_str::<Self>(&deserialize_string_with_max(reader, MAX_STRING_LENGTH)?)
+                .map_err(StdIOError::other)?,
+        )
+    }
+}
+
+#[derive(Debug, Packet)]
 #[packet(0)]
-pub struct StatusResponse {
-    pub json: String,
+pub(crate) struct StatusResponse<'a> {
+    pub(crate) status: Status<'a>,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(1)]
-pub struct StatusPing {
-    pub timestamp: i64,
+pub(crate) struct StatusPing {
+    pub(crate) timestamp: i64,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(1)]
-pub struct StatusPong {
-    pub timestamp: i64,
+pub(crate) struct StatusPong {
+    pub(crate) timestamp: i64,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(0)]
-pub struct LoginHello {
-    pub name: String,
-    pub uuid: Uuid,
+pub(crate) struct LoginHello {
+    pub(crate) name: Name,
+    pub(crate) uuid: Uuid,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(0)]
-pub struct LoginDisconnect {
-    pub reason_json: String,
+pub(crate) struct LoginDisconnect<'a> {
+    pub(crate) reason: TextComponent<'a>,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(1)]
-pub struct EncryptionRequest {
-    pub server_id: String,
-    pub public_key: Vec<u8>,
-    pub challenge: Vec<u8>,
-    pub authenticate: bool,
+pub(crate) struct EncryptionRequest {
+    pub(crate) server_id: String,
+    pub(crate) public_key: Vec<u8>,
+    pub(crate) challenge: Vec<u8>,
+    pub(crate) authenticate: bool,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(1)]
-pub struct EncryptionResponse {
-    pub secret: Vec<u8>,
-    pub challenge: Vec<u8>,
+pub(crate) struct EncryptionResponse {
+    pub(crate) secret: Vec<u8>,
+    pub(crate) challenge: Vec<u8>,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(2)]
-pub struct LoginFinished {
-    pub uuid: Uuid,
-    pub name: String,
-    pub properties: VarInt,
-    pub session_id: Uuid,
+pub(crate) struct LoginFinished {
+    pub(crate) uuid: Uuid,
+    pub(crate) name: String,
+    pub(crate) properties: VarInt,
+    pub(crate) session_id: Uuid,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(3)]
-pub struct LoginAcknowledged {}
+pub(crate) struct LoginAcknowledged {}
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(19)]
-pub struct ConfigurationDialog {
-    pub document: RemainingBytes,
+pub(crate) struct ConfigurationDialog<'a> {
+    pub(crate) document: super::dialog::DialogDocument<'a>,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(8)]
-pub struct ConfigurationDialogClick {
-    pub action: String,
-    pub data: Vec<u8>,
+pub(crate) struct ConfigurationDialogClick<D> {
+    pub(crate) action: String,
+    pub(crate) data: D,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(4)]
-pub struct ConfigurationKeepalive {
-    pub id: i64,
+pub(crate) struct ConfigurationKeepAlive {
+    pub(crate) id: i64,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(4)]
-pub struct ConfigurationKeepaliveResponse {
-    pub id: i64,
+pub(crate) struct ConfigurationKeepAliveResponse {
+    pub(crate) id: i64,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(2)]
-pub struct ConfigurationDisconnect {
-    pub reason: RemainingBytes,
+pub(crate) struct ConfigurationDisconnect<'a> {
+    pub(crate) reason: NbtTextComponent<'a>,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(3)]
-pub struct ConfigurationFinishAcknowledged {}
+pub(crate) struct ConfigurationFinishAcknowledged {}
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(0)]
-pub struct ConfigurationClientInformation {
-    pub data: RemainingBytes,
+pub(crate) struct ConfigurationClientInformation {
+    data: RemainingBytes,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(2)]
-pub struct ConfigurationCustomPayload {
-    pub data: RemainingBytes,
+pub(crate) struct ConfigurationCustomPayload {
+    data: RemainingBytes,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(5)]
-pub struct ConfigurationPong {
-    pub data: RemainingBytes,
+pub(crate) struct ConfigurationPong {
+    data: RemainingBytes,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(6)]
-pub struct ConfigurationResourcePackResponse {
-    pub data: RemainingBytes,
+pub(crate) struct ConfigurationResourcePackResponse {
+    data: RemainingBytes,
 }
 
-#[derive(Packet)]
+#[derive(Debug, Packet)]
 #[packet(7)]
-pub struct ConfigurationKnownPacks {
-    pub data: RemainingBytes,
+pub(crate) struct ConfigurationKnownPacks {
+    data: RemainingBytes,
 }

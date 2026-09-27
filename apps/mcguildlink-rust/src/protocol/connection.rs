@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use enum_dispatch::enum_dispatch;
 use mc_protocol::{
     packet::{PacketError, PacketId, RawPacket, UncompressedPacket},
     ser::{Deserialize, Serialize},
@@ -13,7 +12,7 @@ use mc_protocol::{
 
 use super::{
     crypto::{Cfb8Reader, Cfb8Writer},
-    packets::ConfigurationKeepalive,
+    packets::ConfigurationKeepAlive,
 };
 use crate::{AppResult, invalid};
 
@@ -43,51 +42,36 @@ pub(crate) struct Connection {
     writer: Box<dyn Write + Send>,
 }
 
-#[enum_dispatch(ConnectionReader)]
 enum Reader {
     Plain(TcpStream),
     Encrypted(Box<Cfb8Reader<TcpStream>>),
 }
 
-#[enum_dispatch]
-trait ConnectionReader {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
-}
-
-impl ConnectionReader for TcpStream {
+impl Reader {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        TcpStream::set_read_timeout(self, timeout)
-    }
-
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        Read::read(self, buffer)
-    }
-}
-
-impl ConnectionReader for Box<Cfb8Reader<TcpStream>> {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        Cfb8Reader::set_read_timeout(self, timeout)
-    }
-
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        Read::read(self, buffer)
+        match self {
+            Self::Plain(reader) => reader.set_read_timeout(timeout),
+            Self::Encrypted(reader) => reader.set_read_timeout(timeout),
+        }
     }
 }
 
 impl Read for Reader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        ConnectionReader::read(self, buffer)
+        match self {
+            Self::Plain(reader) => reader.read(buffer),
+            Self::Encrypted(reader) => reader.read(buffer),
+        }
     }
 }
 
-struct KeepaliveReader<'a> {
+struct KeepAliveReader<'a> {
     reader: &'a mut Reader,
     writer: &'a mut (dyn Write + Send),
     deadline: Instant,
 }
 
-impl Read for KeepaliveReader<'_> {
+impl Read for KeepAliveReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -99,7 +83,7 @@ impl Read for KeepaliveReader<'_> {
             match Read::read(self.reader, buffer) {
                 Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
                     if remaining > Duration::from_secs(10) {
-                        packet_from(&ConfigurationKeepalive { id: 0 })
+                        packet_from(&ConfigurationKeepAlive { id: 0 })
                             .map_err(io::Error::other)?
                             .write_sync(&mut self.writer)
                             .map_err(io::Error::other)?;
@@ -131,7 +115,7 @@ impl Connection {
     }
 
     pub(crate) fn read_until(&mut self, deadline: Instant) -> io::Result<UncompressedPacket> {
-        let mut reader = KeepaliveReader {
+        let mut reader = KeepAliveReader {
             reader: &mut self.reader,
             writer: &mut *self.writer,
             deadline,
@@ -175,7 +159,7 @@ impl Connection {
                 return Ok(());
             }
             self.reader.set_read_timeout(Some(remaining))?;
-            match ConnectionReader::read(&mut self.reader, &mut buffer) {
+            match self.reader.read(&mut buffer) {
                 Ok(0) => return Ok(()),
                 Ok(_) => {}
                 Err(error)

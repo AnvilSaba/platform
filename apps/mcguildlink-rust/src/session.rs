@@ -1,11 +1,12 @@
-use crate::{AppResult, invalid};
+use crate::{AppResult, identity::Name, invalid};
 use sha1::{Digest, Sha1};
 use std::time::Duration;
+use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct SessionProfile {
-    pub(crate) id: String,
-    pub(crate) name: String,
+    pub(crate) id: Uuid,
+    pub(crate) name: Name,
 }
 
 pub(crate) fn authenticate(name: &str, secret: &[u8; 16], public_key: &[u8]) -> AppResult<SessionProfile> {

@@ -1,3 +1,4 @@
+mod identity;
 mod link_flow;
 mod protocol;
 mod server;
