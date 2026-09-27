@@ -21,7 +21,7 @@ rustyline = { version = "18", default-features = false }
 serde = { version = "1.0", features = [ "derive" ] }
 serde_with = "3"
 similar = "3.1"
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros" ] }
+sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
 sysinfo = "0.39"
 thiserror = "2"
 tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal", "sync" ] }
