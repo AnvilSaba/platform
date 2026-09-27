@@ -213,4 +213,40 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42501"));
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn blocked_minecraft_account_rejects_link_without_consuming_code(pool: PgPool) {
+        issue(&pool, 10, "CODE0001").await;
+        sqlx::query("INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ($1, 'TestPlayer')")
+            .bind(player().id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO mcguildlink.block_groups (root_discord_account_id) SELECT id FROM mcguildlink.discord_accounts WHERE user_id = 10")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO mcguildlink.blocked_minecraft_accounts (minecraft_account_id, block_group_id) SELECT m.id, g.id FROM mcguildlink.minecraft_accounts m CROSS JOIN mcguildlink.block_groups g")
+            .execute(&pool).await.unwrap();
+        let restricted = restricted_pool(&pool).await;
+        assert_eq!(
+            consume(&restricted, "CODE0001", &player()).await.unwrap(),
+            LinkResult::Blocked
+        );
+        let counts: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM mcguildlink.link_requests), (SELECT count(*) FROM mcguildlink.account_links), (SELECT count(*) FROM mcguildlink.audit_logs)")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(counts, (1, 0, 0));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn outbox_failure_rolls_back_link_code_and_audit(pool: PgPool) {
+        issue(&pool, 10, "CODE0001").await;
+        sqlx::query("CREATE FUNCTION mcguildlink.fail_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced outbox failure'; END $$")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER fail_outbox BEFORE INSERT ON mcguildlink.audit_outbox FOR EACH ROW EXECUTE FUNCTION mcguildlink.fail_outbox()")
+            .execute(&pool).await.unwrap();
+        let restricted = restricted_pool(&pool).await;
+        assert!(consume(&restricted, "CODE0001", &player()).await.is_err());
+        let counts: (i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM mcguildlink.link_requests), (SELECT count(*) FROM mcguildlink.account_links), (SELECT count(*) FROM mcguildlink.audit_logs), (SELECT count(*) FROM mcguildlink.audit_outbox)")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(counts, (1, 0, 0, 0));
+    }
 }

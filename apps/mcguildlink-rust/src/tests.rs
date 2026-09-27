@@ -1,7 +1,7 @@
 use crate::{
     VERSION,
     identity::Name,
-    link_flow::configuration_with_timeout,
+    link_flow::configuration,
     link_store::{CodeLinker, LinkResult},
     protocol::{
         Connection,
@@ -88,7 +88,7 @@ async fn configuration_retries_invalid_code_then_shows_result_and_disconnects() 
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let mut connection = Connection::new(listener.accept().await.unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_secs(2), &TestLinker).await
+        configuration(&mut connection, &test_player(), Duration::from_secs(2), &TestLinker).await
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -133,7 +133,7 @@ async fn configuration_times_out_with_disconnect_reason() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let mut connection = Connection::new(listener.accept().await.unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_millis(100), &TestLinker).await
+        configuration(&mut connection, &test_player(), Duration::from_millis(100), &TestLinker).await
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();

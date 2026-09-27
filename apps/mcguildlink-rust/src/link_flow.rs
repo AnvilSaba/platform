@@ -13,16 +13,9 @@ use crate::{
     session::SessionProfile,
 };
 
-const INPUT_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const INPUT_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(crate) async fn configuration<L>(connection: &mut Connection, player: &SessionProfile, linker: &L) -> AppResult<()>
-where
-    L: CodeLinker,
-{
-    configuration_with_timeout(connection, player, INPUT_TIMEOUT, linker).await
-}
-
-pub(crate) async fn configuration_with_timeout<L>(
+pub(crate) async fn configuration<L>(
     connection: &mut Connection,
     player: &SessionProfile,
     timeout: Duration,
