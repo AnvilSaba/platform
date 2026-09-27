@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AppResult, VERSION, invalid,
-    link_flow::configuration,
+    link_flow::{INPUT_TIMEOUT, configuration},
     link_store::CodeLinker,
     protocol::{Connection, packets::*},
     session::SessionVerifier,
@@ -113,7 +113,7 @@ impl<V: SessionVerifier, L: CodeLinker> LinkServer<V, L> {
             profile.name.as_ref(),
             profile.id
         );
-        configuration(connection, &profile, &self.linker).await
+        configuration(connection, &profile, INPUT_TIMEOUT, &self.linker).await
     }
 }
 
