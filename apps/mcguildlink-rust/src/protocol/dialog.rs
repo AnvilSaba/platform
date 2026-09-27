@@ -1,70 +1,84 @@
-use std::io::{Error, ErrorKind};
+use std::io::{Error, Read, Write};
 
-use na_nbt::ValueRef;
+use fastnbt::{DeOpts, SerOpts};
+use mc_protocol::{ser::SerializationError, varint::VarInt};
 
-pub const SUBMIT_ID: &str = "mcguildlink:submit_code";
-pub const DONE_ID: &str = "mcguildlink:dialog_success";
+pub(crate) const SUBMIT_ID: &str = "mcguildlink:submit_code";
+pub(crate) const DONE_ID: &str = "mcguildlink:dialog_success";
 
-pub enum Dialog {
-    Code {
-        initial: String,
-        error: Option<&'static str>,
-    },
-    Success,
-    AlreadyLinked,
-    Blocked,
-}
+const NOTICE: &str = "minecraft:notice";
+const PLAIN_MESSAGE: &str = "minecraft:plain_message";
+const TEXT_INPUT: &str = "minecraft:text";
+const DYNAMIC_CUSTOM: &str = "minecraft:dynamic/custom";
 
-#[derive(serde::Serialize)]
-struct DialogDocument<'a> {
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DialogDocument<'a> {
     #[serde(rename = "type")]
-    kind: &'static str,
+    kind: &'a str,
     title: &'a str,
-    #[serde(with = "na_nbt::list")]
     body: Vec<Message<'a>>,
-    #[serde(with = "na_nbt::list")]
     inputs: Vec<TextInput<'a>>,
     action: Button<'a>,
     can_close_with_escape: i8,
     pause: i8,
-    after_action: &'static str,
+    after_action: &'a str,
 }
 
-#[derive(serde::Serialize)]
+impl mc_protocol::ser::Serialize for DialogDocument<'_> {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        fastnbt::to_writer_with_opts(writer, self, SerOpts::network_nbt()).map_err(Error::other)?;
+        Ok(())
+    }
+}
+
+impl mc_protocol::ser::Deserialize for DialogDocument<'_> {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        Ok(fastnbt::from_reader_with_opts(reader, DeOpts::network_nbt()).map_err(Error::other)?)
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Message<'a> {
     #[serde(rename = "type")]
-    kind: &'static str,
+    kind: &'a str,
     contents: &'a str,
     width: i32,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TextInput<'a> {
     #[serde(rename = "type")]
-    kind: &'static str,
-    key: &'static str,
+    kind: &'a str,
+    key: &'a str,
     width: i32,
-    label: &'static str,
+    label: &'a str,
     initial: &'a str,
     max_length: i32,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Button<'a> {
     label: &'a str,
     width: i32,
     action: CustomAction<'a>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct CustomAction<'a> {
     #[serde(rename = "type")]
-    kind: &'static str,
+    kind: &'a str,
     id: &'a str,
 }
 
-impl Dialog {
-    pub fn wire(&self) -> Result<Vec<u8>, Error> {
+pub(crate) enum Dialog<'a> {
+    Code { initial: &'a str, error: Option<&'a str> },
+    Success,
+    AlreadyLinked,
+    Blocked,
+}
+
+impl Dialog<'_> {
+    pub(crate) fn wire(&self) -> DialogDocument<'_> {
         let (title, message, label, id) = match self {
             Self::Code { .. } => (
                 "アカウント認証",
@@ -93,7 +107,7 @@ impl Dialog {
         };
         let inputs = match self {
             Self::Code { initial, .. } => vec![TextInput {
-                kind: "minecraft:text",
+                kind: TEXT_INPUT,
                 key: "code",
                 width: 128,
                 label: "コード",
@@ -103,19 +117,20 @@ impl Dialog {
             _ => Vec::new(),
         };
         let mut body = vec![Message {
-            kind: "minecraft:plain_message",
+            kind: PLAIN_MESSAGE,
             contents: message,
             width: 256,
         }];
         if let Self::Code { error: Some(error), .. } = self {
             body.push(Message {
-                kind: "minecraft:plain_message",
+                kind: PLAIN_MESSAGE,
                 contents: error,
                 width: 256,
             });
         }
-        let document = DialogDocument {
-            kind: "minecraft:notice",
+
+        DialogDocument {
+            kind: NOTICE,
             title,
             body,
             inputs,
@@ -123,139 +138,121 @@ impl Dialog {
                 label,
                 width: 128,
                 action: CustomAction {
-                    kind: "minecraft:dynamic/custom",
+                    kind: DYNAMIC_CUSTOM,
                     id,
                 },
             },
             can_close_with_escape: 0,
             pause: 1,
             after_action: "close",
-        };
-        let named = na_nbt::to_vec_be(&document).map_err(Error::other)?;
-        if named.len() < 3 || named[0] != 10 {
-            return Err(Error::new(ErrorKind::InvalidData, "dialog is not a compound tag"));
         }
-        let mut wire = Vec::with_capacity(named.len() - 2);
-        wire.push(named[0]);
-        wire.extend_from_slice(&named[3..]);
-        Ok(wire)
     }
 }
 
-#[derive(serde::Deserialize)]
-struct Submission {
-    code: String,
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct Submission {
+    pub(crate) code: Option<String>,
 }
 
-pub fn parse_submission(tag: &[u8]) -> Result<Option<String>, Error> {
-    if tag.len() > 65_536 {
-        return Err(Error::new(ErrorKind::InvalidData, "click payload too long"));
+impl mc_protocol::ser::Deserialize for Submission {
+    fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
+        let length = VarInt::read_sync(reader)?.0;
+        if !(0..=65_536).contains(&length) {
+            return Err(Error::new(std::io::ErrorKind::InvalidData, "click payload too long").into());
+        }
+        let mut tag = vec![0; length as usize];
+        reader.read_exact(&mut tag)?;
+        if tag == [0] {
+            return Ok(Self { code: None });
+        }
+        Ok(fastnbt::from_bytes_with_opts(&tag, DeOpts::network_nbt()).map_err(Error::other)?)
     }
-    if tag.is_empty() || tag == [0] {
-        return Ok(None);
+}
+
+impl mc_protocol::ser::Serialize for Submission {
+    fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
+        let tag = if self.code.is_none() {
+            vec![0]
+        } else {
+            fastnbt::to_bytes_with_opts(&self, SerOpts::network_nbt()).map_err(Error::other)?
+        };
+        mc_protocol::ser::Serialize::serialize(&tag, writer)
     }
-    if tag[0] != 10 {
-        return Err(Error::new(ErrorKind::InvalidData, "click payload is not a compound"));
-    }
-    let mut named = Vec::with_capacity(tag.len() + 2);
-    named.extend_from_slice(&[10, 0, 0]);
-    named.extend_from_slice(&tag[1..]);
-    let document = na_nbt::read_borrowed::<na_nbt::BE>(&named).map_err(Error::other)?;
-    if document.root().get("code").is_none() {
-        return Ok(None);
-    }
-    let submission: Submission = na_nbt::from_slice_be(&named).map_err(Error::other)?;
-    Ok(Some(submission.code))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use na_nbt::{BE, ValueRef, read_borrowed, tag};
+    use crate::protocol::connection::{decode_exact, packet_from};
+    use crate::protocol::packets::ConfigurationDialogClick;
 
     #[test]
     fn code_dialog_contains_input_and_custom_action() {
-        let wire = Dialog::Code {
-            initial: "ABCD1234".into(),
+        let doc = Dialog::Code {
+            initial: "ABCD1234",
             error: None,
-        }
-        .wire()
-        .unwrap();
-        let mut named = vec![10, 0, 0];
-        named.extend_from_slice(&wire[1..]);
-        let document = read_borrowed::<BE>(&named).unwrap();
-        let root = document.root();
-        assert_eq!(
-            root.get_::<tag::String>("type").unwrap().decode().unwrap(),
-            "minecraft:notice"
-        );
-        assert_eq!(
-            root.get("inputs")
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .get_::<tag::String>("type")
-                .unwrap()
-                .decode()
-                .unwrap(),
-            "minecraft:text"
-        );
-        assert_eq!(
-            root.get("body")
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .get_::<tag::String>("type")
-                .unwrap()
-                .decode()
-                .unwrap(),
-            "minecraft:plain_message"
-        );
-        assert!(root.get("action").is_some());
-    }
+        };
+        let wire = doc.wire();
 
-    #[test]
-    fn custom_click_extracts_code_and_rejects_truncated_payload() {
-        let mut tag = vec![10, 8, 0, 4];
-        tag.extend_from_slice(b"code");
-        tag.extend_from_slice(&8_u16.to_be_bytes());
-        tag.extend_from_slice(b"SUCCESS1");
-        tag.push(0);
-        assert_eq!(parse_submission(&tag).unwrap(), Some("SUCCESS1".into()));
-        tag.pop();
-        assert!(parse_submission(&tag).is_err());
+        assert_eq!(wire.kind, NOTICE);
+        assert_eq!(wire.inputs.first().unwrap().kind, TEXT_INPUT);
+        assert_eq!(wire.body.first().unwrap().kind, PLAIN_MESSAGE);
+
+        let bytes = fastnbt::to_bytes_with_opts(&wire, SerOpts::network_nbt()).unwrap();
+        let fastnbt::Value::Compound(root) = fastnbt::from_bytes_with_opts(&bytes, DeOpts::network_nbt()).unwrap()
+        else {
+            panic!("dialog root must be a compound");
+        };
+        assert_eq!(root["type"].as_str(), Some("minecraft:notice"));
+        let fastnbt::Value::List(inputs) = &root["inputs"] else {
+            panic!("dialog inputs must be a list");
+        };
+        let fastnbt::Value::Compound(input) = &inputs[0] else {
+            panic!("dialog input must be a compound");
+        };
+        assert_eq!(input["type"].as_str(), Some("minecraft:text"));
     }
 
     #[test]
     fn retry_keeps_guidance_and_adds_error() {
-        let wire = Dialog::Code {
-            initial: "BAD".into(),
+        let doc = Dialog::Code {
+            initial: "BAD",
             error: Some("無効なコードです。"),
-        }
-        .wire()
-        .unwrap();
-        let mut named = vec![10, 0, 0];
-        named.extend_from_slice(&wire[1..]);
-        let document = read_borrowed::<BE>(&named).unwrap();
-        let body = document.root().get("body").unwrap();
-        assert!(body.get(2).is_none());
+        };
+        let wire = doc.wire();
+
+        assert!(wire.body.get(2).is_none());
         assert_eq!(
-            body.get(0)
-                .unwrap()
-                .get_::<tag::String>("contents")
-                .unwrap()
-                .decode()
-                .unwrap(),
+            wire.body.first().unwrap().contents,
             "発行されたコードを以下に入力してください。"
         );
-        assert_eq!(
-            body.get(1)
-                .unwrap()
-                .get_::<tag::String>("contents")
-                .unwrap()
-                .decode()
-                .unwrap(),
-            "無効なコードです。"
-        );
+        assert_eq!(wire.body.get(1).unwrap().contents, "無効なコードです。");
+    }
+
+    #[test]
+    fn submission_decodes_length_prefixed_nbt() {
+        let nbt = fastnbt::to_bytes_with_opts(
+            &Submission {
+                code: Some("SUCCESS1".into()),
+            },
+            SerOpts::network_nbt(),
+        )
+        .unwrap();
+        let packet = packet_from(&ConfigurationDialogClick {
+            action: SUBMIT_ID.into(),
+            data: nbt,
+        })
+        .unwrap();
+        let click: ConfigurationDialogClick<Submission> = decode_exact(&packet.payload).unwrap();
+        assert_eq!(click.action, SUBMIT_ID);
+        assert_eq!(click.data.code.as_deref(), Some("SUCCESS1"));
+
+        let packet = packet_from(&ConfigurationDialogClick {
+            action: DONE_ID.into(),
+            data: vec![0_u8],
+        })
+        .unwrap();
+        let click: ConfigurationDialogClick<Submission> = decode_exact(&packet.payload).unwrap();
+        assert_eq!(click.data.code, None);
     }
 }

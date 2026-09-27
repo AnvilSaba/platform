@@ -1,14 +1,15 @@
 use crate::{
     VERSION,
+    identity::Name,
     link_flow::configuration_with_timeout,
     protocol::{
         Connection,
         connection::{decode_exact, packet_from},
         crypto::{Cfb8Reader, Cfb8Writer},
-        dialog,
+        dialog::{self, Submission},
         packets::*,
     },
-    server::{VerifiedPlayer, serve, serve_with_verifier},
+    server::{serve, serve_with_verifier},
     session::{SessionProfile, signed_sha1},
 };
 use mc_protocol::{
@@ -16,8 +17,7 @@ use mc_protocol::{
     ser::Serialize,
     varint::VarInt,
 };
-use rand::rngs::OsRng;
-use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey, rand_core::OsRng};
 use std::{
     io::Write,
     net::{TcpListener, TcpStream},
@@ -45,8 +45,8 @@ fn status_advertises_26_3_and_echoes_ping() {
     let reply = RawPacket::read_sync(&mut client).unwrap().as_uncompressed().unwrap();
     assert_eq!(reply.packet_id, 0);
     let status: StatusResponse = decode_exact(&reply.payload).unwrap();
-    assert!(status.json.contains("\"protocol\":777"));
-    assert!(status.json.contains("\"name\":\"26.3\""));
+    assert_eq!(status.status.version_protocol(), 777);
+    assert_eq!(status.status.version_name(), "26.3");
     send_packet(&mut client, &StatusPing { timestamp: 123 });
     let pong = RawPacket::read_sync(&mut client).unwrap().as_uncompressed().unwrap();
     assert_eq!(pong.packet_id, 1);
@@ -72,15 +72,15 @@ fn older_protocol_never_reaches_login() {
     send_packet(
         &mut client,
         &LoginHello {
-            name: "TestPlayer".into(),
+            name: Name::try_new("TestPlayer").unwrap(),
             uuid: Uuid::nil(),
         },
     );
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let disconnect = read_packet(&mut client);
     assert_eq!(disconnect.packet_id, LoginDisconnect::PACKET_ID);
-    let reason: LoginDisconnect = decode_exact(&disconnect.payload).unwrap();
-    assert!(reason.reason_json.contains("26.3"));
+    let reason: LoginDisconnect<'_> = decode_exact(&disconnect.payload).unwrap();
+    assert!(reason.reason.text.contains("26.3"));
     drop(client);
     assert!(server.join().unwrap().is_err());
 }
@@ -95,10 +95,17 @@ fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    assert_eq!(read_packet(&mut client).packet_id, 19);
+    let first_dialog = read_packet(&mut client);
+    assert_eq!(first_dialog.packet_id, 19);
+    assert_eq!(
+        first_dialog.payload.first(),
+        Some(&10),
+        "dialog NBT must begin with compound tag"
+    );
     send_click(&mut client, dialog::SUBMIT_ID, Some("WRONG123"));
     let retry = read_packet(&mut client);
     assert_eq!(retry.packet_id, 19);
+    let _: fastnbt::Value = fastnbt::from_bytes_with_opts(&retry.payload, fastnbt::DeOpts::network_nbt()).unwrap();
     assert!(
         retry
             .payload
@@ -108,6 +115,7 @@ fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
     send_click(&mut client, dialog::SUBMIT_ID, Some("SUCCESS1"));
     let result = read_packet(&mut client);
     assert_eq!(result.packet_id, 19);
+    let _: fastnbt::Value = fastnbt::from_bytes_with_opts(&result.payload, fastnbt::DeOpts::network_nbt()).unwrap();
     assert!(
         result
             .payload
@@ -115,7 +123,10 @@ fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
             .any(|bytes| bytes == "成功しました。".as_bytes())
     );
     send_click(&mut client, dialog::DONE_ID, None);
-    assert_eq!(read_packet(&mut client).packet_id, 2);
+    let disconnect = read_packet(&mut client);
+    assert_eq!(disconnect.packet_id, 2);
+    let reason: NbtTextComponent<'_> = decode_exact(&disconnect.payload).unwrap();
+    assert_eq!(reason.text, "正常に切断されました。");
     assert!(server.join().unwrap().is_ok());
 }
 
@@ -132,18 +143,26 @@ fn configuration_times_out_with_disconnect_reason() {
     assert_eq!(read_packet(&mut client).packet_id, 19);
     let disconnect = read_packet(&mut client);
     assert_eq!(disconnect.packet_id, 2);
-    assert!(
-        disconnect
-            .payload
-            .windows("コードを入力する時間".len())
-            .any(|bytes| bytes == "コードを入力する時間".as_bytes())
-    );
+    let reason: NbtTextComponent<'_> = decode_exact(&disconnect.payload).unwrap();
+    assert!(reason.text.contains("コードを入力する時間"));
     assert!(server.join().unwrap().is_ok());
 }
 
 #[test]
 fn session_hash_uses_signed_twos_complement() {
     assert_eq!(signed_sha1(b"abc"), "-5666c1c9b8f97e9545c1da8e87af3d93632f2763");
+}
+
+#[test]
+fn player_name_is_validated_in_login_and_session_profile() {
+    for invalid in ["", "Name-With-Dash", "Name With Space", "日本語", "abcdefghijklmnopq"] {
+        assert!(Name::try_new(invalid).is_err(), "accepted invalid name: {invalid}");
+        let json = serde_json::json!({ "id": Uuid::nil(), "name": invalid });
+        assert!(serde_json::from_value::<SessionProfile>(json).is_err());
+    }
+    assert!(Name::try_new("A_b1").is_ok());
+    // Existing accounts can have names shorter than today's creation minimum.
+    assert!(Name::try_new("a").is_ok());
 }
 
 #[test]
@@ -155,8 +174,8 @@ fn authenticated_login_enters_configuration_without_play() {
         serve_with_verifier(listener.accept().unwrap().0, |name, _, _| {
             assert_eq!(name, "TestPlayer");
             Ok(SessionProfile {
-                id: player_id.simple().to_string(),
-                name: "TestPlayer".into(),
+                id: player_id,
+                name: Name::try_new("TestPlayer").unwrap(),
             })
         })
     });
@@ -174,7 +193,7 @@ fn authenticated_login_enters_configuration_without_play() {
     send_packet(
         &mut client,
         &LoginHello {
-            name: "TestPlayer".into(),
+            name: Name::try_new("TestPlayer").unwrap(),
             uuid: player_id,
         },
     );
@@ -240,29 +259,20 @@ fn send_packet<W: Write, P: PacketId + Serialize>(stream: &mut W, packet: &P) {
 }
 
 fn send_click<W: Write>(stream: &mut W, id: &str, code: Option<&str>) {
-    #[derive(serde::Serialize)]
-    struct Code<'a> {
-        code: &'a str,
-    }
-    let data = match code {
-        Some(code) => {
-            let named = na_nbt::to_vec_be(&Code { code }).unwrap();
-            [&named[..1], &named[3..]].concat()
-        }
-        None => vec![0],
-    };
     send_packet(
         stream,
         &ConfigurationDialogClick {
             action: id.into(),
-            data,
+            data: Submission {
+                code: code.map(str::to_string),
+            },
         },
     );
 }
 
-fn test_player() -> VerifiedPlayer {
-    VerifiedPlayer {
-        uuid: Uuid::nil(),
-        name: "TestPlayer".into(),
+fn test_player() -> SessionProfile {
+    SessionProfile {
+        id: Uuid::nil(),
+        name: Name::try_new("TestPlayer").unwrap(),
     }
 }

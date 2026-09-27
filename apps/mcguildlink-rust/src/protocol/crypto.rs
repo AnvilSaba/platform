@@ -9,13 +9,13 @@ use aes::{Aes128, cipher::KeyIvInit};
 type Encryptor = cfb8::Encryptor<Aes128>;
 type Decryptor = cfb8::Decryptor<Aes128>;
 
-pub struct Cfb8Reader<R> {
+pub(crate) struct Cfb8Reader<R> {
     inner: R,
     decryptor: Decryptor,
 }
 
 impl<R> Cfb8Reader<R> {
-    pub fn new(inner: R, key: &[u8; 16]) -> Self {
+    pub(crate) fn new(inner: R, key: &[u8; 16]) -> Self {
         Self {
             inner,
             decryptor: Decryptor::new(key.into(), key.into()),
@@ -24,7 +24,7 @@ impl<R> Cfb8Reader<R> {
 }
 
 impl Cfb8Reader<TcpStream> {
-    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.inner.set_read_timeout(timeout)
     }
 }
@@ -37,13 +37,13 @@ impl<R: Read> Read for Cfb8Reader<R> {
     }
 }
 
-pub struct Cfb8Writer<W> {
+pub(crate) struct Cfb8Writer<W> {
     inner: W,
     encryptor: Encryptor,
 }
 
 impl<W> Cfb8Writer<W> {
-    pub fn new(inner: W, key: &[u8; 16]) -> Self {
+    pub(crate) fn new(inner: W, key: &[u8; 16]) -> Self {
         Self {
             inner,
             encryptor: Encryptor::new(key.into(), key.into()),

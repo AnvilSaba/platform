@@ -5,29 +5,32 @@ use std::{
 
 use crate::{
     AppResult, invalid,
-    protocol::{Connection, connection::decode_exact, dialog, packets::*},
-    server::VerifiedPlayer,
+    protocol::{
+        Connection,
+        connection::decode_exact,
+        dialog::{self, Submission},
+        packets::*,
+    },
+    session::SessionProfile,
 };
 
 const INPUT_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(crate) fn configuration(connection: &mut Connection, player: &VerifiedPlayer) -> AppResult<()> {
+pub(crate) fn configuration(connection: &mut Connection, player: &SessionProfile) -> AppResult<()> {
     configuration_with_timeout(connection, player, INPUT_TIMEOUT)
 }
 
 pub(crate) fn configuration_with_timeout(
     connection: &mut Connection,
-    player: &VerifiedPlayer,
+    player: &SessionProfile,
     timeout: Duration,
 ) -> AppResult<()> {
     connection.send(&ConfigurationDialog {
-        document: RemainingBytes(
-            dialog::Dialog::Code {
-                initial: String::new(),
-                error: None,
-            }
-            .wire()?,
-        ),
+        document: dialog::Dialog::Code {
+            initial: "",
+            error: None,
+        }
+        .wire(),
     })?;
     let deadline = Instant::now() + timeout;
     let mut completed = false;
@@ -35,7 +38,7 @@ pub(crate) fn configuration_with_timeout(
         let packet = match connection.read_until(deadline) {
             Ok(packet) => packet,
             Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-                connection.send(&ConfigurationDisconnect { reason: RemainingBytes(text_component("コードを入力する時間が長過ぎたため、切断されました。もう一度接続してコードを入力してください。すでにコードを発行している場合、コードの再発行は不要です。")?) })?;
+                connection.send(&ConfigurationDisconnect { reason: NbtTextComponent::new("コードを入力する時間が長過ぎたため、切断されました。もう一度接続してコードを入力してください。すでにコードを発行している場合、コードの再発行は不要です。") })?;
                 return Ok(());
             }
             Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(()),
@@ -47,47 +50,34 @@ pub(crate) fn configuration_with_timeout(
             | ConfigurationPong::PACKET_ID
             | ConfigurationResourcePackResponse::PACKET_ID
             | ConfigurationKnownPacks::PACKET_ID => {} // optional Configuration messages
-            ConfigurationKeepaliveResponse::PACKET_ID
-                if decode_exact::<ConfigurationKeepaliveResponse>(&packet.payload)?.id == 0 => {}
-            ConfigurationDialogClick::PACKET_ID => {
-                let click: ConfigurationDialogClick = decode_exact(&packet.payload)?;
+            ConfigurationKeepAliveResponse::PACKET_ID
+                if decode_exact::<ConfigurationKeepAliveResponse>(&packet.payload)?.id == 0 => {}
+            ConfigurationDialogClick::<Submission>::PACKET_ID => {
+                let click: ConfigurationDialogClick<Submission> = decode_exact(&packet.payload)?;
                 let action = click.action;
-                let code = dialog::parse_submission(&click.data)?;
+                let code = click.data.code.unwrap_or_default();
                 if action == dialog::DONE_ID && completed {
                     connection.send(&ConfigurationDisconnect {
-                        reason: RemainingBytes(text_component("正常に切断されました。")?),
+                        reason: NbtTextComponent::new("正常に切断されました。"),
                     })?;
                     return Ok(());
                 }
                 if action != dialog::SUBMIT_ID || completed {
                     return Err(invalid("unexpected dialog action"));
                 }
-                let Some(code) = code else {
-                    connection.send(&ConfigurationDialog {
-                        document: RemainingBytes(
-                            dialog::Dialog::Code {
-                                initial: String::new(),
-                                error: Some("コードを受け取れませんでした。もう一度入力してください。"),
-                            }
-                            .wire()?,
-                        ),
-                    })?;
-                    continue;
-                };
                 let code = code.trim();
                 eprintln!(
                     "Code submitted by authenticated player {} ({})",
-                    player.name, player.uuid
+                    player.name.as_ref(),
+                    player.id
                 );
                 if code.len() > 8 {
                     connection.send(&ConfigurationDialog {
-                        document: RemainingBytes(
-                            dialog::Dialog::Code {
-                                initial: String::new(),
-                                error: Some("無効なコードです。もう一度入力してください。"),
-                            }
-                            .wire()?,
-                        ),
+                        document: dialog::Dialog::Code {
+                            initial: "",
+                            error: Some("無効なコードです。もう一度入力してください。"),
+                        }
+                        .wire(),
                     })?;
                     continue;
                 }
@@ -105,28 +95,18 @@ pub(crate) fn configuration_with_timeout(
                         dialog::Dialog::Blocked
                     }
                     "" => dialog::Dialog::Code {
-                        initial: String::new(),
+                        initial: "",
                         error: Some("コードが空です。もう一度入力してください。"),
                     },
                     _ => dialog::Dialog::Code {
-                        initial: code.to_owned(),
+                        initial: code,
                         error: Some("無効なコードです。もう一度入力してください。"),
                     },
                 };
-                connection.send(&ConfigurationDialog {
-                    document: RemainingBytes(next.wire()?),
-                })?;
+                connection.send(&ConfigurationDialog { document: next.wire() })?;
             }
             ConfigurationFinishAcknowledged::PACKET_ID => return Err(invalid("Play transition is forbidden")),
             _ => return Err(invalid("unexpected Configuration packet")),
         }
     }
-}
-
-fn text_component(text: &str) -> AppResult<Vec<u8>> {
-    let named = na_nbt::to_vec_be(&text.to_owned())?;
-    if named.len() < 3 || named[0] != 8 {
-        return Err(invalid("text component is not a string tag"));
-    }
-    Ok([&named[..1], &named[3..]].concat())
 }
