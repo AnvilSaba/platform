@@ -1,4 +1,5 @@
 mod app;
+mod console;
 mod core;
 mod extensions;
 mod features;
@@ -26,20 +27,29 @@ struct Options {
     check_config: bool,
 }
 
-fn init_tracing() {
+fn init_tracing(output: Arc<console::ConsoleOutput>) {
+    let interactive = console::interactive_terminal();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
         .with_file(true)
-        .with_line_number(true)
-        .init();
+        .with_line_number(true);
+
+    if interactive {
+        builder
+            .with_writer(move || console::LogWriter::new(output.clone()))
+            .init();
+    } else {
+        builder.init();
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    init_tracing();
+    let output = Arc::new(console::ConsoleOutput::default());
+    init_tracing(output.clone());
 
     let config = AppConfig::from_file("config.toml").await?;
 
@@ -87,6 +97,8 @@ async fn main() -> Result<(), AppError> {
     .context("Failed to create Discord client")?;
 
     install_signal_handler(&client);
+    let shutdown = client.shard_manager.get_shutdown_trigger();
+    tokio::spawn(console::run(client.http.clone(), shutdown, output));
 
     if let Err(error) = client.start().await.context("Discord client stopped with an error") {
         error!("Client error: {error:#}");

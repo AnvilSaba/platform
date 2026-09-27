@@ -22,6 +22,8 @@ spec:
         - name: bot
           image: "{{ .Values.bot.image.repository }}:{{ required "bot.image.tag is required" .Values.bot.image.tag }}"
           imagePullPolicy: {{ .Values.bot.image.pullPolicy }}
+          stdin: true
+          tty: true
           workingDir: /app
           securityContext:
             {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}

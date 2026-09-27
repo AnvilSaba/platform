@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
+bot-macros = { path = "../../crates/bot-macros" }
 bpaf = { version = "0.9", features = [ "derive" ] }
 chrono = "0.4"
 dashmap = "6.1"
@@ -16,16 +17,16 @@ futures = "0.3"
 itertools = "0.15"
 rand = "0.10"
 regex = "1.0"
+rustyline = { version = "18", default-features = false }
 serde = { version = "1.0", features = [ "derive" ] }
 serde_with = "3"
 similar = "3.1"
 sysinfo = "0.39"
 thiserror = "2"
-tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal" ] }
+tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal", "sync" ] }
 toml = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
-bot-macros = { path = "../../crates/bot-macros" }
 
 [dependencies.serenity]
 git = "https://github.com/serenity-rs/serenity"

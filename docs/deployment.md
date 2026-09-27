@@ -198,6 +198,16 @@ kubectl logs -n anvilsaba deployment/cloudflared --tail=100
 kubectl logs -n anvilsaba statefulset/postgres --tail=100
 ```
 
+BotのDiscordアプリケーションコマンドは、実行中のPodにTTY付きで接続して操作します。
+
+```bash
+kubectl attach -n anvilsaba -it --detach-keys=ctrl-c deployment/bot
+```
+
+Discord接続のREADY後、コンソールがコマンドを受け付けるようになります。
+利用可能なコマンドは `help` で確認可能です。
+上記の接続では Ctrl+C で接続だけが終了し、Botは稼働を続けます。`--detach-keys` を省略した場合の切断キーはCtrl+P、続けてCtrl+Qです。
+
 次を確認して完了とします。
 
 - BotとMCGuildLinkが正常起動し、Discordへ接続できる
