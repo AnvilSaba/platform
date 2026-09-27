@@ -3,12 +3,12 @@
 Minecraft Java 26.3（プロトコル 777）の online-mode 本人認証後、Play に進めず Configuration ダイアログでコードを受け付ける。コードは PostgreSQL で照合し、成功時は紐付け、コード消費、監査ログ、配送予定を同一トランザクションで保存する。本番環境へはまだ配置しない。
 
 ```powershell
-$env:MCGUILDLINK_LISTEN = '127.0.0.1:25565'
+Copy-Item apps/mcguildlink-rust/config.example.toml config.toml
 $env:DATABASE_URL = 'postgres://platform_mcguildlink:<パスワード>@localhost:5432/platform'
 cargo run -p mcguildlink-rust
 ```
 
-待受アドレスの未設定時は `127.0.0.1:25565` を使う。`DATABASE_URL` は必須。接続時に Mojang セッションサーバーへ問い合わせ、返された UUID と名前が Login Start の値と一致した場合だけ Configuration に進む。接続から 5 分でコード入力を打ち切る。
+作業ディレクトリの `config.toml` に待受アドレスを設定する。書式は [config.example.toml](config.example.toml) を参照。`DATABASE_URL` は必須。接続時に Mojang セッションサーバーへ問い合わせ、返された UUID と名前が Login Start の値と一致した場合だけ Configuration に進む。接続から 5 分でコード入力を打ち切る。
 
 | 入力コード | 結果 |
 | --- | --- |
