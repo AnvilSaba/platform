@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mcguildlink.link_requests WHERE discord_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f6d05a86cbbb4f0dec33224c3898419600803497989af52a4249797ad6d1d731"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mcguildlink.account_links (discord_account_id, minecraft_account_id) VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "872fe3d830968f0ee12557632f5440171e0de3efb082bd8489ca2c321c2f3318"
+}

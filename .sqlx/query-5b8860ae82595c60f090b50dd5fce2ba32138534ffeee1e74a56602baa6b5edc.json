@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id, d.user_id::text AS \"user_id!\", d.last_known_username FROM mcguildlink.link_requests r JOIN mcguildlink.discord_accounts d ON d.id = r.discord_account_id WHERE r.code = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_known_username",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "5b8860ae82595c60f090b50dd5fce2ba32138534ffeee1e74a56602baa6b5edc"
+}
