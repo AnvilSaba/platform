@@ -72,7 +72,7 @@ struct CustomAction<'a> {
 
 pub(crate) enum Dialog<'a> {
     Code { initial: &'a str, error: Option<&'a str> },
-    Success,
+    Success { message: String },
     AlreadyLinked,
     Blocked,
 }
@@ -86,12 +86,7 @@ impl Dialog<'_> {
                 "送信",
                 SUBMIT_ID,
             ),
-            Self::Success => (
-                "成功しました。",
-                "検証用ユーザー との紐付けが完了しました。",
-                "切断",
-                DONE_ID,
-            ),
+            Self::Success { message } => ("成功しました。", message.as_str(), "切断", DONE_ID),
             Self::AlreadyLinked => (
                 "既に紐付け済みです。",
                 "このMinecraftアカウントとこのDiscordアカウントは既に紐付けられています。",

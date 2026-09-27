@@ -30,23 +30,27 @@ CREATE DATABASE platform OWNER platform_migrator;
 
 ```sql
 CREATE ROLE platform_bot_runtime NOLOGIN;
+CREATE ROLE platform_mcguildlink_runtime NOLOGIN;
 ```
 
-マイグレーション適用後、Bot のログインユーザーを作成し、必要な権限ロールを付与する。
+マイグレーション適用後、アプリ別のログインユーザーを作成し、それぞれの権限ロールを付与する。
 
 ```sql
 CREATE ROLE platform_bot LOGIN PASSWORD '<Bot 専用パスワード>';
 GRANT CONNECT ON DATABASE platform TO platform_bot;
 GRANT platform_bot_runtime TO platform_bot;
+CREATE ROLE platform_mcguildlink LOGIN PASSWORD '<MCGuildLink 専用パスワード>';
+GRANT CONNECT ON DATABASE platform TO platform_mcguildlink;
+GRANT platform_mcguildlink_runtime TO platform_mcguildlink;
 ```
 
 Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `password` には
 `platform_bot` のパスワードを設定する。Helm は `bot.databaseUsername`、
 `postgres.serviceName`、`postgres.port`、`postgres.database` から `DATABASE_URL` を作る。
 
-Bot に DB 所有権、スキーマ作成権限、マイグレーションロールは与えない。
-`platform_bot_runtime` は Bot 全体の権限ロール。ログインユーザーと分離し、
-各機能のマイグレーションで必要なテーブル・列の権限だけを追加する。
+アプリには DB 所有権、スキーマ作成権限、マイグレーションロールを与えない。
+`platform_bot_runtime` は Bot 全体の権限ロール、`platform_mcguildlink_runtime` は Minecraft 接続サービスの権限ロールとする。
+ログインユーザーと分離し、各機能のマイグレーションで必要なテーブル・列の権限だけを追加する。
 将来のテーブルへ一括で権限を付与するデフォルト権限は設定しない。
 
 ## マイグレーション

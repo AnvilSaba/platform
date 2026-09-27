@@ -2,6 +2,7 @@ use crate::{
     VERSION,
     identity::Name,
     link_flow::configuration_with_timeout,
+    link_store::LinkResult,
     protocol::{
         Connection,
         connection::{decode_exact, packet_from},
@@ -9,7 +10,7 @@ use crate::{
         dialog::{self, Submission},
         packets::*,
     },
-    server::{serve, serve_with_verifier},
+    server::serve_with_services,
     session::{SessionProfile, signed_sha1},
 };
 use mc_protocol::{
@@ -29,7 +30,7 @@ use uuid::Uuid;
 fn status_advertises_26_3_and_echoes_ping() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || serve(listener.accept().unwrap().0));
+    let server = std::thread::spawn(move || test_serve(listener.accept().unwrap().0));
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     send_packet(
@@ -58,7 +59,7 @@ fn status_advertises_26_3_and_echoes_ping() {
 fn older_protocol_never_reaches_login() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || serve(listener.accept().unwrap().0));
+    let server = std::thread::spawn(move || test_serve(listener.accept().unwrap().0));
     let mut client = TcpStream::connect(address).unwrap();
     send_packet(
         &mut client,
@@ -91,7 +92,7 @@ fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_secs(2))
+        configuration_with_timeout(&mut connection, &test_player(), Duration::from_secs(2), &test_linker)
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -136,7 +137,12 @@ fn configuration_times_out_with_disconnect_reason() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_millis(100))
+        configuration_with_timeout(
+            &mut connection,
+            &test_player(),
+            Duration::from_millis(100),
+            &test_linker,
+        )
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -171,13 +177,17 @@ fn authenticated_login_enters_configuration_without_play() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        serve_with_verifier(listener.accept().unwrap().0, |name, _, _| {
-            assert_eq!(name, "TestPlayer");
-            Ok(SessionProfile {
-                id: player_id,
-                name: Name::try_new("TestPlayer").unwrap(),
-            })
-        })
+        serve_with_services(
+            listener.accept().unwrap().0,
+            |name, _, _| {
+                assert_eq!(name, "TestPlayer");
+                Ok(SessionProfile {
+                    id: player_id,
+                    name: Name::try_new("TestPlayer").unwrap(),
+                })
+            },
+            test_linker,
+        )
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -275,4 +285,17 @@ fn test_player() -> SessionProfile {
         id: Uuid::nil(),
         name: Name::try_new("TestPlayer").unwrap(),
     }
+}
+
+fn test_linker(code: &str, _: &SessionProfile) -> crate::AppResult<LinkResult> {
+    Ok(match code {
+        "SUCCESS1" => LinkResult::Success("検証用ユーザー".into()),
+        "ALREADY1" => LinkResult::AlreadyLinked,
+        "BLOCKED1" => LinkResult::Blocked,
+        _ => LinkResult::InvalidCode,
+    })
+}
+
+fn test_serve(stream: TcpStream) -> crate::AppResult<()> {
+    serve_with_services(stream, |_, _, _| unreachable!(), test_linker)
 }

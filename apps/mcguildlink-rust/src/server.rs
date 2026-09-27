@@ -11,19 +11,21 @@ use uuid::Uuid;
 use crate::{
     AppResult, VERSION, invalid,
     link_flow::configuration,
+    link_store::{LinkResult, LinkStore},
     protocol::{Connection, packets::*},
     session::{SessionProfile, authenticate},
 };
 
 static SESSION_ID: OnceLock<Uuid> = OnceLock::new();
 
-pub(crate) fn serve(stream: TcpStream) -> AppResult<()> {
-    serve_with_verifier(stream, authenticate)
+pub(crate) fn serve(stream: TcpStream, store: &LinkStore) -> AppResult<()> {
+    serve_with_services(stream, authenticate, |code, player| store.consume(code, player))
 }
 
-pub(crate) fn serve_with_verifier<F>(stream: TcpStream, verifier: F) -> AppResult<()>
+pub(crate) fn serve_with_services<F, L>(stream: TcpStream, verifier: F, linker: L) -> AppResult<()>
 where
     F: Fn(&str, &[u8; 16], &[u8]) -> AppResult<SessionProfile>,
+    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
 {
     let mut connection = Connection::new(stream)?;
     let Handshake {
@@ -37,7 +39,7 @@ where
     }
     match next_state.0 {
         1 => status(&mut connection),
-        2 if version.0 == VERSION => login(&mut connection, &verifier),
+        2 if version.0 == VERSION => login(&mut connection, &verifier, &linker),
         2 => {
             connection.send(&LoginDisconnect {
                 reason: TextComponent::new("Minecraft Java 26.3 を使用してください。"),
@@ -49,9 +51,10 @@ where
     }
 }
 
-fn login<F>(connection: &mut Connection, verifier: &F) -> AppResult<()>
+fn login<F, L>(connection: &mut Connection, verifier: &F, linker: &L) -> AppResult<()>
 where
     F: Fn(&str, &[u8; 16], &[u8]) -> AppResult<SessionProfile>,
+    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
 {
     let LoginHello { name, uuid } = connection.receive::<LoginHello>(LoginHello::PACKET_ID)?;
 
@@ -103,7 +106,7 @@ where
         profile.name.as_ref(),
         profile.id
     );
-    configuration(connection, &profile)
+    configuration(connection, &profile, linker)
 }
 
 fn decrypt(rsa: &RsaPrivateKey, ciphertext: &[u8]) -> AppResult<Vec<u8>> {

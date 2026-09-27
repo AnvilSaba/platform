@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     AppResult, invalid,
+    link_store::LinkResult,
     protocol::{
         Connection,
         connection::decode_exact,
@@ -16,15 +17,22 @@ use crate::{
 
 const INPUT_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(crate) fn configuration(connection: &mut Connection, player: &SessionProfile) -> AppResult<()> {
-    configuration_with_timeout(connection, player, INPUT_TIMEOUT)
+pub(crate) fn configuration<L>(connection: &mut Connection, player: &SessionProfile, linker: &L) -> AppResult<()>
+where
+    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
+{
+    configuration_with_timeout(connection, player, INPUT_TIMEOUT, linker)
 }
 
-pub(crate) fn configuration_with_timeout(
+pub(crate) fn configuration_with_timeout<L>(
     connection: &mut Connection,
     player: &SessionProfile,
     timeout: Duration,
-) -> AppResult<()> {
+    linker: &L,
+) -> AppResult<()>
+where
+    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
+{
     connection.send(&ConfigurationDialog {
         document: dialog::Dialog::Code {
             initial: "",
@@ -81,27 +89,32 @@ pub(crate) fn configuration_with_timeout(
                     })?;
                     continue;
                 }
-                let next = match code {
-                    "SUCCESS1" => {
-                        completed = true;
-                        dialog::Dialog::Success
-                    }
-                    "ALREADY1" => {
-                        completed = true;
-                        dialog::Dialog::AlreadyLinked
-                    }
-                    "BLOCKED1" => {
-                        completed = true;
-                        dialog::Dialog::Blocked
-                    }
-                    "" => dialog::Dialog::Code {
+                let next = if code.is_empty() {
+                    dialog::Dialog::Code {
                         initial: "",
                         error: Some("コードが空です。もう一度入力してください。"),
-                    },
-                    _ => dialog::Dialog::Code {
-                        initial: code,
-                        error: Some("無効なコードです。もう一度入力してください。"),
-                    },
+                    }
+                } else {
+                    match linker(code, player)? {
+                        LinkResult::Success(username) => {
+                            completed = true;
+                            dialog::Dialog::Success {
+                                message: format!("{username} との紐付けが完了しました。"),
+                            }
+                        }
+                        LinkResult::AlreadyLinked => {
+                            completed = true;
+                            dialog::Dialog::AlreadyLinked
+                        }
+                        LinkResult::Blocked => {
+                            completed = true;
+                            dialog::Dialog::Blocked
+                        }
+                        LinkResult::InvalidCode => dialog::Dialog::Code {
+                            initial: code,
+                            error: Some("無効なコードです。もう一度入力してください。"),
+                        },
+                    }
                 };
                 connection.send(&ConfigurationDialog { document: next.wire() })?;
             }

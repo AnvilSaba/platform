@@ -1723,12 +1723,15 @@ dependencies = [
  "fastnbt",
  "mc_protocol",
  "nutype",
+ "platform-database",
  "reqwest",
  "rsa",
  "serde",
  "serde_json",
  "serde_with",
  "sha1 0.11.0",
+ "sqlx",
+ "tokio",
  "uuid",
 ]
 
@@ -3021,6 +3024,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots 0.26.11",
 ]
 
@@ -3054,7 +3058,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx-core",
+ "sqlx-mysql",
  "sqlx-postgres",
+ "sqlx-sqlite",
  "syn 2.0.119",
  "tokio",
  "url",
@@ -3091,6 +3097,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.8",
  "rsa",
+ "serde",
  "sha1 0.10.7",
  "sha2",
  "smallvec",
@@ -3098,6 +3105,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -3135,6 +3143,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -3154,11 +3163,13 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "percent-encoding",
+ "serde",
  "serde_urlencoded",
  "sqlx-core",
  "thiserror",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
