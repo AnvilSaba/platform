@@ -1732,6 +1732,7 @@ dependencies = [
  "sha1 0.11.0",
  "sqlx",
  "tokio",
+ "toml",
  "uuid",
 ]
 
@@ -2393,7 +2394,6 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

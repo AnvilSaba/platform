@@ -11,7 +11,7 @@ cfb8 = "0.9.1"
 fastnbt = "2.6"
 mc_protocol = { version = "2.2.0", default-features = false }
 nutype = { version = "0.8.0", features = [ "serde" ] }
-reqwest = { version = "0.13", features = [ "blocking", "json", "query" ] }
+reqwest = { version = "0.13", features = [ "json", "query" ] }
 rsa = { version = "0.9", features = [ "getrandom" ] }
 serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
@@ -19,5 +19,6 @@ serde_with = { version = "3", features = [ "json" ] }
 sha1 = "0.11"
 uuid = { version = "1", features = [ "serde", "v4" ] }
 sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "uuid" ] }
-tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }
+tokio = { version = "1", features = [ "rt-multi-thread", "macros", "net", "io-util", "time", "fs" ] }
 platform-database = { path = "../../crates/platform-database" }
+toml = "1"

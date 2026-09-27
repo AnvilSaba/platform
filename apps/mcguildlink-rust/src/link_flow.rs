@@ -1,11 +1,9 @@
-use std::{
-    io::ErrorKind,
-    time::{Duration, Instant},
-};
+use std::{io::ErrorKind, time::Duration};
+use tokio::time::Instant;
 
 use crate::{
     AppResult, invalid,
-    link_store::LinkResult,
+    link_store::{CodeLinker, LinkResult},
     protocol::{
         Connection,
         connection::decode_exact,
@@ -17,36 +15,38 @@ use crate::{
 
 const INPUT_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(crate) fn configuration<L>(connection: &mut Connection, player: &SessionProfile, linker: &L) -> AppResult<()>
+pub(crate) async fn configuration<L>(connection: &mut Connection, player: &SessionProfile, linker: &L) -> AppResult<()>
 where
-    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
+    L: CodeLinker,
 {
-    configuration_with_timeout(connection, player, INPUT_TIMEOUT, linker)
+    configuration_with_timeout(connection, player, INPUT_TIMEOUT, linker).await
 }
 
-pub(crate) fn configuration_with_timeout<L>(
+pub(crate) async fn configuration_with_timeout<L>(
     connection: &mut Connection,
     player: &SessionProfile,
     timeout: Duration,
     linker: &L,
 ) -> AppResult<()>
 where
-    L: Fn(&str, &SessionProfile) -> AppResult<LinkResult>,
+    L: CodeLinker,
 {
-    connection.send(&ConfigurationDialog {
-        document: dialog::Dialog::Code {
-            initial: "",
-            error: None,
-        }
-        .wire(),
-    })?;
+    connection
+        .send(&ConfigurationDialog {
+            document: dialog::Dialog::Code {
+                initial: "",
+                error: None,
+            }
+            .wire(),
+        })
+        .await?;
     let deadline = Instant::now() + timeout;
     let mut completed = false;
     loop {
-        let packet = match connection.read_until(deadline) {
+        let packet = match connection.read_until(deadline).await {
             Ok(packet) => packet,
             Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-                connection.send(&ConfigurationDisconnect { reason: NbtTextComponent::new("コードを入力する時間が長過ぎたため、切断されました。もう一度接続してコードを入力してください。すでにコードを発行している場合、コードの再発行は不要です。") })?;
+                connection.send(&ConfigurationDisconnect { reason: NbtTextComponent::new("コードを入力する時間が長過ぎたため、切断されました。もう一度接続してコードを入力してください。すでにコードを発行している場合、コードの再発行は不要です。") }).await?;
                 return Ok(());
             }
             Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(()),
@@ -65,9 +65,11 @@ where
                 let action = click.action;
                 let code = click.data.code.unwrap_or_default();
                 if action == dialog::DONE_ID && completed {
-                    connection.send(&ConfigurationDisconnect {
-                        reason: NbtTextComponent::new("正常に切断されました。"),
-                    })?;
+                    connection
+                        .send(&ConfigurationDisconnect {
+                            reason: NbtTextComponent::new("正常に切断されました。"),
+                        })
+                        .await?;
                     return Ok(());
                 }
                 if action != dialog::SUBMIT_ID || completed {
@@ -80,13 +82,15 @@ where
                     player.id
                 );
                 if code.len() > 8 {
-                    connection.send(&ConfigurationDialog {
-                        document: dialog::Dialog::Code {
-                            initial: "",
-                            error: Some("無効なコードです。もう一度入力してください。"),
-                        }
-                        .wire(),
-                    })?;
+                    connection
+                        .send(&ConfigurationDialog {
+                            document: dialog::Dialog::Code {
+                                initial: "",
+                                error: Some("無効なコードです。もう一度入力してください。"),
+                            }
+                            .wire(),
+                        })
+                        .await?;
                     continue;
                 }
                 let next = if code.is_empty() {
@@ -95,7 +99,7 @@ where
                         error: Some("コードが空です。もう一度入力してください。"),
                     }
                 } else {
-                    match linker(code, player)? {
+                    match linker.consume(code, player).await? {
                         LinkResult::Success(username) => {
                             completed = true;
                             dialog::Dialog::Success {
@@ -116,7 +120,7 @@ where
                         },
                     }
                 };
-                connection.send(&ConfigurationDialog { document: next.wire() })?;
+                connection.send(&ConfigurationDialog { document: next.wire() }).await?;
             }
             ConfigurationFinishAcknowledged::PACKET_ID => return Err(invalid("Play transition is forbidden")),
             _ => return Err(invalid("unexpected Configuration packet")),

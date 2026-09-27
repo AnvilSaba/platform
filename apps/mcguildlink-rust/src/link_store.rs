@@ -1,9 +1,8 @@
-use std::sync::Arc;
-
 use sqlx::PgPool;
-use tokio::runtime::Runtime;
 
 use crate::{AppResult, session::SessionProfile};
+
+mod queries;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260927120000];
@@ -11,7 +10,10 @@ const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260927120000];
 #[derive(Clone)]
 pub(crate) struct LinkStore {
     pool: PgPool,
-    runtime: Arc<Runtime>,
+}
+
+pub(crate) trait CodeLinker: Send + Sync {
+    async fn consume(&self, code: &str, player: &SessionProfile) -> AppResult<LinkResult>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -23,103 +25,50 @@ pub(crate) enum LinkResult {
 }
 
 impl LinkStore {
-    pub(crate) fn connect() -> AppResult<Self> {
-        let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().enable_all().build()?);
-        let pool = runtime.block_on(platform_database::DatabaseConfig::from_env()?.connect())?;
-        runtime.block_on(platform_database::check_migrations(
-            &pool,
-            &MIGRATIONS,
-            REQUIRED_MIGRATIONS,
-        ))?;
-        Ok(Self { pool, runtime })
+    pub(crate) async fn connect() -> AppResult<Self> {
+        let pool = platform_database::DatabaseConfig::from_env()?.connect().await?;
+        platform_database::check_migrations(&pool, &MIGRATIONS, REQUIRED_MIGRATIONS).await?;
+        Ok(Self { pool })
     }
+}
 
-    pub(crate) fn consume(&self, code: &str, player: &SessionProfile) -> AppResult<LinkResult> {
-        Ok(self.runtime.block_on(consume(&self.pool, code, player))?)
+impl CodeLinker for LinkStore {
+    async fn consume(&self, code: &str, player: &SessionProfile) -> AppResult<LinkResult> {
+        Ok(consume(&self.pool, code, player).await?)
     }
 }
 
 async fn consume(pool: &PgPool, code: &str, player: &SessionProfile) -> Result<LinkResult, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", code)
-        .execute(&mut *tx)
-        .await?;
-    let request = sqlx::query!(
-        "SELECT d.id, d.user_id::text AS \"user_id!\", d.last_known_username \
-         FROM mcguildlink.link_requests r \
-         JOIN mcguildlink.discord_accounts d ON d.id = r.discord_account_id \
-         WHERE r.code = $1",
-        code
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
+    queries::lock_code(&mut tx, code).await?;
+    let request = queries::find_request(&mut tx, code).await?;
     let Some(request) = request else {
         return Ok(LinkResult::InvalidCode);
     };
-    let discord_id = request.id;
-    let user_id = request.user_id;
-    let username = request.last_known_username;
-
-    let blocked: bool = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_discord_accounts WHERE discord_account_id = $1) AS \"blocked!\"",
-        discord_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if blocked {
+    if queries::is_discord_blocked(&mut tx, request.discord_id).await? {
         return Ok(LinkResult::Blocked);
     }
 
-    let minecraft_id: i64 = sqlx::query_scalar!(
-        "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ($1, $2) \
-         ON CONFLICT (uuid) DO UPDATE SET last_known_name = EXCLUDED.last_known_name RETURNING id",
-        player.id,
-        player.name.as_ref()
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let blocked: bool = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT FROM mcguildlink.blocked_minecraft_accounts WHERE minecraft_account_id = $1) AS \"blocked!\"",
-        minecraft_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if blocked {
+    let minecraft_id = queries::upsert_minecraft(&mut tx, player.id, player.name.as_ref()).await?;
+    if queries::is_minecraft_blocked(&mut tx, minecraft_id).await? {
         return Ok(LinkResult::Blocked);
     }
-
-    let linked: bool = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT FROM mcguildlink.account_links WHERE discord_account_id = $1 AND minecraft_account_id = $2) AS \"linked!\"",
-        discord_id,
-        minecraft_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if linked {
+    if queries::is_linked(&mut tx, request.discord_id, minecraft_id).await? {
         return Ok(LinkResult::AlreadyLinked);
     }
 
-    sqlx::query!("INSERT INTO mcguildlink.account_links (discord_account_id, minecraft_account_id) VALUES ($1, $2)", discord_id, minecraft_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query!("DELETE FROM mcguildlink.link_requests WHERE discord_account_id = $1", discord_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query!(
-        "INSERT INTO mcguildlink.audit_logs \
-         (event_type, actor_type, actor_minecraft_uuid, actor_minecraft_name, \
-          target_discord_user_id, target_discord_username, target_minecraft_uuid, target_minecraft_name) \
-         VALUES ('link_succeeded', 'minecraft_player', $1, $2, $3::text::numeric, $4, $1, $2)",
+    queries::insert_link(&mut tx, request.discord_id, minecraft_id).await?;
+    queries::delete_request(&mut tx, request.discord_id).await?;
+    queries::record_link(
+        &mut tx,
         player.id,
         player.name.as_ref(),
-        &user_id,
-        &username
+        &request.user_id,
+        &request.username,
     )
-    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(LinkResult::Success(username))
+    Ok(LinkResult::Success(request.username))
 }
 
 #[cfg(test)]
