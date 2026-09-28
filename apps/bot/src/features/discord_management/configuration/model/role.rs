@@ -16,10 +16,7 @@ pub(crate) struct RawRoleDefinition {
 
 #[derive(Debug)]
 pub(crate) enum RoleDefinition {
-    Managed {
-        settings_sets: Vec<RoleSettingsSetId>,
-        attributes: RoleAttributes,
-    },
+    Managed { attributes: RoleAttributes },
     Reference,
     Absent,
 }
@@ -31,7 +28,6 @@ impl RoleDefinition {
         settings_sets: &BTreeMap<RoleSettingsSetId, RoleAttributes>,
         vocabulary: &PermissionVocabulary,
     ) -> Result<Self, ManagementError> {
-        let attributes = raw.attributes.resolve(vocabulary, &format!("Role {logical_id}"))?;
         let mut seen = BTreeSet::new();
         for settings_set in &raw.settings_sets {
             if !seen.insert(settings_set) {
@@ -45,6 +41,16 @@ impl RoleDefinition {
                 )));
             }
         }
+        let mut attributes = RoleAttributes::default();
+        for settings_set in &raw.settings_sets {
+            attributes.merge(
+                settings_sets
+                    .get(settings_set)
+                    .expect("検証済み Role 定義は既知の設定セットだけを参照します"),
+            );
+        }
+        let direct_attributes = raw.attributes.resolve(vocabulary, &format!("Role {logical_id}"))?;
+        attributes.merge(&direct_attributes);
         match (raw.ensure, raw.mode) {
             (RoleEnsure::Absent, RoleMode::Managed) if raw.settings_sets.is_empty() && attributes.is_empty() => {
                 Ok(Self::Absent)
@@ -58,10 +64,7 @@ impl RoleDefinition {
             (RoleEnsure::Present, RoleMode::Reference) => Err(ManagementError::InvalidDefinition(format!(
                 "参照専用 Role {logical_id} には管理属性を指定できません"
             ))),
-            (RoleEnsure::Present, RoleMode::Managed) => Ok(Self::Managed {
-                settings_sets: raw.settings_sets,
-                attributes,
-            }),
+            (RoleEnsure::Present, RoleMode::Managed) => Ok(Self::Managed { attributes }),
         }
     }
 
@@ -75,13 +78,6 @@ impl RoleDefinition {
 
     pub(crate) fn is_managed(&self) -> bool {
         matches!(self, Self::Managed { .. })
-    }
-
-    pub(crate) fn settings_sets(&self) -> &[RoleSettingsSetId] {
-        match self {
-            Self::Managed { settings_sets, .. } => settings_sets,
-            Self::Reference | Self::Absent => &[],
-        }
     }
 
     pub(crate) fn attributes(&self) -> &RoleAttributes {
