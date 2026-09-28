@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::app::AppError;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Link {
     pub discord_user_id: String,
     pub discord_name: String,
@@ -36,7 +36,7 @@ impl LinkManagement {
     }
 
     async fn list(&self, user_id: Option<u64>, uuid: Option<Uuid>) -> Result<Vec<Link>, AppError> {
-        let rows = sqlx::query(
+        let links = sqlx::query_as::<_, Link>(
             "SELECT d.user_id::text AS discord_user_id, d.last_known_username AS discord_name, \
                     m.uuid AS minecraft_uuid, m.last_known_name AS minecraft_name, l.linked_at \
              FROM mcguildlink.account_links l \
@@ -49,17 +49,7 @@ impl LinkManagement {
         .bind(uuid)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(Link {
-                    discord_user_id: row.try_get("discord_user_id")?,
-                    discord_name: row.try_get("discord_name")?,
-                    minecraft_uuid: row.try_get("minecraft_uuid")?,
-                    minecraft_name: row.try_get("minecraft_name")?,
-                    linked_at: row.try_get("linked_at")?,
-                })
-            })
-            .collect()
+        Ok(links)
     }
 
     pub async fn unlink(&self, user_id: u64, uuid: Uuid) -> Result<bool, AppError> {
@@ -88,27 +78,18 @@ impl LinkManagement {
         let Some(account_id) = account_id else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query(
-            "SELECT m.uuid AS minecraft_uuid, m.last_known_name AS minecraft_name, l.linked_at \
+        let links = sqlx::query_as::<_, Link>(
+            "SELECT $2::text AS discord_user_id, $3::text AS discord_name, \
+                    m.uuid AS minecraft_uuid, m.last_known_name AS minecraft_name, l.linked_at \
              FROM mcguildlink.account_links l \
              JOIN mcguildlink.minecraft_accounts m ON m.id = l.minecraft_account_id \
              WHERE l.discord_account_id = $1 ORDER BY l.linked_at DESC, m.uuid",
         )
         .bind(account_id)
+        .bind(user_id.to_string())
+        .bind(username)
         .fetch_all(&mut *tx)
         .await?;
-        let links: Vec<Link> = rows
-            .into_iter()
-            .map(|row| {
-                Ok(Link {
-                    discord_user_id: user_id.to_string(),
-                    discord_name: username.to_owned(),
-                    minecraft_uuid: row.try_get("minecraft_uuid")?,
-                    minecraft_name: row.try_get("minecraft_name")?,
-                    linked_at: row.try_get("linked_at")?,
-                })
-            })
-            .collect::<Result<_, sqlx::Error>>()?;
         sqlx::query("DELETE FROM mcguildlink.account_links WHERE discord_account_id = $1")
             .bind(account_id)
             .execute(&mut *tx)
