@@ -100,7 +100,7 @@ fn is_not_modified(request_headers: &HeaderMap, cached: &CachedWhitelist, modifi
             })
         });
     }
-    cached.version.ims_safe
+    cached.version.if_modified_since_safe
         && request_headers.get(header::IF_MODIFIED_SINCE).is_some_and(|value| {
             value
                 .to_str()

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT revision, last_modified_at, ims_safe\n         FROM mcguildlink.whitelist_revision WHERE singleton",
+  "query": "SELECT revision, last_modified_at, if_modified_since_safe\n         FROM mcguildlink.whitelist_revision WHERE singleton",
   "describe": {
     "columns": [
       {
@@ -15,7 +15,7 @@
       },
       {
         "ordinal": 2,
-        "name": "ims_safe",
+        "name": "if_modified_since_safe",
         "type_info": "Bool"
       }
     ],
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "b2cddda99d75afcf591e4f43dfff31d2eff3818f8d2b0698234688a906349f52"
+  "hash": "9be4e2ee1c5cd0f48d46d112a40eb63cbe21de73a8c724718b654031a6684094"
 }

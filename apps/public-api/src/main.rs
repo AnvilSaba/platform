@@ -3,7 +3,7 @@ use std::error::Error;
 use platform_database::{DatabaseConfig, check_migrations};
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
-const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260928120000];
+const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260928120000, 20260928180000];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {

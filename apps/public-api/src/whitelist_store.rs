@@ -7,7 +7,7 @@ use uuid::Uuid;
 pub(crate) struct WhitelistVersion {
     pub(crate) revision: i64,
     pub(crate) last_modified_at: DateTime<Utc>,
-    pub(crate) ims_safe: bool,
+    pub(crate) if_modified_since_safe: bool,
 }
 
 #[derive(Serialize)]
@@ -21,29 +21,25 @@ pub(crate) struct WhitelistSnapshot {
     pub(crate) entries: Vec<WhitelistEntry>,
 }
 
-pub(crate) async fn version(pool: &PgPool) -> Result<WhitelistVersion, sqlx::Error> {
-    read_version(pool).await
-}
-
 /// 更新番号と一覧を同じ PostgreSQL スナップショットから取得する。
 pub(crate) async fn snapshot(pool: &PgPool) -> Result<WhitelistSnapshot, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let version = read_version(&mut *transaction).await?;
+    let version = version(&mut *transaction).await?;
     let entries = read_entries(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(WhitelistSnapshot { version, entries })
 }
 
-async fn read_version<'e, E>(executor: E) -> Result<WhitelistVersion, sqlx::Error>
+pub(crate) async fn version<'e, E>(executor: E) -> Result<WhitelistVersion, sqlx::Error>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     sqlx::query_as!(
         WhitelistVersion,
-        "SELECT revision, last_modified_at, ims_safe
+        "SELECT revision, last_modified_at, if_modified_since_safe
          FROM mcguildlink.whitelist_revision WHERE singleton",
     )
     .fetch_one(executor)

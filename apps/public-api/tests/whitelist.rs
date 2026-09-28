@@ -107,11 +107,12 @@ async fn same_second_change_and_db_failure_never_return_304(pool: PgPool) {
     let discord = add_discord(&pool, 1).await;
     let minecraft = add_minecraft(&pool, FIRST, "First").await;
     link(&pool, discord, minecraft).await;
-    let (status, _, body) = request(&app, Some(("if-modified-since", &last_modified))).await;
+    let (status, headers, body) = request(&app, Some(("if-modified-since", &last_modified))).await;
     assert_eq!(
         (status, body),
         (StatusCode::OK, json!([{"uuid": FIRST, "name": "First"}]))
     );
+    assert_eq!(headers[header::LAST_MODIFIED], last_modified);
 
     sqlx::query("REVOKE SELECT ON mcguildlink.whitelist_revision FROM platform_public_api_runtime")
         .execute(&pool)
