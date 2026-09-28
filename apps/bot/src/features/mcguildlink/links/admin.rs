@@ -1,5 +1,5 @@
 use super::{
-    presentation::{Scope, load, page, save_snapshot},
+    presentation::{ListPage, Scope, load, page, save_snapshot},
     repository::DatabaseAccountLinksRepository,
 };
 use crate::{
@@ -7,7 +7,7 @@ use crate::{
     utils::create_safe_allowed_mentions,
 };
 use poise::CreateReply;
-use serenity::all::User;
+use serenity::all::{MessageFlags, User};
 use uuid::Uuid;
 
 async fn moderator(ctx: AppApplicationContext<'_>) -> Result<bool, AppError> {
@@ -29,15 +29,14 @@ async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Resu
     let repository = DatabaseAccountLinksRepository::new(data.database.clone());
     let links = load(&repository, scope).await?;
     let snapshot = save_snapshot(ctx.interaction.id.get(), ctx.author().id.get(), scope, links);
-    let (content, components) = page(ctx.interaction.id.get(), &snapshot, 0);
-    ctx.send(
-        CreateReply::default()
-            .content(content)
-            .components(components)
-            .ephemeral(true)
-            .allowed_mentions(create_safe_allowed_mentions()),
-    )
-    .await?;
+    let reply = CreateReply::default()
+        .ephemeral(true)
+        .allowed_mentions(create_safe_allowed_mentions());
+    let reply = match page(ctx.interaction.id.get(), &snapshot, 0) {
+        ListPage::Empty(content) => reply.content(content),
+        ListPage::Components(components) => reply.flags(MessageFlags::IS_COMPONENTS_V2).components(components),
+    };
+    ctx.send(reply).await?;
     Ok(())
 }
 

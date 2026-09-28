@@ -1,6 +1,6 @@
 use super::{
     ports::AccountLinksRepository,
-    presentation::{Scope, get_snapshot, page, save_snapshot},
+    presentation::{ListPage, Scope, get_snapshot, page, save_snapshot},
     repository::DatabaseAccountLinksRepository,
 };
 use crate::features::mcguildlink::test_support;
@@ -28,6 +28,9 @@ async fn page_uses_initial_snapshot_after_a_link_changes(pool: PgPool) {
     );
     assert!(store.by_discord(10).await.unwrap().is_empty());
     let snapshot = get_snapshot(1000).unwrap();
-    assert!(page(1000, &snapshot, 0).0.contains("First"));
+    let ListPage::Components(components) = page(1000, &snapshot, 0) else {
+        panic!("expected a populated list");
+    };
+    assert!(serde_json::to_string(&components).unwrap().contains("First"));
     assert_eq!(snapshot.links.len(), 1);
 }

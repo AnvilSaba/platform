@@ -1,6 +1,6 @@
 use super::{
     ports::AccountLinksRepository,
-    presentation::{Scope, get_snapshot, load, page, save_snapshot},
+    presentation::{ListPage, Scope, get_snapshot, load, page, save_snapshot},
 };
 use crate::{
     app::AppError,
@@ -8,8 +8,8 @@ use crate::{
 };
 use serenity::{
     all::{
-        ComponentInteraction, Context, EditInteractionResponse, LabelComponent, ModalComponent, ModalInteraction,
-        RoleId,
+        ComponentInteraction, Context, EditInteractionResponse, LabelComponent, MessageFlags, ModalComponent,
+        ModalInteraction, RoleId,
     },
     builder::{
         CreateCheckbox, CreateInteractionResponse, CreateInteractionResponseMessage, CreateLabel, CreateModal,
@@ -36,16 +36,12 @@ pub(super) async fn show_link_list(
     let scope = Scope::User(component.user.id.get());
     let links = load(store, scope).await?;
     let snapshot = save_snapshot(component.id.get(), component.user.id.get(), scope, links);
-    let (content, components) = page(component.id.get(), &snapshot, 0);
-    component
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new()
-                .content(content)
-                .components(components)
-                .allowed_mentions(create_safe_allowed_mentions()),
-        )
-        .await?;
+    let response = EditInteractionResponse::new().allowed_mentions(create_safe_allowed_mentions());
+    let response = match page(component.id.get(), &snapshot, 0) {
+        ListPage::Empty(content) => response.content(content),
+        ListPage::Components(components) => response.flags(MessageFlags::IS_COMPONENTS_V2).components(components),
+    };
+    component.edit_response(&ctx.http, response).await?;
 
     Ok(())
 }
@@ -81,23 +77,21 @@ pub(super) async fn show_page(
             .await?;
         return Ok(());
     }
-    let (content, components) = match snapshot {
+    let page = match snapshot {
         Some(snapshot) => page(snapshot_id, &snapshot, page_index),
-        None => (
-            "一覧の有効期限が切れました。もう一度開き直してください。".into(),
-            Vec::new(),
-        ),
+        None => ListPage::Components(vec![serenity::builder::CreateComponent::Container(
+            serenity::builder::CreateContainer::new(vec![serenity::builder::CreateContainerComponent::TextDisplay(
+                CreateTextDisplay::new("一覧の有効期限が切れました。もう一度開き直してください。"),
+            )]),
+        )]),
+    };
+    let response = CreateInteractionResponseMessage::new().allowed_mentions(create_safe_allowed_mentions());
+    let response = match page {
+        ListPage::Empty(content) => response.content(content).components(Vec::new()),
+        ListPage::Components(components) => response.flags(MessageFlags::IS_COMPONENTS_V2).components(components),
     };
     component
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .content(content)
-                    .components(components)
-                    .allowed_mentions(create_safe_allowed_mentions()),
-            ),
-        )
+        .create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(response))
         .await?;
 
     Ok(())
