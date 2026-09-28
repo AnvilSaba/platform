@@ -81,12 +81,12 @@ pub(super) enum ListPage {
     Components(Vec<CreateComponent<'static>>),
 }
 
-fn separator(large: bool) -> CreateContainerComponent<'static> {
-    CreateContainerComponent::Separator(if large {
-        CreateSeparator::new().spacing(SeparatorSpacingSize::Large)
-    } else {
-        CreateSeparator::new().divider(false)
-    })
+fn header_separator() -> CreateContainerComponent<'static> {
+    CreateContainerComponent::Separator(CreateSeparator::new().divider(false))
+}
+
+fn large_divider() -> CreateContainerComponent<'static> {
+    CreateContainerComponent::Separator(CreateSeparator::new().spacing(SeparatorSpacingSize::Large))
 }
 
 fn account_section(text: String, uuid: Uuid) -> CreateContainerComponent<'static> {
@@ -100,7 +100,7 @@ fn account_section(text: String, uuid: Uuid) -> CreateContainerComponent<'static
 }
 
 fn append_user_link(components: &mut Vec<CreateContainerComponent<'static>>, owner: u64, link: &Link) {
-    components.push(separator(true));
+    components.push(large_divider());
     components.push(account_section(
         format!("- 名前: **{}**\n- UUID: `{}`", link.minecraft_name, link.minecraft_uuid),
         link.minecraft_uuid,
@@ -115,7 +115,7 @@ fn append_user_link(components: &mut Vec<CreateContainerComponent<'static>>, own
 
 fn append_admin_link(components: &mut Vec<CreateContainerComponent<'static>>, link: &Link, first: bool) {
     if !first {
-        components.push(separator(true));
+        components.push(large_divider());
     }
     components.push(account_section(
         format!(
@@ -140,7 +140,7 @@ fn append_pagination(
     if pages <= 1 {
         return;
     }
-    components.push(separator(true));
+    components.push(large_divider());
     components.push(CreateContainerComponent::ActionRow(CreateActionRow::buttons(vec![
         CreateButton::new(format!("{PAGE_BUTTON_PREFIX}{snapshot_id}:{}", index.saturating_sub(1)))
             .label("◀")
@@ -190,7 +190,7 @@ pub(super) fn page(snapshot_id: u64, snapshot: &Snapshot, requested: usize) -> L
     };
     let mut components = vec![
         CreateContainerComponent::TextDisplay(CreateTextDisplay::new(heading)),
-        separator(false),
+        header_separator(),
     ];
     for (item, link) in links.iter().skip(index * PAGE_SIZE).take(PAGE_SIZE).enumerate() {
         match scope {
