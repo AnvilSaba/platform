@@ -1,2 +1,4 @@
+# ReFS の増分コンパイル修正 (rust-lang/rust#162366) と
+# Cargo の min-publish-age 機能を利用するため。
 [toolchain]
-channel = "1.98"
+channel = "nightly-2026-09-25"
