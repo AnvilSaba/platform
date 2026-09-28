@@ -1,3 +1,4 @@
+mod blocking;
 mod guild_membership;
 mod linking;
 mod links;
@@ -10,3 +11,4 @@ pub use panel::create_panel;
 
 #[cfg(test)]
 mod test_support;
+pub use blocking::{BlockingEventHandler, block};
