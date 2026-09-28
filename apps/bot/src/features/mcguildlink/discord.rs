@@ -10,13 +10,37 @@ use poise::CreateReply;
 use serenity::{
     all::{
         ButtonStyle, ComponentInteractionDataKind, Context, CreateActionRow, CreateButton, EditInteractionResponse,
-        FullEvent, Interaction,
+        FullEvent, Interaction, MessageFlags, ReactionType, SeparatorSpacingSize,
     },
-    builder::CreateComponent,
+    builder::{
+        CreateComponent, CreateContainer, CreateContainerComponent, CreateMessage, CreateSeparator, CreateTextDisplay,
+    },
 };
 
 const START_LINK_BUTTON_ID: &str = "start_link_button";
 pub(super) const LIST_LINK_BUTTON_ID: &str = "list_link_button";
+
+fn link_panel_message() -> CreateMessage<'static> {
+    let buttons = CreateActionRow::buttons(vec![
+        CreateButton::new(START_LINK_BUTTON_ID)
+            .label("MCアカウントと紐付ける")
+            .emoji(ReactionType::Unicode('🔗'.into()))
+            .style(ButtonStyle::Primary),
+        CreateButton::new(LIST_LINK_BUTTON_ID)
+            .label("紐付けられたアカウントを確認する")
+            .emoji(ReactionType::Unicode('📋'.into()))
+            .style(ButtonStyle::Secondary),
+    ]);
+    create_safe_message()
+        .flags(MessageFlags::IS_COMPONENTS_V2)
+        .components(vec![CreateComponent::Container(CreateContainer::new(vec![
+            CreateContainerComponent::TextDisplay(CreateTextDisplay::new(
+                "Minecraftアカウントと Discordアカウントを紐付けます。\n「MCアカウントと紐付ける」ボタンを押して、指示に従ってください。\n「紐付けられたアカウントを確認する」ボタンを押すと、現在紐付けられているアカウントの一覧を確認できます。",
+            )),
+            CreateContainerComponent::Separator(CreateSeparator::new().spacing(SeparatorSpacingSize::Large)),
+            CreateContainerComponent::ActionRow(buttons),
+        ]))])
+}
 
 #[event_handler]
 pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), AppError> {
@@ -88,12 +112,7 @@ pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError
 
     ctx.defer_ephemeral().await?;
 
-    ctx.channel_id().send_message(ctx.http(), create_safe_message()
-        .content("Minecraftアカウントと Discordアカウントを紐付けます。\n「MCアカウントと紐付ける」ボタンを押して、指示に従ってください。")
-        .components(&[CreateComponent::ActionRow(CreateActionRow::buttons(&[
-            CreateButton::new(START_LINK_BUTTON_ID).label("MCアカウントと紐付ける").style(ButtonStyle::Primary),
-            CreateButton::new(LIST_LINK_BUTTON_ID).label("紐付け一覧").style(ButtonStyle::Secondary),
-        ]))])).await?;
+    ctx.channel_id().send_message(ctx.http(), link_panel_message()).await?;
 
     ctx.send(
         CreateReply::default()

@@ -16,6 +16,7 @@ use crate::{
     features::{
         auth::{AutoKickEventHandler, KeywordAuthEventHandler},
         honeypot::handle_honeypot_event,
+        mcguildlink::LinkManagement,
         message_cache_handler::MessageCacheHandler,
         message_logging::MessageLoggingEventHandler,
         question::handle_question_event,
@@ -23,10 +24,10 @@ use crate::{
     },
 };
 
-pub fn event_handlers(config: &AppConfig) -> BotEventHandlers {
+pub fn event_handlers(config: &AppConfig, link_management: LinkManagement) -> BotEventHandlers {
     BotEventHandlers::new()
         .add(mcguildlink::handle_link_event)
-        .add(mcguildlink::handle_management_event)
+        .add(mcguildlink::LinkManagementEventHandler::new(link_management))
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)

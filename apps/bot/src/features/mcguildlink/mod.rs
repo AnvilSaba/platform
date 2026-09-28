@@ -9,7 +9,8 @@ mod service;
 mod types;
 
 pub use discord::{create_panel, handle_link_event};
-pub use management::{handle_management_event, links};
+pub use management::{LinkManagementEventHandler, links};
+pub use management_store::LinkManagement;
 
 #[cfg(test)]
 mod test_support;
