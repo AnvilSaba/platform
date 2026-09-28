@@ -36,7 +36,21 @@ impl LinkManagementEventHandler {
         username: &str,
     ) -> Result<(), AppError> {
         let configured_guild = ctx.app_config().await.mcguildlink.guild_id;
-        member_left_for_guild(&self.store, configured_guild, event_guild, user_id, username).await
+        self.handle_member_leave_for_guild(configured_guild, event_guild, user_id, username)
+            .await
+    }
+
+    pub(super) async fn handle_member_leave_for_guild(
+        &self,
+        configured_guild: GuildId,
+        event_guild: GuildId,
+        user_id: u64,
+        username: &str,
+    ) -> Result<(), AppError> {
+        if event_guild == configured_guild {
+            self.store.member_left(user_id, username).await?;
+        }
+        Ok(())
     }
 
     async fn handle_component(&self, ctx: &Context, component: &ComponentInteraction) -> Result<(), AppError> {
@@ -75,19 +89,6 @@ impl LinkManagementEventHandler {
         }
         Ok(())
     }
-}
-
-pub(super) async fn member_left_for_guild(
-    store: &LinkManagement,
-    configured_guild: GuildId,
-    event_guild: GuildId,
-    user_id: u64,
-    username: &str,
-) -> Result<(), AppError> {
-    if event_guild == configured_guild {
-        store.member_left(user_id, username).await?;
-    }
-    Ok(())
 }
 
 #[async_trait]
