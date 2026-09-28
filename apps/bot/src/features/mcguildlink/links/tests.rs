@@ -1,5 +1,5 @@
 use super::{
-    event_handler::LinkManagementEventHandler,
+    event_handler::member_left_for_guild,
     presentation::{Scope, get_snapshot, page, save_snapshot},
     store::LinkManagement,
 };
@@ -20,10 +20,8 @@ async fn other_guild_leave_keeps_links_code_and_audit_unchanged(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let bot_pool = test_support::bot_pool(&pool).await;
-    let store = LinkManagement::new(bot_pool.clone());
-    LinkManagementEventHandler::new(&bot_pool)
-        .handle_member_leave(GuildId::new(100), GuildId::new(200), 10, "alice")
+    let store = LinkManagement::new(test_support::bot_pool(&pool).await);
+    member_left_for_guild(&store, GuildId::new(100), GuildId::new(200), 10, "alice")
         .await
         .unwrap();
     assert_eq!(store.by_discord(10).await.unwrap().len(), 1);
