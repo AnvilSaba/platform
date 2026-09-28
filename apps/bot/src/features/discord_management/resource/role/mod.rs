@@ -6,13 +6,13 @@ use super::super::{
         everyone_logical_id, resolve_role_id,
     },
     domain::ManagementError,
-    port::{RoleCatalog, RoleCreate, RoleSnapshot, RoleUpdate},
+    port::{RoleCatalog, RoleCreate, RolePositionUpdate, RoleSnapshot, RoleUpdate},
 };
 use crate::features::discord_management::ids::{RoleId, RoleLogicalId, RoleSettingsSetId};
 
 pub(crate) mod apply;
 
-use super::{display_quoted_string, render_change_line};
+use super::{compare_role_order, display_quoted_string, render_change_line, stable_relative_order};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
@@ -255,9 +255,29 @@ impl Change {
 pub(crate) struct Plan {
     changes: BTreeMap<RoleLogicalId, Change>,
     create_desired: BTreeMap<RoleLogicalId, RoleCreate>,
+    order: Option<OrderPlan>,
 }
 
 pub(crate) type RolePlan = Plan;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderPlan {
+    requested: Vec<RoleLogicalId>,
+    updates: Vec<RolePositionUpdate>,
+    expected_order: Vec<RoleId>,
+}
+
+impl OrderPlan {
+    #[cfg(test)]
+    pub(crate) fn updates(&self) -> &[RolePositionUpdate] {
+        &self.updates
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expected_order(&self) -> &[RoleId] {
+        &self.expected_order
+    }
+}
 
 impl Plan {
     pub(crate) fn len(&self) -> usize {
@@ -265,7 +285,24 @@ impl Plan {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.changes.is_empty()
+        self.changes.is_empty() && self.order.is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn order(&self) -> Option<&OrderPlan> {
+        self.order.as_ref()
+    }
+
+    pub(super) fn has_order(&self) -> bool {
+        self.order.is_some()
+    }
+
+    pub(super) fn take_order(&mut self) -> Option<OrderPlan> {
+        self.order.take()
+    }
+
+    pub(super) fn set_order(&mut self, order: Option<OrderPlan>) {
+        self.order = order;
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&RoleLogicalId, &Change)> {
@@ -320,6 +357,18 @@ impl Plan {
                     "- 削除: {logical_id} ({discord_id})\n  影響: Guild から Role が削除され、付与済みの割り当ても失われます。\n"
                 )),
             }
+        }
+        if let Some(order) = &self.order {
+            output.push_str("- Role の相対順序: ");
+            output.push_str(
+                &order
+                    .requested
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+            );
+            output.push('\n');
         }
         output
     }
@@ -456,11 +505,9 @@ pub(crate) fn build_plan(
                     "@everyone Role では権限だけを管理できます".to_owned(),
                 ));
             }
-            if desired.is_managed() && !actual.manageable {
-                return Err(ManagementError::InvalidState(format!(
-                    "Role {logical_id} の Snowflake {discord_id} は Bot が管理できません"
-                )));
-            }
+            // @everyone は通常 Role の階層管理対象外ですが、基底権限の更新は
+            // 専用 endpoint で許可されるため、snapshot の manageable 判定から
+            // 独立して扱います。
             add_update(&mut plan, logical_id, discord_id, actual, &desired_attributes, catalog)?;
             continue;
         }
@@ -509,7 +556,169 @@ pub(crate) fn build_plan(
         );
     }
 
+    plan.order = build_order_plan(definition, state, catalog)?;
+
     Ok(plan)
+}
+
+fn build_order_plan(
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &RoleCatalog,
+) -> Result<Option<OrderPlan>, ManagementError> {
+    let Some(order) = definition.order.as_ref() else {
+        return Ok(None);
+    };
+    if order.roles.is_empty() {
+        return Ok(None);
+    }
+
+    let actual = catalog
+        .roles
+        .iter()
+        .map(|role| (role.id, role))
+        .collect::<BTreeMap<_, _>>();
+    let mut current = catalog.roles.iter().map(|role| role.id).collect::<Vec<_>>();
+    let everyone_id = RoleId::new(state.guild_id.get());
+    current.sort_by(|left, right| compare_role_order(actual[left], actual[right], everyone_id));
+
+    let mut requested = Vec::with_capacity(order.roles.len());
+    let mut fixed = BTreeSet::new();
+    fixed.extend(
+        current
+            .iter()
+            .copied()
+            .filter(|discord_id| !actual[discord_id].manageable),
+    );
+    // @everyone は Discord が特別扱いする固定 anchor です。fake/adapter の
+    // manageable 判定に依存せず、定義に列挙されない場合も直接移動対象に
+    // しないで、実在する Guild の末尾位置を保ちます。
+    if actual.contains_key(&everyone_id) {
+        fixed.insert(everyone_id);
+    }
+    let mut deferred = false;
+    let mut projected_missing = Vec::new();
+    let mut next_placeholder = u64::MAX - 1;
+    for logical_id in &order.roles {
+        let definition = definition
+            .roles
+            .get(logical_id)
+            .expect("order.roles は DefinitionFile の検証済み宣言だけを参照します");
+        let discord_id = if *logical_id == everyone_logical_id() {
+            RoleId::new(state.guild_id.get())
+        } else if let Some(discord_id) = state.roles.get(logical_id).copied() {
+            discord_id
+        } else {
+            if definition.is_reference() {
+                return Err(ManagementError::InvalidState(format!(
+                    "order.roles の参照専用 Role {logical_id} の対応がありません"
+                )));
+            }
+            let placeholder = loop {
+                let candidate = RoleId::new(next_placeholder);
+                next_placeholder = next_placeholder.checked_sub(1).ok_or_else(|| {
+                    ManagementError::InvalidDefinition(
+                        "order.roles の未作成 Role を投影する ID を確保できません".to_owned(),
+                    )
+                })?;
+                if !actual.contains_key(&candidate) && !projected_missing.contains(&candidate) {
+                    break candidate;
+                }
+            };
+            projected_missing.push(placeholder);
+            deferred = true;
+            requested.push(placeholder);
+            continue;
+        };
+        let Some(role) = actual.get(&discord_id).copied() else {
+            return Err(ManagementError::InvalidState(format!(
+                "order.roles の Role {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
+        };
+        if definition.is_managed() && *logical_id != everyone_logical_id() && !role.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "order.roles の Role {logical_id} は Bot の階層より上位または管理対象外のため移動できません"
+            )));
+        }
+        if definition.is_reference() || *logical_id == everyone_logical_id() || !role.manageable {
+            fixed.insert(discord_id);
+        }
+        requested.push(discord_id);
+    }
+
+    for (logical_id, role) in &definition.roles {
+        let Some(discord_id) = (if *logical_id == everyone_logical_id() {
+            Some(RoleId::new(state.guild_id.get()))
+        } else {
+            state.roles.get(logical_id).copied()
+        }) else {
+            continue;
+        };
+        if role.is_reference() {
+            fixed.insert(discord_id);
+        }
+    }
+
+    if deferred {
+        // Discord の新規 Role は既存 Role の下、@everyone の直上に作成されるため、
+        // その位置へ未作成 Role を投影してから固定 anchor との循環を診断します。
+        let mut projected_current = current.clone();
+        let everyone_index = projected_current
+            .iter()
+            .position(|discord_id| *discord_id == everyone_id)
+            .unwrap_or(projected_current.len());
+        projected_current.splice(everyone_index..everyone_index, projected_missing.iter().copied());
+        stable_relative_order(&projected_current, &requested, &fixed).map_err(|()| {
+            ManagementError::InvalidDefinition(
+                "order.roles は参照専用 Role、@everyone、Role 階層の固定位置と両立しません".to_owned(),
+            )
+        })?;
+        return Ok(Some(OrderPlan {
+            requested: order.roles.clone(),
+            updates: Vec::new(),
+            expected_order: Vec::new(),
+        }));
+    }
+
+    let desired = stable_relative_order(&current, &requested, &fixed).map_err(|()| {
+        ManagementError::InvalidDefinition(
+            "order.roles は参照専用 Role、@everyone、Role 階層の固定位置と両立しません".to_owned(),
+        )
+    })?;
+    if desired == current {
+        return Ok(None);
+    }
+
+    let mut current_indices = BTreeMap::new();
+    for (index, discord_id) in current.iter().copied().enumerate() {
+        current_indices.insert(discord_id, index);
+    }
+    let mut desired_indices = BTreeMap::new();
+    for (index, discord_id) in desired.iter().copied().enumerate() {
+        desired_indices.insert(discord_id, index);
+    }
+    let mut updates = Vec::new();
+    for discord_id in current.iter().copied() {
+        if fixed.contains(&discord_id)
+            || !requested.contains(&discord_id)
+            || current_indices[&discord_id] == desired_indices[&discord_id]
+        {
+            continue;
+        }
+        let position = i16::try_from(desired.len() - 1 - desired_indices[&discord_id]).map_err(|_| {
+            ManagementError::InvalidDefinition("Role の数が Discord の position 範囲を超えています".to_owned())
+        })?;
+        updates.push(RolePositionUpdate {
+            role_id: discord_id,
+            position,
+        });
+    }
+
+    Ok(Some(OrderPlan {
+        requested: order.roles.clone(),
+        updates,
+        expected_order: desired,
+    }))
 }
 
 fn add_update(
@@ -530,4 +739,10 @@ fn add_update(
         plan.insert(logical_id.clone(), Change::Update { discord_id, attributes });
     }
     Ok(())
+}
+
+pub(super) fn ordered_role_ids(catalog: &RoleCatalog, everyone_id: RoleId) -> Vec<RoleId> {
+    let mut roles = catalog.roles.iter().collect::<Vec<_>>();
+    roles.sort_by(|left, right| compare_role_order(left, right, everyone_id));
+    roles.into_iter().map(|role| role.id).collect()
 }

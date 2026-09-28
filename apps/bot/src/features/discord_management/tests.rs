@@ -57,6 +57,7 @@ impl RoleSource for StatefulFakeRoleSource {
 fn role(id: &str, name: &str) -> RoleSnapshot {
     RoleSnapshot {
         id: id.parse().unwrap(),
+        position: 0,
         manageable: true,
         name: name.to_owned(),
         color: Color::default(),
@@ -99,6 +100,34 @@ fn guild_id(value: u64) -> GuildId {
 fn test_permission_vocabulary() -> PermissionVocabulary {
     PermissionVocabulary::from_names(["MANAGE_MESSAGES", "MANAGE_ROLES", "SEND_MESSAGES", "VIEW_CHANNEL"])
         .expect("テスト用の権限語彙は字句的に妥当です")
+}
+
+/// 未作成 managed Role も含め、固定 anchor をまたぐ不可能な順序を作成前に診断する。
+#[tokio::test]
+async fn role_order_rejects_uncreated_role_crossing_fixed_anchor_before_create() {
+    let mut anchor = role("200", "固定 anchor");
+    anchor.position = 2;
+    anchor.manageable = false;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![anchor, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.new_role]
+        name = "新規"
+        [order]
+        roles = ["new_role", "anchor"]
+    "#;
+
+    let error = plan_roles(&source, guild_id(100), definition, &state("100", r#"{"anchor":"200"}"#))
+        .await
+        .expect_err("未作成 Role が固定 anchor を越える順序は作成前に拒否します");
+    assert!(matches!(error, ManagementError::InvalidDefinition(message) if message.contains("固定位置")));
 }
 
 fn known_permission(name: &str) -> KnownPermission {
@@ -944,6 +973,32 @@ async fn re_export_preserves_logical_ids_from_input_state() {
     );
     assert_eq!(state.roles[&logical_id("moderator")].get(), 200);
     assert!(!definition.roles.contains_key(&logical_id("role_200")));
+}
+
+/// 再exportで引き継いだ管理不能 Role は、属性を固定せず参照専用として出力する。
+#[tokio::test]
+async fn re_export_keeps_unmanageable_role_reference_only() {
+    let mut external_role = role("200", "外部側の名称");
+    external_role.manageable = false;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![external_role],
+    };
+    let previous_state = r#"{
+        "schema_version": 1,
+        "guild_id": "100",
+        "roles": { "external": "200" }
+    }"#;
+
+    let files = export_roles(&source, guild_id(100), Some(previous_state))
+        .await
+        .unwrap();
+    let definition = parse_definition(&files.definition_toml).unwrap();
+    let role_definition = &definition.roles[&logical_id("external")];
+
+    assert!(role_definition.is_reference());
+    assert!(role_definition.attributes().name.is_none());
+    assert!(role_definition.attributes().color.is_none());
 }
 
 /// 同じGuild状態から生成したdefinitionとstateをそのままplanすると差分が生じないことを保証する。
@@ -1858,41 +1913,42 @@ fn reference_channel_rejects_settings_sets_while_parsing() {
 /// raw 属性の単項目制約は resolve の手書き判定へ渡す前に validator で診断する。
 #[test]
 fn definition_validates_raw_attribute_values_with_validator() {
-    let empty_role_name = parse_definition(
-        "schema_version = 1\n[roles.moderator]\nname = \"\"\n",
-    )
-    .unwrap_err();
-    assert!(matches!(empty_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("1文字")));
+    let empty_role_name = parse_definition("schema_version = 1\n[roles.moderator]\nname = \"\"\n").unwrap_err();
+    assert!(
+        matches!(empty_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("1文字"))
+    );
 
     let long_role_name = "a".repeat(101);
     let long_role_name = parse_definition(&format!(
         "schema_version = 1\n[roles.moderator]\nname = \"{long_role_name}\"\n",
     ))
     .unwrap_err();
-    assert!(matches!(long_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100")));
+    assert!(
+        matches!(long_role_name, ManagementError::InvalidDefinition(message) if message.contains("name") && message.contains("100"))
+    );
 
-    let invalid_auto_archive = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\ndefault_auto_archive_minutes = 61\n",
-    )
-    .unwrap_err();
-    assert!(matches!(invalid_auto_archive, ManagementError::InvalidDefinition(message) if message.contains("default_auto_archive_minutes") && message.contains("60")));
+    let invalid_auto_archive =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\ndefault_auto_archive_minutes = 61\n")
+            .unwrap_err();
+    assert!(
+        matches!(invalid_auto_archive, ManagementError::InvalidDefinition(message) if message.contains("default_auto_archive_minutes") && message.contains("60"))
+    );
 
-    let clear_nsfw = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nnsfw = { clear = true }\n",
-    )
-    .unwrap_err();
-    assert!(matches!(clear_nsfw, ManagementError::InvalidDefinition(message) if message.contains("nsfw") && message.contains("解除")));
+    let clear_nsfw =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\nnsfw = { clear = true }\n")
+            .unwrap_err();
+    assert!(
+        matches!(clear_nsfw, ManagementError::InvalidDefinition(message) if message.contains("nsfw") && message.contains("解除"))
+    );
 
-    let default_parent = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"text\"\nparent = { default = true }\n",
-    )
-    .unwrap_err();
-    assert!(matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default")));
+    let default_parent =
+        parse_definition("schema_version = 1\n[channels.rules]\ntype = \"text\"\nparent = { default = true }\n")
+            .unwrap_err();
+    assert!(
+        matches!(default_parent, ManagementError::InvalidDefinition(message) if message.contains("parent") && message.contains("default"))
+    );
 
-    let invalid_kind = parse_definition(
-        "schema_version = 1\n[channels.rules]\ntype = \"voice\"\n",
-    )
-    .unwrap_err();
+    let invalid_kind = parse_definition("schema_version = 1\n[channels.rules]\ntype = \"voice\"\n").unwrap_err();
     assert!(matches!(invalid_kind, ManagementError::InvalidDefinition(message) if message.contains("voice")));
 }
 
@@ -2279,6 +2335,20 @@ fn order_definition_is_typed_and_validated() {
         ManagementError::InvalidDefinition(message) if message.contains("order") && message.contains("重複")
     ));
 
+    let everyone_order = parse_definition(
+        r#"
+            schema_version = 1
+            [roles.everyone]
+            [order]
+            roles = ["everyone"]
+        "#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        everyone_order,
+        ManagementError::InvalidDefinition(message) if message.contains("@everyone") && message.contains("最下位固定")
+    ));
+
     let invalid_role_id = parse_definition(
         r#"
             schema_version = 1
@@ -2291,6 +2361,203 @@ fn order_definition_is_typed_and_validated() {
         invalid_role_id,
         ManagementError::InvalidDefinition(message) if message.contains("論理 ID")
     ));
+}
+
+/// Role export が UI 上から下の相対順序を定義へ出力し、そのまま plan へ再投入しても
+/// 無差分になることを保証する。
+#[tokio::test]
+async fn role_export_order_round_trips_into_an_empty_plan() {
+    let mut top = role("300", "上位");
+    top.position = 3;
+    let mut bottom = role("200", "下位");
+    bottom.position = 2;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![bottom, everyone, top],
+    };
+    let previous_state = state("100", r#"{"top":"300","bottom":"200"}"#);
+
+    let exported = export_roles(&source, guild_id(100), Some(&previous_state))
+        .await
+        .unwrap();
+
+    let exported_definition = parse_definition(&exported.definition_toml).unwrap();
+    assert_eq!(
+        exported_definition.order.as_ref().unwrap().roles,
+        vec![logical_id("top"), logical_id("bottom")]
+    );
+    let plan = plan_roles(&source, guild_id(100), &exported.definition_toml, &exported.state_json)
+        .await
+        .unwrap();
+    assert!(plan.is_empty(), "export 結果を再投入した plan は無差分であるべきです");
+}
+
+/// Role の相対順序だけを変更する plan は、UI 順序を保持した位置更新として公開される。
+#[tokio::test]
+async fn role_plan_reports_relative_order_changes() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![first, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("Role の相対順序変更が plan に含まれます");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("300"), role_id("200"), role_id("100")]
+    );
+    assert_eq!(
+        order.updates().iter().map(|update| update.role_id).collect::<Vec<_>>(),
+        vec![role_id("200"), role_id("300")]
+    );
+    assert!(!order.updates().iter().any(|update| update.role_id == role_id("100")));
+}
+
+/// 参照専用 Role を現在位置の固定 anchor として使い、その Role 自身は位置更新対象にしない。
+#[tokio::test]
+async fn role_plan_uses_reference_role_as_a_fixed_anchor() {
+    let mut anchor = role("250", "基準");
+    anchor.position = 3;
+    let mut first = role("200", "最初");
+    first.position = 2;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![anchor, first, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["anchor", "second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"anchor":"250","first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("anchor を基準にした順序変更が plan に含まれます");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("250"), role_id("300"), role_id("200"), role_id("100")]
+    );
+    assert!(!order.updates().iter().any(|update| update.role_id == role_id("250")));
+}
+
+/// 参照専用 Role の現在位置をまたぐ順序は、位置 API を呼ぶ前に診断する。
+#[tokio::test]
+async fn role_plan_rejects_an_order_crossing_a_reference_anchor() {
+    let mut first = role("200", "最初");
+    first.position = 3;
+    let mut anchor = role("250", "基準");
+    anchor.position = 2;
+    let mut second = role("300", "次");
+    second.position = 1;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![first, anchor, second, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.anchor]
+        mode = "reference"
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "anchor", "first"]
+    "#;
+    let error = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"anchor":"250","first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ManagementError::InvalidDefinition(message) if message.contains("参照専用") && message.contains("両立")
+    ));
+}
+
+/// 同一 position の Role でも Serenity／Discord の ID tie-break を含む実順序を基準に
+/// 変更計画を作る。
+#[tokio::test]
+async fn role_plan_handles_roles_with_the_same_position() {
+    let mut first = role("200", "最初");
+    first.position = 2;
+    let mut second = role("300", "次");
+    second.position = 2;
+    let mut everyone = role("100", "@everyone");
+    everyone.position = 0;
+    let source = StatefulFakeRoleSource {
+        guild_id: "100".to_owned(),
+        roles: vec![second, first, everyone],
+    };
+    let definition = r#"
+        schema_version = 1
+        [roles.first]
+        name = "最初"
+        [roles.second]
+        name = "次"
+        [order]
+        roles = ["second", "first"]
+    "#;
+    let plan = plan_roles(
+        &source,
+        guild_id(100),
+        definition,
+        &state("100", r#"{"first":"200","second":"300"}"#),
+    )
+    .await
+    .unwrap();
+
+    let order = plan.order().expect("同一 position の逆順が差分になります");
+    assert_eq!(
+        order.expected_order(),
+        &[role_id("300"), role_id("200"), role_id("100")]
+    );
 }
 
 #[cfg(test)]

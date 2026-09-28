@@ -71,8 +71,7 @@ pub(crate) struct DefinitionFile {
     pub(crate) members: BTreeMap<MemberLogicalId, MemberDefinition>,
     pub(crate) message_sets: BTreeMap<String, RawMessageSetDefinition>,
     pub(crate) threads: BTreeMap<String, RawThreadDefinition>,
-    // order は parse/validate 済みの定義を保持し、並べ替え機能実装時に利用します。
-    #[allow(dead_code)]
+    // order は parse/validate 済みの相対順序指定を保持します。
     pub(crate) order: Option<RawOrderDefinition>,
 }
 
@@ -261,13 +260,23 @@ pub(crate) struct RawOrderDefinition {
     #[validate(custom(function = "validate_unique_channel_order"))]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) categories: Vec<ChannelLogicalId>,
+    #[validate(custom(function = "validate_unique_channel_order"))]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) uncategorized: Vec<ChannelLogicalId>,
     #[validate(custom(function = "validate_unique_children_order"))]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) children: BTreeMap<ChannelLogicalId, Vec<ChannelLogicalId>>,
 }
 
 fn validate_unique_role_order(values: &[RoleLogicalId]) -> Result<(), ValidationError> {
-    validate_unique_order(values, "Role")
+    validate_unique_order(values, "Role")?;
+    if values.contains(&everyone_logical_id()) {
+        return Err(validation_error(
+            "fixed_position",
+            "@everyone Role は最下位固定のため order.roles に指定できません",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_unique_channel_order(values: &[ChannelLogicalId]) -> Result<(), ValidationError> {
@@ -330,7 +339,17 @@ fn validate_order(
         validate_order_category(logical_id, channel)?;
     }
 
-    let mut child_parents = BTreeMap::new();
+    let mut ordered_children = BTreeMap::new();
+    for logical_id in &order.uncategorized {
+        let Some(channel) = channels.get(logical_id) else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "order.uncategorized の Channel {logical_id} が宣言されていません"
+            )));
+        };
+        validate_order_uncategorized(logical_id, channel)?;
+        ordered_children.insert(logical_id, None);
+    }
+
     for (parent_id, children) in &order.children {
         let Some(parent) = channels.get(parent_id) else {
             return Err(ManagementError::InvalidDefinition(format!(
@@ -345,9 +364,9 @@ fn validate_order(
                     "order.children の Channel {child_id} は自身を親にできません"
                 )));
             }
-            if let Some(previous_parent) = child_parents.insert(child_id, parent_id) {
+            if let Some(previous_parent) = ordered_children.insert(child_id, Some(parent_id)) {
                 return Err(ManagementError::InvalidDefinition(format!(
-                    "order.children の Channel {child_id} が親 {previous_parent} と {parent_id} に重複指定されています"
+                    "order の Channel {child_id} が親 {previous_parent:?} と {parent_id} に重複指定されています"
                 )));
             }
             let Some(child) = channels.get(child_id) else {
@@ -359,6 +378,32 @@ fn validate_order(
         }
     }
 
+    Ok(())
+}
+
+fn validate_order_uncategorized(
+    logical_id: &ChannelLogicalId,
+    channel: &ChannelDefinition,
+) -> Result<(), ManagementError> {
+    if channel.is_absent() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.uncategorized の Channel {logical_id} は削除宣言のため指定できません"
+        )));
+    }
+    if channel.is_reference() {
+        return Ok(());
+    }
+    let attributes = channel.attributes();
+    if attributes.kind != Some(ChannelKind::Text) {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.uncategorized の Channel {logical_id} には type = \"text\" が必要です"
+        )));
+    }
+    if !matches!(attributes.parent, Some(ChannelValue::Clear)) {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "order.uncategorized の Channel {logical_id} には parent = {{ clear = true }} が必要です"
+        )));
+    }
     Ok(())
 }
 
