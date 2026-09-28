@@ -11,7 +11,7 @@ use std::{
 use super::{
     configuration::{ChannelKind, Color, ForumLayout, ForumSortOrder, KnownPermission, OverwriteValue},
     domain::{ManagementError, ResourceType},
-    ids::{ChannelId, GuildId, MemberId, RoleId},
+    ids::{ChannelId, GuildId, MemberId, RoleId, TagId},
 };
 
 /// Discord の Role 読み取り結果を表す Port DTO です。
@@ -123,6 +123,18 @@ pub(super) struct ResourceLookup {
 
 /// Resource の存在と所属を検証するための Port です。
 pub(super) trait ResourceSource {
+    /// Tag の親と型も同時に照合します。Tag の ID は親 Channel なしで探索しません。
+    async fn lookup_forum_tag(
+        &self,
+        _guild_id: &GuildId,
+        _parent_id: ChannelId,
+        _tag_id: u64,
+    ) -> Result<Option<ResourceLookup>, ManagementError> {
+        Err(ManagementError::ResourceSource(
+            "Forum Tag の照合に対応していません".into(),
+        ))
+    }
+
     async fn lookup_resource(
         &self,
         guild_id: &GuildId,
@@ -191,10 +203,63 @@ pub(super) struct ChannelSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ForumTagSnapshot {
-    pub id: u64,
+    pub id: TagId,
     pub name: String,
     pub moderated: bool,
     pub emoji: Option<String>,
+}
+
+/// Tag の全配列更新に送信する属性。識別情報は書き込み要求側が持ちます。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ForumTagAttributes {
+    pub name: String,
+    pub moderated: bool,
+    pub emoji: Option<String>,
+}
+
+/// available_tags の全配列に含める書き込み要求です。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ForumTagWrite {
+    Create(ForumTagAttributes),
+    Update { id: TagId, attributes: ForumTagAttributes },
+}
+
+impl From<&ForumTagSnapshot> for ForumTagWrite {
+    fn from(tag: &ForumTagSnapshot) -> Self {
+        Self::Update {
+            id: tag.id,
+            attributes: ForumTagAttributes {
+                name: tag.name.clone(),
+                moderated: tag.moderated,
+                emoji: tag.emoji.clone(),
+            },
+        }
+    }
+}
+impl ForumTagWrite {
+    pub(super) fn id(&self) -> Option<TagId> {
+        match self {
+            Self::Create(_) => None,
+            Self::Update { id, .. } => Some(*id),
+        }
+    }
+    pub(super) fn attributes(&self) -> &ForumTagAttributes {
+        match self {
+            Self::Create(attributes) | Self::Update { attributes, .. } => attributes,
+        }
+    }
+    pub(super) fn attributes_mut(&mut self) -> &mut ForumTagAttributes {
+        match self {
+            Self::Create(attributes) | Self::Update { attributes, .. } => attributes,
+        }
+    }
+    pub(super) fn matches(&self, actual: &ForumTagSnapshot) -> bool {
+        let attributes = self.attributes();
+        self.id().is_none_or(|id| id == actual.id)
+            && attributes.name == actual.name
+            && attributes.moderated == actual.moderated
+            && attributes.emoji == actual.emoji
+    }
 }
 
 /// Discord が追加した権限や、現在の SDK が名前を持たない権限 bit を保持します。
@@ -329,7 +394,7 @@ pub(super) struct ChannelUpdate {
     pub default_reaction: ChannelUpdateValue<String>,
     pub default_sort_order: ChannelUpdateValue<ForumSortOrder>,
     pub default_forum_layout: Option<ForumLayout>,
-    pub available_tags: Option<Vec<ForumTagSnapshot>>,
+    pub available_tags: Option<Vec<ForumTagWrite>>,
     pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
 }
 
@@ -353,7 +418,7 @@ impl<T> ChannelUpdateValue<T> {
 
 impl ChannelUpdate {
     #[cfg(test)]
-    pub(crate) fn apply_to(&self, channel: &mut ChannelSnapshot) {
+    pub(crate) fn apply_to(&self, channel: &mut ChannelSnapshot, mut create_tag_id: impl FnMut() -> TagId) {
         if let Some(name) = &self.name {
             channel.name.clone_from(name);
         }
@@ -409,7 +474,18 @@ impl ChannelUpdate {
             channel.default_forum_layout = Some(value);
         }
         if let Some(tags) = &self.available_tags {
-            channel.available_tags.clone_from(tags);
+            channel.available_tags = tags
+                .iter()
+                .map(|tag| {
+                    let attributes = tag.attributes();
+                    ForumTagSnapshot {
+                        id: tag.id().unwrap_or_else(&mut create_tag_id),
+                        name: attributes.name.clone(),
+                        moderated: attributes.moderated,
+                        emoji: attributes.emoji.clone(),
+                    }
+                })
+                .collect();
         }
         if let Some(overwrites) = &self.overwrites {
             channel.overwrites.clone_from(overwrites);

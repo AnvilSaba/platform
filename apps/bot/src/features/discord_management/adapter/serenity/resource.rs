@@ -37,6 +37,34 @@ impl<'a> SerenityManagementAdapter<'a> {
 }
 
 impl ResourceSource for SerenityManagementAdapter<'_> {
+    async fn lookup_forum_tag(
+        &self,
+        guild_id: &GuildId,
+        parent_id: super::super::super::ids::ChannelId,
+        tag_id: u64,
+    ) -> Result<Option<ResourceLookup>, ManagementError> {
+        let channels = SerenityGuildId::from(*guild_id)
+            .channels(self.http)
+            .await
+            .map_err(|error| ManagementError::ResourceSource(error.to_string()))?;
+        let Some(channel) = channels.get(&serenity::all::ChannelId::new(parent_id.get())) else {
+            return Ok(None);
+        };
+        if channel.base.guild_id.get() != guild_id.get() || channel.base.kind != serenity::all::ChannelType::Forum {
+            return Err(ManagementError::InvalidInputFile(
+                "Tag の親は対象 Guild の Forum Channel である必要があります".into(),
+            ));
+        }
+        Ok(channel
+            .available_tags
+            .iter()
+            .any(|tag| tag.id.get() == tag_id)
+            .then_some(ResourceLookup {
+                resource_type: ResourceType::Tag,
+                guild_id: *guild_id,
+            }))
+    }
+
     async fn lookup_resource(
         &self,
         guild_id: &GuildId,

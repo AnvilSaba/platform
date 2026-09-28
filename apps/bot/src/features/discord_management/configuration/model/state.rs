@@ -9,6 +9,18 @@ pub(crate) struct RawStateFile {
     pub(crate) schema_version: u32,
 
     pub(crate) guild_id: GuildId,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tag_results:
+        BTreeMap<ChannelLogicalId, BTreeMap<crate::features::discord_management::ids::TagLogicalId, TagResult>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "deserialize_unique_tag_channels")]
+    pub(crate) tags: BTreeMap<
+        ChannelLogicalId,
+        BTreeMap<
+            crate::features::discord_management::ids::TagLogicalId,
+            crate::features::discord_management::ids::TagId,
+        >,
+    >,
 
     #[validate(custom(function = "validate_role_mappings"))]
     #[serde(default)]
@@ -31,6 +43,17 @@ pub(crate) struct StateFile {
     pub(crate) schema_version: u32,
 
     pub(crate) guild_id: GuildId,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tag_results:
+        BTreeMap<ChannelLogicalId, BTreeMap<crate::features::discord_management::ids::TagLogicalId, TagResult>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tags: BTreeMap<
+        ChannelLogicalId,
+        BTreeMap<
+            crate::features::discord_management::ids::TagLogicalId,
+            crate::features::discord_management::ids::TagId,
+        >,
+    >,
 
     pub(crate) roles: BTreeMap<RoleLogicalId, RoleId>,
 
@@ -42,6 +65,12 @@ pub(crate) struct StateFile {
 }
 
 impl StateFile {
+    pub(crate) fn remove_channel_mapping(&mut self, logical_id: &ChannelLogicalId) {
+        self.channels.remove(logical_id);
+        self.tags.remove(logical_id);
+        self.tag_results.remove(logical_id);
+    }
+
     pub(crate) fn parse_for_guild(contents: &str, guild_id: GuildId) -> Result<Self, ManagementError> {
         let raw: RawStateFile =
             serde_json::from_str(contents).map_err(|error| ManagementError::InvalidState(error.to_string()))?;
@@ -60,12 +89,37 @@ impl StateFile {
             ));
         }
 
+        for channel in raw.tag_results.keys() {
+            if !raw.channels.contains_key(channel) {
+                return Err(ManagementError::InvalidState(format!(
+                    "Tag 結果の親 Channel {channel} の対応がありません"
+                )));
+            }
+        }
+        let mut seen_tags = BTreeSet::new();
+        for (channel, tags) in &raw.tags {
+            if !raw.channels.contains_key(channel) {
+                return Err(ManagementError::InvalidState(format!(
+                    "Tag の親 Channel {channel} の対応がありません"
+                )));
+            }
+            for id in tags.values() {
+                if id.get() == 0 || !seen_tags.insert(*id) {
+                    return Err(ManagementError::InvalidState(
+                        "Tag ID が複数の Channel 対応で重複しています".into(),
+                    ));
+                }
+            }
+            validate_unique_mappings(tags, "Tag").map_err(|e| ManagementError::InvalidState(e.to_string()))?;
+        }
         Ok(Self {
             schema_version: raw.schema_version,
             guild_id: raw.guild_id,
             roles: raw.roles,
             channels: raw.channels,
             members: raw.members,
+            tags: raw.tags,
+            tag_results: raw.tag_results,
         })
     }
 }
@@ -77,7 +131,7 @@ fn deserialize_unique_mappings<'de, D, LogicalIdType, DiscordIdType>(
 where
     D: Deserializer<'de>,
     LogicalIdType: serde::Deserialize<'de> + Clone + Ord + fmt::Display,
-    DiscordIdType: serde::Deserialize<'de> + Copy,
+    DiscordIdType: serde::Deserialize<'de>,
 {
     struct UniqueMappingsVisitor<LogicalIdType, DiscordIdType> {
         resource_type: &'static str,
@@ -87,7 +141,7 @@ where
     impl<'de, LogicalIdType, DiscordIdType> Visitor<'de> for UniqueMappingsVisitor<LogicalIdType, DiscordIdType>
     where
         LogicalIdType: serde::Deserialize<'de> + Clone + Ord + fmt::Display,
-        DiscordIdType: serde::Deserialize<'de> + Copy,
+        DiscordIdType: serde::Deserialize<'de>,
     {
         type Value = BTreeMap<LogicalIdType, DiscordIdType>;
 
@@ -204,3 +258,40 @@ where
 }
 
 use super::*;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TagResult {
+    Deleted,
+    ResponseUnknown,
+}
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct TagChannelMappings(
+    #[serde(deserialize_with = "deserialize_unique_tags")]
+    BTreeMap<crate::features::discord_management::ids::TagLogicalId, crate::features::discord_management::ids::TagId>,
+);
+fn deserialize_unique_tags<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<
+    BTreeMap<crate::features::discord_management::ids::TagLogicalId, crate::features::discord_management::ids::TagId>,
+    D::Error,
+> {
+    deserialize_unique_mappings(deserializer, "Tag")
+}
+fn deserialize_unique_tag_channels<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<
+    BTreeMap<
+        ChannelLogicalId,
+        BTreeMap<
+            crate::features::discord_management::ids::TagLogicalId,
+            crate::features::discord_management::ids::TagId,
+        >,
+    >,
+    D::Error,
+> {
+    deserialize_unique_mappings::<_, ChannelLogicalId, TagChannelMappings>(deserializer, "Tag の親 Channel")
+        .map(|channels| channels.into_iter().map(|(id, mappings)| (id, mappings.0)).collect())
+}

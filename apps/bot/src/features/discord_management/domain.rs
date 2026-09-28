@@ -11,6 +11,7 @@ pub enum ResourceType {
     Role,
     Channel,
     Member,
+    Tag,
 }
 
 impl ResourceType {
@@ -19,6 +20,7 @@ impl ResourceType {
             Self::Role => "Role",
             Self::Channel => "Channel",
             Self::Member => "Member",
+            Self::Tag => "Tag",
         }
     }
 }
@@ -37,8 +39,9 @@ impl FromStr for ResourceType {
             "role" => Ok(Self::Role),
             "channel" => Ok(Self::Channel),
             "member" => Ok(Self::Member),
+            "tag" => Ok(Self::Tag),
             _ => Err(ManagementError::InvalidInputFile(format!(
-                "リソース種別 {value} は role、channel、member のいずれかで指定してください"
+                "リソース種別 {value} は role、channel、member、tag のいずれかで指定してください"
             ))),
         }
     }

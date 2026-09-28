@@ -20,7 +20,7 @@ use crate::features::discord_management::{
         ChannelCatalog, ChannelCreate, ChannelCreateOutcome, ChannelDeleteOutcome, ChannelLifecycleTarget,
         ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelPositionUpdate, ChannelPositionUpdateOutcome,
         ChannelPositionUpdater, ChannelSnapshot, ChannelSource, ChannelUpdate, ChannelUpdateOutcome,
-        ChannelUpdateValue, ChannelUpdater, ForumTagSnapshot, PermissionBits,
+        ChannelUpdateValue, ChannelUpdater, ForumTagSnapshot, ForumTagWrite, PermissionBits,
     },
 };
 
@@ -182,13 +182,31 @@ struct DiscordForumEmoji {
     emoji_name: Option<String>,
 }
 
+/// 新規 Tag の送信形式。ID は Discord が発行します。
 #[derive(Debug, Serialize)]
-struct DiscordForumTag {
+struct CreateForumTagRequest {
+    name: String,
+    moderated: bool,
+    emoji_id: Option<DiscordSnowflake>,
+    emoji_name: Option<String>,
+}
+
+/// 既存 Tag の送信形式。対象 ID は必須です。
+#[derive(Debug, Serialize)]
+struct UpdateForumTagRequest {
     id: DiscordSnowflake,
     name: String,
     moderated: bool,
     emoji_id: Option<DiscordSnowflake>,
     emoji_name: Option<String>,
+}
+
+/// Discord は作成と更新を同じ available_tags 配列で受け取ります。
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ForumTagRequest {
+    Create(CreateForumTagRequest),
+    Update(UpdateForumTagRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -294,7 +312,7 @@ struct ModifyChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     default_forum_layout: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    available_tags: Option<Vec<DiscordForumTag>>,
+    available_tags: Option<Vec<ForumTagRequest>>,
 }
 
 impl ChannelSource for SerenityManagementAdapter<'_> {
@@ -807,21 +825,32 @@ fn forum_layout(value: ForumLayout) -> u8 {
 
 fn forum_tag_snapshot(tag: &serenity::all::ForumTag) -> ForumTagSnapshot {
     ForumTagSnapshot {
-        id: tag.id.get(),
+        id: crate::features::discord_management::ids::TagId::new(tag.id.get()),
         name: tag.name.to_string(),
         moderated: tag.moderated,
         emoji: tag.emoji.as_ref().map(forum_emoji_string),
     }
 }
 
-fn discord_forum_tag(tag: &ForumTagSnapshot) -> DiscordForumTag {
-    let emoji = tag.emoji.as_deref().map(discord_forum_emoji);
-    DiscordForumTag {
-        id: DiscordSnowflake(tag.id),
-        name: tag.name.clone(),
-        moderated: tag.moderated,
-        emoji_id: emoji.as_ref().and_then(|emoji| emoji.emoji_id),
-        emoji_name: emoji.and_then(|emoji| emoji.emoji_name),
+fn discord_forum_tag(tag: &ForumTagWrite) -> ForumTagRequest {
+    let attributes = tag.attributes();
+    let emoji = attributes.emoji.as_deref().map(discord_forum_emoji);
+    let emoji_id = emoji.as_ref().and_then(|emoji| emoji.emoji_id);
+    let emoji_name = emoji.and_then(|emoji| emoji.emoji_name);
+    match tag {
+        ForumTagWrite::Create(_) => ForumTagRequest::Create(CreateForumTagRequest {
+            name: attributes.name.clone(),
+            moderated: attributes.moderated,
+            emoji_id,
+            emoji_name,
+        }),
+        ForumTagWrite::Update { id, .. } => ForumTagRequest::Update(UpdateForumTagRequest {
+            id: DiscordSnowflake(id.get()),
+            name: attributes.name.clone(),
+            moderated: attributes.moderated,
+            emoji_id,
+            emoji_name,
+        }),
     }
 }
 
@@ -870,6 +899,7 @@ fn overwrite_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::discord_management::port::ForumTagAttributes;
 
     fn payload_json<T: Serialize>(payload: &T) -> serde_json::Value {
         serde_json::to_value(payload).expect("payload は必ず JSON に直列化できます")
@@ -1162,11 +1192,13 @@ mod tests {
             &ChannelUpdate {
                 default_reaction: ChannelUpdateValue::Clear,
                 default_sort_order: ChannelUpdateValue::Clear,
-                available_tags: Some(vec![ForumTagSnapshot {
-                    id: 900,
-                    name: "solved".to_owned(),
-                    moderated: true,
-                    emoji: Some("✅".to_owned()),
+                available_tags: Some(vec![ForumTagWrite::Update {
+                    id: crate::features::discord_management::ids::TagId::new(900),
+                    attributes: ForumTagAttributes {
+                        name: "solved".to_owned(),
+                        moderated: true,
+                        emoji: Some("✅".to_owned()),
+                    },
                 }]),
                 ..ChannelUpdate::default()
             },
@@ -1175,6 +1207,31 @@ mod tests {
         assert!(json["default_reaction_emoji"].is_null());
         assert!(json["default_sort_order"].is_null());
         assert_eq!(json["available_tags"][0]["id"], "900");
+        let create_tag = edit_channel_payload(
+            &GuildId::new(100),
+            &ChannelUpdate {
+                available_tags: Some(vec![
+                    ForumTagWrite::Update {
+                        id: crate::features::discord_management::ids::TagId::new(900),
+                        attributes: ForumTagAttributes {
+                            name: "existing".into(),
+                            moderated: true,
+                            emoji: None,
+                        },
+                    },
+                    ForumTagWrite::Create(ForumTagAttributes {
+                        name: "new".into(),
+                        moderated: false,
+                        emoji: Some("123456".into()),
+                    }),
+                ]),
+                ..Default::default()
+            },
+        );
+        let json = payload_json(&create_tag);
+        assert_eq!(json["available_tags"][0]["id"], "900");
+        assert!(json["available_tags"][1].get("id").is_none());
+        assert_eq!(json["available_tags"][1]["emoji_id"], "123456");
     }
 
     #[test]

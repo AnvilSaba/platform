@@ -121,6 +121,9 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
             ApplyPreparation::Finished(result) => return Ok(result),
             ApplyPreparation::Ready(session) => *session,
         };
+        if session.pending.contains_deletions() {
+            return session.into_result(ChannelApplyStatus::DeletionPermissionRequired);
+        }
         if session.pending.has_order() {
             return Err(ManagementError::InvalidState(
                 "属性更新専用の apply_channel_updates には Channel の相対順序変更を含められません".to_owned(),
@@ -359,6 +362,15 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
                 "Channel {logical_id} の Snowflake {channel_id} が Guild に存在しません"
             ))
         })?;
+    if let Some(tags) = &attributes.tags
+        && !tags.write
+    {
+        tags.finish(logical_id, &mut session.state, &current.available_tags)?;
+        if attributes.other_attributes_empty() {
+            session.mark_applied(logical_id);
+            return Ok(None);
+        }
+    }
     let update = attributes.to_update(current, &session.state)?;
     let outcome = match tokio::time::timeout(
         processing_deadline.saturating_duration_since(Instant::now()),
@@ -371,8 +383,16 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
         Err(_) => ChannelUpdateOutcome::ResponseUnknown,
     };
     if outcome == ChannelUpdateOutcome::Applied {
+        if let Some(tags) = &attributes.tags {
+            // 作成 ID の読み取りに失敗しても、再投入で重複作成しないよう記録します。
+            tags.unknown(logical_id, &mut session.state);
+            tags.acknowledge_deletions(logical_id, &mut session.state);
+        }
         session.mark_applied(logical_id);
     } else {
+        if let Some(tags) = &attributes.tags {
+            tags.unknown(logical_id, &mut session.state);
+        }
         return Ok(Some(ChannelApplyStatus::ResponseUnknown));
     }
     let result_deadline = processing_deadline + RESULT_STATE_REFRESH_BUDGET;
@@ -392,6 +412,18 @@ async fn apply_attribute_changes<S: ChannelUpdater>(
             }));
         }
     };
+    if let Some(tags) = &attributes.tags {
+        let actual = &session
+            .catalog
+            .channels
+            .iter()
+            .find(|channel| channel.id == channel_id)
+            .ok_or_else(|| ManagementError::InvalidState("更新後の Channel がありません".into()))?
+            .available_tags;
+        if let Err(error) = tags.finish(logical_id, &mut session.state, actual) {
+            return Ok(Some(ChannelApplyStatus::Failed(error.to_string())));
+        }
+    }
     let matches = session
         .catalog
         .channels
@@ -507,7 +539,10 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
         options: ChannelApplyOptions,
         processing_deadline: Instant,
     ) -> Result<ChannelApplyResult, ManagementError> {
-        if !confirmed_plan.has_order() && confirmed_plan.iter().all(|(_, change)| change.is_update()) {
+        if !confirmed_plan.contains_deletions()
+            && !confirmed_plan.has_order()
+            && confirmed_plan.iter().all(|(_, change)| change.is_update())
+        {
             return self
                 .apply_channel_updates(
                     guild_id,
@@ -585,6 +620,26 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                         Ok(catalog) => session.catalog = catalog,
                         Err(status) => return session.into_result(status),
                     }
+                    if let Some(tags) = session
+                        .applied
+                        .create_desired
+                        .get(&logical_id)
+                        .and_then(|desired| desired.tags.clone())
+                    {
+                        if let Some(status) = apply_created_channel_tags(
+                            self.source,
+                            &guild_id,
+                            &logical_id,
+                            channel_id,
+                            &tags,
+                            &mut session,
+                            processing_deadline,
+                        )
+                        .await?
+                        {
+                            return session.into_result(status);
+                        }
+                    }
                 }
                 Change::Delete { discord_id } => {
                     if Instant::now() >= processing_deadline {
@@ -592,7 +647,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     }
                     let exists = session.catalog.channels.iter().any(|channel| channel.id == discord_id);
                     if !exists {
-                        session.state.channels.remove(&logical_id);
+                        session.state.remove_channel_mapping(&logical_id);
                         session.mark_applied(&logical_id);
                         continue;
                     }
@@ -619,7 +674,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     }
                     // HTTP 204 は削除完了の確定応答なので、後続の再取得が失敗しても
                     // 対応表だけは成功結果として確定させます。
-                    session.state.channels.remove(&logical_id);
+                    session.state.remove_channel_mapping(&logical_id);
                     session.mark_applied(&logical_id);
                     session.catalog = match refresh_catalog(self.source, &guild_id, processing_deadline).await {
                         Ok(catalog) => catalog,
@@ -627,7 +682,7 @@ impl<S: ChannelLifecycleTarget> ChannelApplyWorkflow<'_, S> {
                     };
                 }
                 Change::Release { .. } => {
-                    session.state.channels.remove(&logical_id);
+                    session.state.remove_channel_mapping(&logical_id);
                     session.mark_applied(&logical_id);
                 }
                 Change::Update { discord_id, attributes } => {
@@ -738,4 +793,60 @@ fn nullable_matches<T: PartialEq>(actual: Option<&T>, update: &ChannelUpdateValu
         ChannelUpdateValue::Set(desired) => actual == Some(desired),
         ChannelUpdateValue::Clear => actual.is_none(),
     }
+}
+
+async fn apply_created_channel_tags<S: ChannelUpdater>(
+    source: &S,
+    guild: &GuildId,
+    logical_id: &ChannelLogicalId,
+    channel_id: ChannelId,
+    tags: &super::TagPlan,
+    session: &mut ApplySession,
+    deadline: Instant,
+) -> Result<Option<ChannelApplyStatus>, ManagementError> {
+    let current = session
+        .catalog
+        .channels
+        .iter()
+        .find(|channel| channel.id == channel_id)
+        .ok_or_else(|| ManagementError::InvalidState("新規 Channel を取得できません".into()))?;
+    if !current.available_tags.is_empty() {
+        return Ok(Some(ChannelApplyStatus::ReplanRequired));
+    }
+    if Instant::now() >= deadline {
+        return Ok(Some(ChannelApplyStatus::DeadlineExceeded));
+    }
+    let update = ChannelUpdate {
+        available_tags: Some(tags.payload.clone()),
+        ..Default::default()
+    };
+    let outcome = match tokio::time::timeout(
+        deadline.saturating_duration_since(Instant::now()),
+        source.update_channel(guild, &channel_id, update),
+    )
+    .await
+    {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => return Ok(Some(ChannelApplyStatus::Failed(error.to_string()))),
+        Err(_) => ChannelUpdateOutcome::ResponseUnknown,
+    };
+    tags.unknown(logical_id, &mut session.state);
+    if outcome == ChannelUpdateOutcome::ResponseUnknown {
+        return Ok(Some(ChannelApplyStatus::ResponseUnknown));
+    }
+    session.catalog = match refresh_catalog(source, guild, deadline).await {
+        Ok(catalog) => catalog,
+        Err(status) => return Ok(Some(status)),
+    };
+    let actual = &session
+        .catalog
+        .channels
+        .iter()
+        .find(|channel| channel.id == channel_id)
+        .ok_or_else(|| ManagementError::InvalidState("更新後の Channel がありません".into()))?
+        .available_tags;
+    if let Err(error) = tags.finish(logical_id, &mut session.state, actual) {
+        return Ok(Some(ChannelApplyStatus::Failed(error.to_string())));
+    }
+    Ok(None)
 }

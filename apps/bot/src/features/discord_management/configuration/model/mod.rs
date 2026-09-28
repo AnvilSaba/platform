@@ -22,6 +22,7 @@ mod definition;
 mod permission;
 mod role;
 mod state;
+mod tag;
 
 pub(crate) use channel::*;
 pub(crate) use definition::*;
@@ -29,6 +30,7 @@ pub(crate) use permission::*;
 pub use role::Color;
 pub(crate) use role::*;
 pub(crate) use state::*;
+pub(crate) use tag::*;
 
 mod input;
 

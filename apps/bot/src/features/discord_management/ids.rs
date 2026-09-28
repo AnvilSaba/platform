@@ -103,6 +103,14 @@ impl DiscordIdTag for MemberIdTag {
     const LABEL: &'static str = "Member ID";
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum EmojiIdTag {}
+
+impl DiscordIdTag for EmojiIdTag {
+    const LABEL: &'static str = "Emoji ID";
+}
+
+pub(crate) type EmojiId = DiscordId<EmojiIdTag>;
 pub(crate) type GuildId = DiscordId<GuildIdTag>;
 pub(crate) type RoleId = DiscordId<RoleIdTag>;
 pub(crate) type ChannelId = DiscordId<ChannelIdTag>;
@@ -228,3 +236,18 @@ pub(crate) type ChannelLogicalId = LogicalId<ChannelLogicalIdTag>;
 pub(crate) type MemberLogicalId = LogicalId<MemberLogicalIdTag>;
 pub(crate) type MessageLogicalId = LogicalId<MessageLogicalIdTag>;
 pub(crate) type ChannelSettingsSetId = LogicalId<ChannelSettingsSetIdTag>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) enum TagIdTag {}
+impl DiscordIdTag for TagIdTag {
+    const LABEL: &'static str = "Tag ID";
+}
+pub(crate) type TagId = DiscordId<TagIdTag>;
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
+pub(crate) enum TagLogicalIdTag {}
+impl fmt::Display for TagLogicalIdTag {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+pub(crate) type TagLogicalId = LogicalId<TagLogicalIdTag>;

@@ -48,3 +48,25 @@ mode = "reference"
 適用ボタンは plan の作成者だけが一度だけ操作できます。同じ Guild の apply は同時実行されません。確認後に管理対象の Role が外部で変更された場合は適用せず、新しい plan を求めます。処理は最初の失敗または処理期限で停止し、成功した Role 数、未完了の Role 数、取得済みの最新 state を返します。1つの Role に対する複数の属性変更は、まとめて1件として数えます。
 
 再 export では `/role_export` に既存 state を添付します。state に対応済みの Role は論理 ID を維持し、結果は別の TOML/JSON 添付として返ります。state は Guild ごとに分けて保管してください。別 Guild の state、未対応の形式版、未知キー、未知の権限、参照先不足、論理 ID や Snowflake の衝突は Interaction の操作結果として表示されます。
+
+## Forum Tag の管理
+
+`/channel_export` は Forum の全タグを、Channel 内の論理 ID と実 Tag ID の対応とともに出力します。既存 state を渡した再 export では論理 ID を維持します。同名タグも実 ID で区別します。
+
+```toml
+[channels.questions]
+type = "forum"
+
+[channels.questions.tags.solved]
+name = "解決済み"
+moderated = true
+emoji = "✅"
+```
+
+新規 Tag には1〜20文字の `name` が必要です。`moderated = { default = true }` は false、`emoji = { default = true }` と `emoji = { clear = true }` はリアクションなしへ解決します。カスタム絵文字は Discord ID の文字列で指定します。省略した属性は既存値を維持します。管理外タグを含む合計は20個以内です。
+
+`/bind` の種別を `tag`、論理 ID を `questions/solved`、Discord ID を確認した Tag ID として、宣言済みタグを採用できます。親 Channel の対応を先に登録してください。型・Guild・親・存在と重複を検証し、名前で照合しません。
+
+Tag 宣言の省略は管理解除です。実物を削除する場合はタグの属性を取り除いて `ensure = "absent"` だけを指定し、`/channel_apply` で削除を許可します。既存タグの更新と削除は実 ID を含む全配列で送信し、管理外タグを保持します。
+
+JSON の `tags` に対応表、`tag_results` に `deleted` または `response_unknown` を記録します。作成結果が不明なタグは、Discord 上の ID を確認して bind するまで再作成しません。返却された最新 state を次の操作へ引き継いでください。

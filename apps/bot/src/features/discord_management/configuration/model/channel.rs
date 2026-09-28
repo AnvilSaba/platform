@@ -317,6 +317,7 @@ pub(crate) enum OverwriteValue {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ChannelAttributes {
+    pub(crate) tags: BTreeMap<crate::features::discord_management::ids::TagLogicalId, TagDefinition>,
     pub(crate) kind: Option<ChannelKind>,
     pub(crate) name: Option<ChannelValue<String>>,
     pub(crate) parent: Option<ChannelValue<crate::features::discord_management::ids::ChannelLogicalId>>,
@@ -339,6 +340,7 @@ pub(crate) struct ChannelAttributes {
 
 impl ChannelAttributes {
     pub(crate) fn merge(&mut self, later: &Self) {
+        self.tags.extend(later.tags.clone());
         if later.kind.is_some() {
             self.kind = later.kind;
         }
@@ -520,11 +522,17 @@ impl ChannelAttributes {
                 "Category {logical_id} には permissions_sync を指定できません"
             )));
         }
+        if !self.tags.is_empty() && kind != ChannelKind::Forum {
+            return Err(ManagementError::InvalidDefinition(
+                "tags は Forum Channel だけで指定できます".into(),
+            ));
+        }
         Ok(())
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.kind.is_none()
+        self.tags.is_empty()
+            && self.kind.is_none()
             && self.name.is_none()
             && self.parent.is_none()
             && self.topic.is_none()
@@ -547,6 +555,8 @@ impl ChannelAttributes {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawChannelAttributes {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tags: BTreeMap<crate::features::discord_management::ids::TagLogicalId, RawTagDefinition>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub(crate) kind: Option<RawChannelKind>,
     #[validate(length(min = 1, max = 100, message = "name は1文字以上かつ100文字以内で指定してください"))]
@@ -621,8 +631,13 @@ impl RawChannelAttributes {
             default_sort_order,
             default_forum_layout,
             permissions_sync,
+            tags,
             overwrites,
         } = self;
+        let tags = tags
+            .into_iter()
+            .map(|(id, raw)| TagDefinition::parse(raw).map(|tag| (id, tag)))
+            .collect::<Result<_, _>>()?;
         let kind = kind.map(ChannelKind::from);
         let overwrites = resolve_overwrites(overwrites, logical_id, vocabulary)?;
         Ok(ChannelAttributes {
@@ -642,6 +657,7 @@ impl RawChannelAttributes {
             default_sort_order,
             default_forum_layout,
             permissions_sync,
+            tags,
             overwrites,
         })
     }
