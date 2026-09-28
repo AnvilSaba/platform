@@ -1,6 +1,7 @@
 name: MCGuildLink CI
 on:
   push:
+    branches: [main]
     paths: ["apps/mcguildlink/**", ".github/workflows/ci-mcguildlink.yml"]
   pull_request:
     paths: ["apps/mcguildlink/**", ".github/workflows/ci-mcguildlink.yml"]
