@@ -3,6 +3,7 @@ mod event_handler;
 mod panel;
 pub(super) mod ports;
 pub(super) mod queries;
+mod repository;
 pub(super) mod service;
 pub(super) mod types;
 

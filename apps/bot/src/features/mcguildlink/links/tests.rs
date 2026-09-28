@@ -1,8 +1,9 @@
 use super::{
     ports::AccountLinksRepository,
     presentation::{Scope, get_snapshot, page, save_snapshot},
+    repository::DatabaseAccountLinksRepository,
 };
-use crate::features::mcguildlink::{repository::DatabaseMcGuildLinkRepository, test_support};
+use crate::features::mcguildlink::test_support;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -17,7 +18,7 @@ async fn page_uses_initial_snapshot_after_a_link_changes(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let store = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+    let store = DatabaseAccountLinksRepository::new(test_support::bot_pool(&pool).await);
     save_snapshot(1000, 10, Scope::User(10), store.by_discord(10).await.unwrap());
     assert!(
         store

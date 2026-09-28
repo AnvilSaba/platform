@@ -5,6 +5,7 @@ pub(super) mod model;
 pub(super) mod ports;
 mod presentation;
 pub(super) mod queries;
+mod repository;
 
 pub use admin::links;
 pub use event_handler::AccountLinksEventHandler;

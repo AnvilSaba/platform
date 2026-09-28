@@ -1,8 +1,7 @@
-use super::{ports::LinkCodeResult, service::LinkCodes, types::DiscordUserId};
+use super::{ports::LinkCodeResult, repository::DatabaseLinkingRepository, service::LinkCodes, types::DiscordUserId};
 use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
-    features::mcguildlink::repository::DatabaseMcGuildLinkRepository,
     utils::create_safe_allowed_mentions,
 };
 use serenity::{
@@ -16,13 +15,13 @@ use sqlx::PgPool;
 pub(super) const START_LINK_BUTTON_ID: &str = "start_link_button";
 
 pub struct LinkCodeEventHandler {
-    codes: LinkCodes<DatabaseMcGuildLinkRepository>,
+    codes: LinkCodes<DatabaseLinkingRepository>,
 }
 
 impl LinkCodeEventHandler {
     pub fn new(database: &PgPool) -> Self {
         Self {
-            codes: LinkCodes::new(DatabaseMcGuildLinkRepository::new(database.clone())),
+            codes: LinkCodes::new(DatabaseLinkingRepository::new(database.clone())),
         }
     }
 

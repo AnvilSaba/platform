@@ -1,7 +1,9 @@
-use super::presentation::{Scope, load, page, save_snapshot};
+use super::{
+    presentation::{Scope, load, page, save_snapshot},
+    repository::DatabaseAccountLinksRepository,
+};
 use crate::{
     app::{AppApplicationContext, AppError, BotDataExt, BotError},
-    features::mcguildlink::repository::DatabaseMcGuildLinkRepository,
     utils::create_safe_allowed_mentions,
 };
 use poise::CreateReply;
@@ -24,7 +26,7 @@ async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Resu
     }
     ctx.defer_ephemeral().await?;
     let data = ctx.bot_data();
-    let repository = DatabaseMcGuildLinkRepository::new(data.database.clone());
+    let repository = DatabaseAccountLinksRepository::new(data.database.clone());
     let links = load(&repository, scope).await?;
     let snapshot = save_snapshot(ctx.interaction.id.get(), ctx.author().id.get(), scope, links);
     let (content, components) = page(ctx.interaction.id.get(), &snapshot, 0);

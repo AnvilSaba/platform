@@ -1,5 +1,5 @@
 use super::ports::AccountLinksRepository;
-use crate::features::mcguildlink::repository::DatabaseMcGuildLinkRepository;
+use super::repository::DatabaseAccountLinksRepository;
 use crate::features::mcguildlink::test_support;
 use axum::{
     body::Body,
@@ -48,7 +48,7 @@ async fn whitelist(pool: &PgPool) -> Value {
 #[sqlx::test(migrations = "../../migrations")]
 async fn lists_and_unlinks_only_the_selected_relationship(pool: PgPool) {
     seed(&pool).await;
-    let store = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+    let store = DatabaseAccountLinksRepository::new(test_support::bot_pool(&pool).await);
     assert_eq!(store.by_discord(10).await.unwrap().len(), 2);
     assert_eq!(store.by_minecraft(FIRST.parse().unwrap()).await.unwrap().len(), 2);
     assert_eq!(store.all().await.unwrap().len(), 3);
@@ -81,7 +81,7 @@ async fn lists_and_unlinks_only_the_selected_relationship(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn leaving_removes_links_and_code_and_enqueues_audit(pool: PgPool) {
     seed(&pool).await;
-    let store = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+    let store = DatabaseAccountLinksRepository::new(test_support::bot_pool(&pool).await);
     let removed = store.member_left(10, "alice-now").await.unwrap();
     assert_eq!(removed.len(), 2);
     assert!(store.by_discord(10).await.unwrap().is_empty());
@@ -124,7 +124,7 @@ async fn audit_failure_rolls_back_leave(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let store = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+    let store = DatabaseAccountLinksRepository::new(test_support::bot_pool(&pool).await);
     assert!(store.member_left(10, "alice").await.is_err());
     assert_eq!(store.by_discord(10).await.unwrap().len(), 2);
     let code = sqlx::query_scalar!("SELECT code FROM mcguildlink.link_requests")
@@ -149,7 +149,7 @@ async fn leaving_with_only_unused_code_removes_it_without_audit(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let store = DatabaseMcGuildLinkRepository::new(test_support::bot_pool(&pool).await);
+    let store = DatabaseAccountLinksRepository::new(test_support::bot_pool(&pool).await);
     assert!(store.member_left(10, "alice").await.unwrap().is_empty());
     let code_count = sqlx::query_scalar!("SELECT count(*) AS \"count!\" FROM mcguildlink.link_requests")
         .fetch_one(&pool)

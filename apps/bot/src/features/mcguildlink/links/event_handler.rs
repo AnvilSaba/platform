@@ -1,11 +1,11 @@
 use super::{
     interactions::{self, UNLINK_BUTTON_PREFIX, UNLINK_MODAL_PREFIX},
     ports::AccountLinksRepository,
+    repository::DatabaseAccountLinksRepository,
 };
 use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
-    features::mcguildlink::repository::DatabaseMcGuildLinkRepository,
 };
 use serenity::{
     all::{
@@ -19,13 +19,13 @@ use super::LIST_LINK_BUTTON_ID;
 use super::presentation::parse_page;
 
 pub struct AccountLinksEventHandler {
-    repository: DatabaseMcGuildLinkRepository,
+    repository: DatabaseAccountLinksRepository,
 }
 
 impl AccountLinksEventHandler {
     pub fn new(database: &PgPool) -> Self {
         Self {
-            repository: DatabaseMcGuildLinkRepository::new(database.clone()),
+            repository: DatabaseAccountLinksRepository::new(database.clone()),
         }
     }
 
