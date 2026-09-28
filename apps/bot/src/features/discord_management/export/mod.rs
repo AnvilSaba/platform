@@ -222,7 +222,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
         .filter(|channel| {
             matches!(
                 channel.kind,
-                ChannelKind::Category | ChannelKind::Text | ChannelKind::Announcement
+                ChannelKind::Category
+                    | ChannelKind::Text
+                    | ChannelKind::Announcement
+                    | ChannelKind::Voice
+                    | ChannelKind::Stage
             )
         })
         .filter(|channel| channel.manageable || previous_mappings.values().any(|id| *id == channel.id))
@@ -268,7 +272,10 @@ pub(super) async fn export_channels<S: ChannelSource>(
     let mut uncategorized = channels
         .iter()
         .filter(|channel| {
-            matches!(channel.kind, ChannelKind::Text | ChannelKind::Announcement) && channel.parent_id.is_none()
+            matches!(
+                channel.kind,
+                ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+            ) && channel.parent_id.is_none()
         })
         .collect::<Vec<_>>();
     uncategorized.sort_by(|left, right| compare_position_then_id(&left.position, &right.position, &left.id, &right.id));
@@ -353,21 +360,23 @@ pub(super) async fn export_channels<S: ChannelSource>(
             .expect("論理 ID は先行する対応付けで生成されています")
             .clone();
         let kind = channel.kind;
-        let is_permissions_sync = matches!(kind, ChannelKind::Text | ChannelKind::Announcement)
-            && channel.parent_id.is_some_and(|parent_id| {
-                catalog
-                    .channels
-                    .iter()
-                    .find(|parent| parent.id == parent_id)
-                    .is_some_and(|parent| {
-                        parent.kind == ChannelKind::Category && parent.overwrites == channel.overwrites
-                    })
-            });
+        let is_permissions_sync = matches!(
+            kind,
+            ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+        ) && channel.parent_id.is_some_and(|parent_id| {
+            catalog
+                .channels
+                .iter()
+                .find(|parent| parent.id == parent_id)
+                .is_some_and(|parent| parent.kind == ChannelKind::Category && parent.overwrites == channel.overwrites)
+        });
         let mut attributes = RawChannelAttributes {
             kind: Some(match kind {
                 ChannelKind::Category => RawChannelKind::Category,
                 ChannelKind::Text => RawChannelKind::Text,
                 ChannelKind::Announcement => RawChannelKind::Announcement,
+                ChannelKind::Voice => RawChannelKind::Voice,
+                ChannelKind::Stage => RawChannelKind::Stage,
                 ChannelKind::Unsupported => unreachable!("Unsupported Channel は export 対象に含まれません"),
             }),
             name: Some(ChannelValue::Value(channel.name)),
@@ -382,7 +391,11 @@ pub(super) async fn export_channels<S: ChannelSource>(
                 })?;
                 attributes.parent = Some(ChannelValue::Value(parent.clone()));
             }
-            None if matches!(kind, ChannelKind::Text | ChannelKind::Announcement) => {
+            None if matches!(
+                kind,
+                ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+            ) =>
+            {
                 attributes.parent = Some(ChannelValue::Clear);
             }
             None => {}
@@ -405,6 +418,17 @@ pub(super) async fn export_channels<S: ChannelSource>(
                 attributes.default_thread_slowmode_seconds =
                     Some(ChannelValue::Value(channel.default_thread_slowmode_seconds));
             }
+        }
+        if matches!(kind, ChannelKind::Voice | ChannelKind::Stage) {
+            attributes.nsfw = Some(ChannelValue::Value(channel.nsfw));
+            attributes.slowmode_seconds = Some(ChannelValue::Value(channel.slowmode_seconds));
+            attributes.bitrate = channel.bitrate.map(ChannelValue::Value);
+            attributes.user_limit = channel.user_limit.map(ChannelValue::Value);
+            attributes.rtc_region = Some(match channel.rtc_region {
+                Some(region) => ChannelValue::Value(region),
+                None => ChannelValue::Clear,
+            });
+            attributes.video_quality = channel.video_quality.map(ChannelValue::Value);
         }
         if is_permissions_sync {
             attributes.permissions_sync = Some(true);

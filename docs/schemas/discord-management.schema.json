@@ -598,7 +598,8 @@
           "oneOf": [
             {
               "type": "integer",
-              "minimum": 0
+              "minimum": 8000,
+              "maximum": 384000
             },
             {
               "$ref": "#/definitions/default"
@@ -609,7 +610,8 @@
           "oneOf": [
             {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 10000
             },
             {
               "$ref": "#/definitions/default"
@@ -831,7 +833,8 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "minimum": 0
+                  "minimum": 8000,
+                  "maximum": 384000
                 },
                 {
                   "$ref": "#/definitions/default"
@@ -842,7 +845,8 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 10000
                 },
                 {
                   "$ref": "#/definitions/default"

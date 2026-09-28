@@ -283,12 +283,37 @@ impl<S: ChannelUpdater> ChannelApplyWorkflow<'_, S> {
         } else {
             true
         };
+        let voice_bitrate_limit = match tokio::time::timeout(
+            processing_deadline.saturating_duration_since(Instant::now()),
+            self.source.voice_bitrate_limit(&guild_id),
+        )
+        .await
+        {
+            Ok(Ok(limit)) => limit,
+            Ok(Err(error)) => {
+                return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                    status: ChannelApplyStatus::Failed(error.to_string()),
+                    applied: Plan::default(),
+                    pending: confirmed_plan.clone(),
+                    state_json: serialize_state(&state)?,
+                }));
+            }
+            Err(_) => {
+                return Ok(ApplyPreparation::Finished(ChannelApplyResult {
+                    status: ChannelApplyStatus::DeadlineExceeded,
+                    applied: Plan::default(),
+                    pending: confirmed_plan.clone(),
+                    state_json: serialize_state(&state)?,
+                }));
+            }
+        };
         let current_plan = build_channel_plan_with_capabilities(
             &definition,
             &state,
             &catalog,
             can_manage_roles,
             supports_announcement_channels,
+            voice_bitrate_limit,
         )?;
         if current_plan != *confirmed_plan {
             return Ok(ApplyPreparation::Finished(ChannelApplyResult {

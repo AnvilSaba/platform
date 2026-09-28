@@ -14,6 +14,38 @@ struct ChannelCatalogSource {
 #[derive(Clone)]
 struct FeaturelessChannelSource;
 
+#[derive(Clone)]
+struct LimitedVoiceChannelSource {
+    bitrate_limit: u32,
+}
+
+impl ChannelSource for LimitedVoiceChannelSource {
+    async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
+        Ok(ChannelCatalog { channels: Vec::new() })
+    }
+
+    async fn supports_announcement_channels(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
+
+    async fn voice_bitrate_limit(&self, _guild_id: &GuildId) -> Result<u32, ManagementError> {
+        Ok(self.bitrate_limit)
+    }
+
+    async fn validate_channel_permission_targets(
+        &self,
+        _guild_id: &GuildId,
+        _role_ids: &[RoleId],
+        _member_ids: &[MemberId],
+    ) -> Result<(), ManagementError> {
+        Ok(())
+    }
+
+    async fn can_manage_roles(&self, _guild_id: &GuildId) -> Result<bool, ManagementError> {
+        Ok(true)
+    }
+}
+
 impl ChannelSource for FeaturelessChannelSource {
     async fn channel_catalog(&self, _guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError> {
         Ok(ChannelCatalog { channels: Vec::new() })
@@ -310,6 +342,13 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
                 slowmode_seconds: create.slowmode_seconds,
                 default_auto_archive_minutes: create.default_auto_archive_minutes,
                 default_thread_slowmode_seconds: create.default_thread_slowmode_seconds,
+                bitrate: create.bitrate,
+                user_limit: create.user_limit,
+                rtc_region: match create.rtc_region {
+                    ChannelUpdateValue::Keep | ChannelUpdateValue::Clear => None,
+                    ChannelUpdateValue::Set(region) => Some(region),
+                },
+                video_quality: create.video_quality,
                 overwrites: create.overwrites,
             });
             if let Some(remove_id) = self.create_remove_channel {
@@ -417,6 +456,10 @@ fn channel_snapshot(id: &str, kind: ChannelKind, name: &str, parent_id: Option<&
         slowmode_seconds: 0,
         default_auto_archive_minutes: Some(1440),
         default_thread_slowmode_seconds: 0,
+        bitrate: None,
+        user_limit: None,
+        rtc_region: None,
+        video_quality: None,
         overwrites: BTreeMap::new(),
     }
 }
@@ -1399,6 +1442,10 @@ async fn channel_export_round_trip_is_idempotent() {
                     slowmode_seconds: 5,
                     default_auto_archive_minutes: Some(4320),
                     default_thread_slowmode_seconds: 10,
+                    bitrate: None,
+                    user_limit: None,
+                    rtc_region: None,
+                    video_quality: None,
                     overwrites: BTreeMap::new(),
                 },
             ],
@@ -1529,6 +1576,10 @@ async fn channel_export_preserves_category_permission_sync() {
                     slowmode_seconds: 0,
                     default_auto_archive_minutes: Some(1440),
                     default_thread_slowmode_seconds: 0,
+                    bitrate: None,
+                    user_limit: None,
+                    rtc_region: None,
+                    video_quality: None,
                     overwrites: overwrites.clone(),
                 },
                 ChannelSnapshot {
@@ -1543,6 +1594,10 @@ async fn channel_export_preserves_category_permission_sync() {
                     slowmode_seconds: 0,
                     default_auto_archive_minutes: Some(1440),
                     default_thread_slowmode_seconds: 0,
+                    bitrate: None,
+                    user_limit: None,
+                    rtc_region: None,
+                    video_quality: None,
                     overwrites,
                 },
             ],
@@ -1584,6 +1639,10 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::from([
                     (
                         ChannelOverwriteTarget::Role(RoleId::new(400)),
@@ -1878,6 +1937,10 @@ async fn channel_default_thread_slowmode_zero_is_canonical_after_apply() {
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
             default_thread_slowmode_seconds: 0,
+            bitrate: None,
+            user_limit: None,
+            rtc_region: None,
+            video_quality: None,
             overwrites: BTreeMap::new(),
         }],
     });
@@ -2013,12 +2076,15 @@ async fn binding_after_unknown_channel_creation_allows_resubmit() {
     );
 }
 
-/// Channel 更新の応答不明は state に残さず、別の定義を次回 plan できる。
+/// Voice 更新の応答不明は state に残さず、同じ希望構成を再投入できる。
 #[tokio::test]
 async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definition() {
-    let catalog = Arc::new(Mutex::new(ChannelCatalog {
-        channels: vec![channel_snapshot("300", ChannelKind::Text, "旧ルール", None)],
-    }));
+    let mut voice = channel_snapshot("300", ChannelKind::Voice, "旧 General", None);
+    voice.bitrate = Some(64_000);
+    voice.user_limit = Some(4);
+    voice.rtc_region = Some("japan".to_owned());
+    voice.video_quality = Some(VideoQuality::Auto);
+    let catalog = Arc::new(Mutex::new(ChannelCatalog { channels: vec![voice] }));
     let first_source = UnknownChannelUpdateSource {
         catalog: Arc::clone(&catalog),
         outcome: ChannelUpdateOutcome::ResponseUnknown,
@@ -2026,11 +2092,15 @@ async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definitio
     };
     let definition = r#"
         schema_version = 1
-        [channels.rules]
-        type = "text"
-        name = "ルール"
+        [channels.voice]
+        type = "voice"
+        name = "General"
+        bitrate = 96000
+        user_limit = 12
+        rtc_region = { clear = true }
+        video_quality = "full"
     "#;
-    let state_json = channel_state(r#"{"rules":"300"}"#);
+    let state_json = channel_state(r#"{"voice":"300"}"#);
     let plan = plan_channels(
         &first_source,
         &test_permission_vocabulary(),
@@ -2060,9 +2130,10 @@ async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definitio
 
     let changed_definition = r#"
         schema_version = 1
-        [channels.rules]
-        type = "text"
-        name = "別のルール"
+        [channels.voice]
+        type = "voice"
+        name = "別の General"
+        bitrate = 96000
     "#;
     let changed_plan = plan_channels(
         &first_source,
@@ -2073,7 +2144,7 @@ async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definitio
     )
     .await
     .unwrap();
-    assert!(changed_plan.get(&ChannelLogicalId::parse("rules").unwrap()).is_some());
+    assert!(changed_plan.get(&ChannelLogicalId::parse("voice").unwrap()).is_some());
 
     let second_source = UnknownChannelUpdateSource {
         catalog,
@@ -2096,7 +2167,12 @@ async fn unknown_channel_update_preserves_state_mapping_and_allows_new_definitio
     let resolved_state: serde_json::Value = serde_json::from_str(&resubmitted.state_json).unwrap();
     assert_eq!(resolved_state["guild_id"], input_state["guild_id"]);
     assert_eq!(resolved_state["channels"], input_state["channels"]);
-    assert_eq!(second_source.catalog.lock().unwrap().channels[0].name, "ルール");
+    let updated = &second_source.catalog.lock().unwrap().channels[0];
+    assert_eq!(updated.name, "General");
+    assert_eq!(updated.bitrate, Some(96_000));
+    assert_eq!(updated.user_limit, Some(12));
+    assert_eq!(updated.rtc_region, None);
+    assert_eq!(updated.video_quality, Some(VideoQuality::Full));
 }
 
 /// Channel 削除の応答不明時は対応表を維持し、実構成で不在を確認した次回 apply で除去する。
@@ -2285,6 +2361,10 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
             default_thread_slowmode_seconds: 10,
+            bitrate: None,
+            user_limit: None,
+            rtc_region: None,
+            video_quality: None,
             overwrites: BTreeMap::new(),
         }],
     });
@@ -2362,6 +2442,10 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
             default_thread_slowmode_seconds: 0,
+            bitrate: None,
+            user_limit: None,
+            rtc_region: None,
+            video_quality: None,
             overwrites: BTreeMap::from([(
                 ChannelOverwriteTarget::Everyone,
                 ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -2452,6 +2536,10 @@ async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_over
             slowmode_seconds: 0,
             default_auto_archive_minutes: Some(1440),
             default_thread_slowmode_seconds: 0,
+            bitrate: None,
+            user_limit: None,
+            rtc_region: None,
+            video_quality: None,
             overwrites,
         }],
     });
@@ -2542,6 +2630,10 @@ async fn channel_apply_unparents_children_before_category_deletion() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         ],
@@ -2865,6 +2957,10 @@ async fn channel_plan_reports_category_permission_sync() {
                     slowmode_seconds: 0,
                     default_auto_archive_minutes: Some(1440),
                     default_thread_slowmode_seconds: 0,
+                    bitrate: None,
+                    user_limit: None,
+                    rtc_region: None,
+                    video_quality: None,
                     overwrites: BTreeMap::from([(
                         ChannelOverwriteTarget::Everyone,
                         ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -2885,6 +2981,10 @@ async fn channel_plan_reports_category_permission_sync() {
                     slowmode_seconds: 0,
                     default_auto_archive_minutes: Some(1440),
                     default_thread_slowmode_seconds: 0,
+                    bitrate: None,
+                    user_limit: None,
+                    rtc_region: None,
+                    video_quality: None,
                     overwrites: BTreeMap::from([(
                         ChannelOverwriteTarget::Everyone,
                         ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel, OverwriteValue::Deny)])),
@@ -2946,6 +3046,10 @@ async fn channel_apply_copies_category_permission_overwrites() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: category_overwrites.clone(),
             },
             ChannelSnapshot {
@@ -2960,6 +3064,10 @@ async fn channel_apply_copies_category_permission_overwrites() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             },
         ],
@@ -3204,6 +3312,10 @@ async fn channel_apply_updates_category_before_syncing_child() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3224,6 +3336,10 @@ async fn channel_apply_updates_category_before_syncing_child() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3312,6 +3428,10 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3332,6 +3452,10 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
                 slowmode_seconds: 0,
                 default_auto_archive_minutes: Some(1440),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3537,6 +3661,10 @@ async fn announcement_channel_export_round_trip_is_idempotent() {
                 slowmode_seconds: 5,
                 default_auto_archive_minutes: Some(4320),
                 default_thread_slowmode_seconds: 0,
+                bitrate: None,
+                user_limit: None,
+                rtc_region: None,
+                video_quality: None,
                 overwrites: BTreeMap::new(),
             }],
         },
@@ -3557,6 +3685,160 @@ async fn announcement_channel_export_round_trip_is_idempotent() {
     .await
     .unwrap();
     assert!(plan.is_empty());
+}
+
+/// Voice・Stage Channel の全対応属性を export し、再投入した plan が無差分になる。
+#[tokio::test]
+async fn voice_and_stage_channel_export_round_trip_is_idempotent() {
+    let mut voice = channel_snapshot("600", ChannelKind::Voice, "General", None);
+    voice.bitrate = Some(96_000);
+    voice.user_limit = Some(12);
+    voice.rtc_region = Some("japan".to_owned());
+    voice.video_quality = Some(VideoQuality::Full);
+    let mut stage = channel_snapshot("601", ChannelKind::Stage, "Town Hall", None);
+    stage.bitrate = Some(64_000);
+    stage.user_limit = Some(10_000);
+    stage.rtc_region = None;
+    stage.video_quality = Some(VideoQuality::Auto);
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog {
+            channels: vec![voice, stage],
+        },
+    };
+
+    let files = export_channels(&source, guild_id(100), None).await.unwrap();
+
+    assert!(files.definition_toml.contains("type = \"voice\""));
+    assert!(files.definition_toml.contains("type = \"stage\""));
+    assert!(files.definition_toml.contains("bitrate = 96000"));
+    assert!(files.definition_toml.contains("user_limit = 10000"));
+    assert!(files.definition_toml.contains("rtc_region = { clear = true }"));
+    assert!(files.definition_toml.contains("video_quality = \"full\""));
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &files.definition_toml,
+        &files.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty());
+}
+
+/// Stage 固有の bitrate・人数上限は Discord API を呼ぶ前の plan で拒否する。
+#[tokio::test]
+async fn stage_channel_plan_rejects_type_specific_limits() {
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: Vec::new() },
+    };
+    let definition = r#"
+        schema_version = 1
+        [channels.stage]
+        type = "stage"
+        name = "Town Hall"
+        bitrate = 64001
+        user_limit = 10001
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .expect_err("Stage の上限違反は plan で拒否します");
+
+    assert!(error.to_string().contains("Stage Channel stage の bitrate"));
+}
+
+/// Voice bitrate は現在の Guild boost tier から得た上限で検証する。
+#[tokio::test]
+async fn voice_channel_plan_rejects_bitrate_above_current_guild_limit() {
+    let source = LimitedVoiceChannelSource { bitrate_limit: 128_000 };
+    let definition = r#"
+        schema_version = 1
+        [channels.voice]
+        type = "voice"
+        name = "General"
+        bitrate = 128001
+    "#;
+
+    let error = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &channel_state("{}"),
+    )
+    .await
+    .expect_err("Guild の bitrate 上限違反は plan で拒否します");
+
+    assert!(error.to_string().contains("現在の Guild 上限 128000"));
+}
+
+/// Voice 属性の更新と RTC 自動選択への解除を適用し、再投入で差分が消える。
+#[tokio::test]
+async fn voice_channel_apply_updates_attributes_and_clears_region_idempotently() {
+    let mut voice = channel_snapshot("600", ChannelKind::Voice, "Old", None);
+    voice.bitrate = Some(64_000);
+    voice.user_limit = Some(4);
+    voice.rtc_region = Some("japan".to_owned());
+    voice.video_quality = Some(VideoQuality::Auto);
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![voice] });
+    let definition = r#"
+        schema_version = 1
+        [channels.voice]
+        type = "voice"
+        name = "General"
+        parent = { clear = true }
+        bitrate = 96000
+        user_limit = 12
+        rtc_region = { clear = true }
+        video_quality = "full"
+    "#;
+    let state_json = channel_state(r#"{"voice":"600"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state_json,
+    )
+    .await
+    .unwrap();
+
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state_json,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    {
+        let updates = source.updates.lock().unwrap();
+        assert_eq!(updates[0].bitrate, Some(96_000));
+        assert_eq!(updates[0].user_limit, Some(12));
+        assert_eq!(updates[0].rtc_region, ChannelUpdateValue::Clear);
+        assert_eq!(updates[0].video_quality, Some(VideoQuality::Full));
+    }
+    let rerun = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &result.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(rerun.is_empty());
 }
 
 /// Announcement Channel では Text 専用の Thread 低速モードを受理しない。

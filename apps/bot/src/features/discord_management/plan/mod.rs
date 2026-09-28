@@ -50,12 +50,14 @@ pub(super) async fn plan_channels<S: ChannelSource>(
     } else {
         true
     };
+    let voice_bitrate_limit = source.voice_bitrate_limit(&guild_id).await?;
     build_channel_plan_with_capabilities(
         &input.definition,
         &input.state,
         &catalog,
         can_manage_roles,
         supports_announcement_channels,
+        voice_bitrate_limit,
     )
 }
 

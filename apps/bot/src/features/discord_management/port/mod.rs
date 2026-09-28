@@ -177,6 +177,10 @@ pub(super) struct ChannelSnapshot {
     pub default_auto_archive_minutes: Option<u16>,
     /// Discord が未設定を返す場合も API 上の canonical 値 0 として扱います。
     pub default_thread_slowmode_seconds: u16,
+    pub bitrate: Option<u32>,
+    pub user_limit: Option<u16>,
+    pub rtc_region: Option<String>,
+    pub video_quality: Option<super::configuration::VideoQuality>,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
@@ -273,6 +277,10 @@ pub(super) struct ChannelCreate {
     pub slowmode_seconds: u16,
     pub default_auto_archive_minutes: Option<u16>,
     pub default_thread_slowmode_seconds: u16,
+    pub bitrate: Option<u32>,
+    pub user_limit: Option<u16>,
+    pub rtc_region: ChannelUpdateValue<String>,
+    pub video_quality: Option<super::configuration::VideoQuality>,
     pub overwrites: BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
 }
 
@@ -298,6 +306,10 @@ pub(super) struct ChannelUpdate {
     pub default_auto_archive_minutes: ChannelUpdateValue<u16>,
     /// `None` は Keep、具体的な値（解除時は 0）が更新値です。
     pub default_thread_slowmode_seconds: Option<u16>,
+    pub bitrate: Option<u32>,
+    pub user_limit: Option<u16>,
+    pub rtc_region: ChannelUpdateValue<String>,
+    pub video_quality: Option<super::configuration::VideoQuality>,
     pub overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
 }
 
@@ -349,6 +361,20 @@ impl ChannelUpdate {
         if let Some(seconds) = self.default_thread_slowmode_seconds {
             channel.default_thread_slowmode_seconds = seconds;
         }
+        if let Some(bitrate) = self.bitrate {
+            channel.bitrate = Some(bitrate);
+        }
+        if let Some(user_limit) = self.user_limit {
+            channel.user_limit = Some(user_limit);
+        }
+        match &self.rtc_region {
+            ChannelUpdateValue::Keep => {}
+            ChannelUpdateValue::Set(region) => channel.rtc_region = Some(region.clone()),
+            ChannelUpdateValue::Clear => channel.rtc_region = None,
+        }
+        if let Some(video_quality) = self.video_quality {
+            channel.video_quality = Some(video_quality);
+        }
         if let Some(overwrites) = &self.overwrites {
             channel.overwrites.clone_from(overwrites);
         }
@@ -380,6 +406,11 @@ pub(super) trait ChannelSource {
 
     /// Announcement Channel の作成に必要な Guild feature を確認します。
     async fn supports_announcement_channels(&self, guild_id: &GuildId) -> Result<bool, ManagementError>;
+
+    /// 現在の Guild feature / boost tier で Voice Channel に設定できる最大 bitrate です。
+    async fn voice_bitrate_limit(&self, _guild_id: &GuildId) -> Result<u32, ManagementError> {
+        Ok(96_000)
+    }
 
     /// 権限上書きで参照する Role/Member が対象 Guild に存在するかを確認します。
     async fn validate_channel_permission_targets(

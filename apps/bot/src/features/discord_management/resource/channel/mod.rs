@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::{
     configuration::{
         ChannelAttributes, ChannelDefinition, ChannelKind, ChannelValue, DefinitionFile, KnownPermission,
-        OverwriteTarget, OverwriteValue, StateFile,
+        OverwriteTarget, OverwriteValue, StateFile, VideoQuality,
     },
     domain::ManagementError,
     ids::{ChannelId, ChannelLogicalId, RoleId},
@@ -21,6 +21,9 @@ const DEFAULT_CHANNEL_NSFW: bool = false;
 const DEFAULT_SLOWMODE_SECONDS: u16 = 0;
 const DEFAULT_AUTO_ARCHIVE_MINUTES: Option<u16> = Some(1440);
 const DEFAULT_THREAD_SLOWMODE_SECONDS: u16 = 0;
+const DEFAULT_VOICE_BITRATE: u32 = 64_000;
+const DEFAULT_USER_LIMIT: u16 = 0;
+const DEFAULT_VIDEO_QUALITY: VideoQuality = VideoQuality::Auto;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValueChange<T> {
@@ -94,6 +97,10 @@ pub(crate) struct AttributeChanges {
     slowmode_seconds: Option<ValueChange<u16>>,
     default_auto_archive_minutes: Option<NullableValueChange<u16>>,
     default_thread_slowmode_seconds: Option<ValueChange<u16>>,
+    bitrate: Option<ValueChange<u32>>,
+    user_limit: Option<ValueChange<u16>>,
+    rtc_region: Option<NullableValueChange<String>>,
+    video_quality: Option<ValueChange<VideoQuality>>,
     overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>,
     /// 同期時に子へ送る Category の完成形です。空の map も有効な更新値です。
     synced_overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
@@ -166,6 +173,28 @@ impl AttributeChanges {
             .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
             .transpose()?
             .and_then(|desired| ValueChange::between(actual.default_thread_slowmode_seconds, desired));
+        let bitrate = desired
+            .bitrate
+            .as_ref()
+            .map(|value| resolve_u32(value, DEFAULT_VOICE_BITRATE))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.bitrate.unwrap_or(DEFAULT_VOICE_BITRATE), desired));
+        let user_limit = desired
+            .user_limit
+            .as_ref()
+            .map(|value| resolve_u16(value, DEFAULT_USER_LIMIT))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.user_limit.unwrap_or(DEFAULT_USER_LIMIT), desired));
+        let rtc_region = desired
+            .rtc_region
+            .as_ref()
+            .map(|value| value.resolve_optional(None))
+            .and_then(|desired| NullableValueChange::between(actual.rtc_region.clone(), desired));
+        let video_quality = desired
+            .video_quality
+            .as_ref()
+            .map(|value| value.resolve(DEFAULT_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY))
+            .and_then(|desired| ValueChange::between(actual.video_quality.unwrap_or(DEFAULT_VIDEO_QUALITY), desired));
         let overwrites = if synced_overwrites.is_some() {
             BTreeMap::new()
         } else {
@@ -187,6 +216,10 @@ impl AttributeChanges {
             slowmode_seconds,
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
+            bitrate,
+            user_limit,
+            rtc_region,
+            video_quality,
             overwrites,
             synced_overwrites,
         };
@@ -202,6 +235,10 @@ impl AttributeChanges {
             && self.slowmode_seconds.is_none()
             && self.default_auto_archive_minutes.is_none()
             && self.default_thread_slowmode_seconds.is_none()
+            && self.bitrate.is_none()
+            && self.user_limit.is_none()
+            && self.rtc_region.is_none()
+            && self.video_quality.is_none()
             && self.overwrites.is_empty()
             && self.synced_overwrites.is_none()
     }
@@ -284,6 +321,10 @@ impl AttributeChanges {
                 .default_thread_slowmode_seconds
                 .as_ref()
                 .map(|change| *change.desired()),
+            bitrate: self.bitrate.as_ref().map(|change| *change.desired()),
+            user_limit: self.user_limit.as_ref().map(|change| *change.desired()),
+            rtc_region: nullable_update(self.rtc_region.as_ref()),
+            video_quality: self.video_quality.as_ref().map(|change| *change.desired()),
             overwrites: (self.synced_overwrites.is_some() || !self.overwrites.is_empty()).then_some(overwrites),
         })
     }
@@ -369,6 +410,46 @@ impl AttributeChanges {
                 change.desired(),
             );
         }
+        if let Some(change) = &self.bitrate {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "bitrate",
+                change.current(),
+                change.desired(),
+            );
+        }
+        if let Some(change) = &self.user_limit {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "user_limit",
+                change.current(),
+                change.desired(),
+            );
+        }
+        if let Some(change) = &self.rtc_region {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "rtc_region",
+                display_nullable_string(change.current().as_ref()),
+                display_nullable_string(change.desired()),
+            );
+        }
+        if let Some(change) = &self.video_quality {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "video_quality",
+                display_video_quality(*change.current()),
+                display_video_quality(*change.desired()),
+            );
+        }
         for (target, permissions) in &self.overwrites {
             for (permission, change) in permissions {
                 render_change_line(
@@ -413,6 +494,13 @@ fn display_overwrite_value(value: &OverwriteValue) -> &'static str {
         OverwriteValue::Allow => "allow",
         OverwriteValue::Deny => "deny",
         OverwriteValue::Clear => "clear",
+    }
+}
+
+fn display_video_quality(value: VideoQuality) -> &'static str {
+    match value {
+        VideoQuality::Auto => "auto",
+        VideoQuality::Full => "full",
     }
 }
 
@@ -655,6 +743,31 @@ fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
             ));
         }
     }
+    if matches!(payload.kind, ChannelKind::Voice | ChannelKind::Stage) {
+        output.push_str(&format!("    parent: {parent}\n"));
+        output.push_str(&format!("    nsfw: {}\n", payload.nsfw));
+        output.push_str(&format!("    slowmode_seconds: {}\n", payload.slowmode_seconds));
+        output.push_str(&format!(
+            "    bitrate: {}\n",
+            payload.bitrate.unwrap_or(DEFAULT_VOICE_BITRATE)
+        ));
+        output.push_str(&format!(
+            "    user_limit: {}\n",
+            payload.user_limit.unwrap_or(DEFAULT_USER_LIMIT)
+        ));
+        output.push_str(&format!(
+            "    rtc_region: {}\n",
+            match &payload.rtc_region {
+                ChannelUpdateValue::Keep => "omitted".to_owned(),
+                ChannelUpdateValue::Set(region) => display_quoted_string(region),
+                ChannelUpdateValue::Clear => "None".to_owned(),
+            }
+        ));
+        output.push_str(&format!(
+            "    video_quality: {}\n",
+            display_video_quality(payload.video_quality.unwrap_or(DEFAULT_VIDEO_QUALITY))
+        ));
+    }
     let overwrites = payload
         .overwrites
         .iter()
@@ -683,6 +796,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
     catalog: &ChannelCatalog,
     can_manage_roles: bool,
     supports_announcement_channels: bool,
+    voice_bitrate_limit: u32,
 ) -> Result<ChannelPlan, ManagementError> {
     let actual = catalog
         .channels
@@ -712,6 +826,17 @@ pub(crate) fn build_channel_plan_with_capabilities(
             ManagementError::InvalidDefinition(format!("管理対象 Channel {logical_id} には type が必要です"))
         })?;
         attributes.validate_for_kind(logical_id)?;
+        if kind == ChannelKind::Voice
+            && attributes
+                .bitrate
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .is_some_and(|bitrate| *bitrate > voice_bitrate_limit)
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Voice Channel {logical_id} の bitrate は現在の Guild 上限 {voice_bitrate_limit} 以下で指定してください"
+            )));
+        }
         validate_channel_parent(
             logical_id,
             kind,
@@ -917,7 +1042,10 @@ fn validate_deferred_child_order(
                 "order.children の Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             )));
         };
-        if !matches!(channel.kind, ChannelKind::Text | ChannelKind::Announcement) {
+        if !matches!(
+            channel.kind,
+            ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+        ) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order.children の Channel {logical_id} は Text の兄弟として指定できません"
             )));
@@ -1032,7 +1160,11 @@ fn build_order_group(
             )));
         };
         if channel.kind != expected_kind
-            && !(expected_kind == ChannelKind::Text && channel.kind == ChannelKind::Announcement)
+            && !(expected_kind == ChannelKind::Text
+                && matches!(
+                    channel.kind,
+                    ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage
+                ))
         {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order の Channel {logical_id} は {} の兄弟として指定できません",
@@ -1355,7 +1487,10 @@ fn validate_channel_parent(
         )));
     }
     let declared_kind = compose_attributes(parent_definition).kind;
-    if matches!(declared_kind, Some(ChannelKind::Text | ChannelKind::Announcement)) {
+    if matches!(
+        declared_kind,
+        Some(ChannelKind::Text | ChannelKind::Announcement | ChannelKind::Voice | ChannelKind::Stage)
+    ) {
         return Err(ManagementError::InvalidDefinition(format!(
             "Channel {logical_id} の親 {parent_logical_id} は Category である必要があります"
         )));
@@ -1485,6 +1620,10 @@ fn resolve_u16(value: &ChannelValue<u16>, default: u16) -> Result<u16, Managemen
     Ok(value.resolve(default, 0))
 }
 
+fn resolve_u32(value: &ChannelValue<u32>, default: u32) -> Result<u32, ManagementError> {
+    Ok(value.resolve(default, 0))
+}
+
 fn resolve_nullable_u16(value: &ChannelValue<u16>, default: Option<u16>) -> Result<Option<u16>, ManagementError> {
     Ok(value.resolve_optional(default))
 }
@@ -1610,6 +1749,28 @@ pub(crate) fn desired_channel_create_with_catalog(
         .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
         .transpose()?
         .unwrap_or(DEFAULT_THREAD_SLOWMODE_SECONDS);
+    let bitrate = attributes
+        .bitrate
+        .as_ref()
+        .map(|value| resolve_u32(value, DEFAULT_VOICE_BITRATE))
+        .transpose()?
+        .unwrap_or(DEFAULT_VOICE_BITRATE);
+    let user_limit = attributes
+        .user_limit
+        .as_ref()
+        .map(|value| resolve_u16(value, DEFAULT_USER_LIMIT))
+        .transpose()?
+        .unwrap_or(DEFAULT_USER_LIMIT);
+    let rtc_region = match attributes.rtc_region.as_ref() {
+        None => ChannelUpdateValue::Keep,
+        Some(ChannelValue::Value(region)) => ChannelUpdateValue::Set(region.clone()),
+        Some(ChannelValue::Default | ChannelValue::Clear) => ChannelUpdateValue::Clear,
+    };
+    let video_quality = attributes
+        .video_quality
+        .as_ref()
+        .map(|value| value.resolve(DEFAULT_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY))
+        .unwrap_or(DEFAULT_VIDEO_QUALITY);
     let overwrites = if attributes.permissions_sync == Some(true) {
         let mut visiting = BTreeSet::new();
         desired_overwrites_for_channel(logical_id, definition_file, state, actual.as_ref(), &mut visiting)?
@@ -1627,6 +1788,10 @@ pub(crate) fn desired_channel_create_with_catalog(
         slowmode_seconds,
         default_auto_archive_minutes,
         default_thread_slowmode_seconds,
+        bitrate: matches!(kind, ChannelKind::Voice | ChannelKind::Stage).then_some(bitrate),
+        user_limit: matches!(kind, ChannelKind::Voice | ChannelKind::Stage).then_some(user_limit),
+        rtc_region,
+        video_quality: matches!(kind, ChannelKind::Voice | ChannelKind::Stage).then_some(video_quality),
         overwrites,
     })
 }

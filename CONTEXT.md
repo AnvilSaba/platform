@@ -50,5 +50,8 @@ Role または Channel の共通する管理属性に名前を付け、複数の
 **Announcement Channel**:
 Discord のお知らせ用 Channel。Text Channel と共通する属性を持つが、作成には Guild の `COMMUNITY` feature が必要で、Thread の既定低速モードには対応しない。
 
+**Voice Channel / Stage Channel**:
+Discord の音声用 Channel。名前・親・並び順・権限に加えて bitrate、人数制限、RTC region、映像品質を管理する。Voice の bitrate 上限は Guild の boost/VIP 条件、Stage の bitrate と人数上限は Channel 種別に従う。
+
 **解除指定**:
 属性の値や、その場所に固有の権限設定を明示的に取り除く指定。管理解除と異なり、希望構成への変更対象となる。

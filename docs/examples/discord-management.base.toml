@@ -31,6 +31,24 @@ parent = "information"
 topic = "最新情報"
 default_auto_archive_minutes = 4320
 
+[channels.general_voice]
+type = "voice"
+name = "General"
+parent = "information"
+bitrate = 96000
+user_limit = 12
+rtc_region = { clear = true }
+video_quality = "auto"
+
+[channels.town_hall]
+type = "stage"
+name = "Town Hall"
+parent = "information"
+bitrate = 64000
+user_limit = 10000
+rtc_region = { clear = true }
+video_quality = "full"
+
 [message_sets.guidelines]
 channel = "rules"
 
