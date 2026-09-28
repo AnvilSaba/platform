@@ -28,7 +28,8 @@ mod tests;
 #[tokio::main]
 async fn main() -> AppResult<()> {
     let config = AppConfig::from_file("config.toml").await?;
-    let server = Arc::new(LinkServer::new(MojangVerifier::new()?, LinkStore::connect().await?));
+    let linker = LinkStore::connect().await?;
+    let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
     let listener = TcpListener::bind(config.server.listen).await?;
     eprintln!("MCGuildLink 26.3 listening on {}", config.server.listen);
     loop {

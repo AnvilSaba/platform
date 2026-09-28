@@ -18,7 +18,7 @@ serde_json = "1"
 serde_with = { version = "3", features = [ "json" ] }
 sha1 = "0.11"
 uuid = { version = "1", features = [ "serde", "v4" ] }
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "uuid" ] }
+sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros", "uuid" ] }
 tokio = { version = "1", features = [ "rt-multi-thread", "macros", "net", "io-util", "time", "fs" ] }
 platform-database = { path = "../../crates/platform-database" }
 toml = "1"
