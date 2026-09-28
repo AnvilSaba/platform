@@ -1,12 +1,17 @@
 mod admin;
 mod event_handler;
 mod interactions;
+pub(super) mod model;
+pub(super) mod ports;
 mod presentation;
-mod queries;
-mod store;
+pub(super) mod queries;
 
 pub use admin::links;
-pub use event_handler::LinkManagementEventHandler;
+pub use event_handler::AccountLinksEventHandler;
 
+pub(super) const LIST_LINK_BUTTON_ID: &str = "list_link_button";
+
+#[cfg(test)]
+mod repository_tests;
 #[cfg(test)]
 mod tests;

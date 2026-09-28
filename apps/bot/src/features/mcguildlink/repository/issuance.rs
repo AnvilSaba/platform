@@ -1,22 +1,14 @@
-use super::{
-    ports::{CodeIssuanceSession, McGuildLinkRepository},
-    queries,
-    types::{DiscordAccountId, DiscordUserId, LinkCode},
+use super::DatabaseMcGuildLinkRepository;
+use crate::{
+    app::AppError,
+    features::mcguildlink::linking::{
+        ports::{CodeIssuanceRepository, CodeIssuanceSession},
+        queries,
+        types::{DiscordAccountId, DiscordUserId, LinkCode},
+    },
 };
-use crate::app::AppError;
 use serenity::async_trait;
-use sqlx::{PgPool, Postgres, Transaction};
-
-#[derive(Clone)]
-pub struct DatabaseMcGuildLinkRepository {
-    pool: PgPool,
-}
-
-impl DatabaseMcGuildLinkRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
+use sqlx::{Postgres, Transaction};
 
 pub struct DatabaseCodeIssuanceSession {
     transaction: Transaction<'static, Postgres>,
@@ -24,7 +16,7 @@ pub struct DatabaseCodeIssuanceSession {
 }
 
 #[async_trait]
-impl McGuildLinkRepository for DatabaseMcGuildLinkRepository {
+impl CodeIssuanceRepository for DatabaseMcGuildLinkRepository {
     type CodeIssuance = DatabaseCodeIssuanceSession;
 
     async fn begin_code_issuance(
@@ -62,8 +54,10 @@ impl CodeIssuanceSession for DatabaseCodeIssuanceSession {
 mod tests {
     use super::*;
     use crate::features::mcguildlink::{
-        ports::LinkCodeGenerator, ports::LinkCodeResult, service::LinkCodes, test_support, types::LinkCode,
+        linking::{ports::LinkCodeGenerator, ports::LinkCodeResult, service::LinkCodes, types::LinkCode},
+        test_support,
     };
+    use sqlx::PgPool;
     use std::{collections::VecDeque, sync::Mutex};
 
     struct FixedCodes(Mutex<VecDeque<&'static str>>);

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.event_type AS \"event_type!\", a.actor_discord_user_id::text AS \"actor_discord_user_id!\", a.target_minecraft_name AS \"target_minecraft_name!\"\n             FROM mcguildlink.audit_logs a JOIN mcguildlink.audit_outbox o ON o.log_id = a.id\n             ORDER BY a.target_minecraft_name",
+  "query": "SELECT a.event_type AS \"event_type!\", a.actor_discord_user_id::text AS \"actor_discord_user_id!\", a.target_minecraft_name AS \"target_minecraft_name!\"\n         FROM mcguildlink.audit_logs a JOIN mcguildlink.audit_outbox o ON o.log_id = a.id\n         ORDER BY a.target_minecraft_name",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "dcf1022fb79772140fdd0b24d5c729fe4ff6445b0245ccf91a00bcd22a09bab6"
+  "hash": "69a837e53644187b2f57fabf82177bb7a2aa97d3493a095af5c14d3c8fcc1892"
 }

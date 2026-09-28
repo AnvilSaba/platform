@@ -1,4 +1,4 @@
-use super::store::{Link, LinkManagement};
+use super::{model::Link, ports::AccountLinksRepository};
 use crate::app::AppError;
 use dashmap::DashMap;
 use serenity::{
@@ -65,11 +65,11 @@ impl Scope {
     }
 }
 
-pub(super) async fn load(store: &LinkManagement, scope: Scope) -> Result<Vec<Link>, AppError> {
+pub(super) async fn load(repository: &impl AccountLinksRepository, scope: Scope) -> Result<Vec<Link>, AppError> {
     match scope {
-        Scope::User(id) | Scope::Discord(id) => store.by_discord(id).await,
-        Scope::Minecraft(uuid) => store.by_minecraft(uuid).await,
-        Scope::All => store.all().await,
+        Scope::User(id) | Scope::Discord(id) => repository.by_discord(id).await,
+        Scope::Minecraft(uuid) => repository.by_minecraft(uuid).await,
+        Scope::All => repository.all().await,
     }
 }
 

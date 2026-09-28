@@ -1,7 +1,7 @@
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
-use super::store::Link;
+use super::model::Link;
 
 pub async fn list(pool: &PgPool, user_id: Option<u64>, uuid: Option<Uuid>) -> Result<Vec<Link>, sqlx::Error> {
     let user_id = user_id.map(|id| id.to_string());

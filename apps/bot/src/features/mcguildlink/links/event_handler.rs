@@ -1,10 +1,11 @@
 use super::{
     interactions::{self, UNLINK_BUTTON_PREFIX, UNLINK_MODAL_PREFIX},
-    store::LinkManagement,
+    ports::AccountLinksRepository,
 };
 use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
+    features::mcguildlink::repository::DatabaseMcGuildLinkRepository,
 };
 use serenity::{
     all::{
@@ -14,17 +15,17 @@ use serenity::{
 };
 use sqlx::PgPool;
 
-use super::super::linking::LIST_LINK_BUTTON_ID;
+use super::LIST_LINK_BUTTON_ID;
 use super::presentation::parse_page;
 
-pub struct LinkManagementEventHandler {
-    store: LinkManagement,
+pub struct AccountLinksEventHandler {
+    repository: DatabaseMcGuildLinkRepository,
 }
 
-impl LinkManagementEventHandler {
+impl AccountLinksEventHandler {
     pub fn new(database: &PgPool) -> Self {
         Self {
-            store: LinkManagement::new(database.clone()),
+            repository: DatabaseMcGuildLinkRepository::new(database.clone()),
         }
     }
 
@@ -36,19 +37,8 @@ impl LinkManagementEventHandler {
         username: &str,
     ) -> Result<(), AppError> {
         let configured_guild = ctx.app_config().await.mcguildlink.guild_id;
-        self.handle_member_leave_for_guild(configured_guild, event_guild, user_id, username)
-            .await
-    }
-
-    pub(super) async fn handle_member_leave_for_guild(
-        &self,
-        configured_guild: GuildId,
-        event_guild: GuildId,
-        user_id: u64,
-        username: &str,
-    ) -> Result<(), AppError> {
         if event_guild == configured_guild {
-            self.store.member_left(user_id, username).await?;
+            self.repository.member_left(user_id, username).await?;
         }
         Ok(())
     }
@@ -63,7 +53,7 @@ impl LinkManagementEventHandler {
 
         let id = component.data.custom_id.as_str();
         if id == LIST_LINK_BUTTON_ID {
-            interactions::show_link_list(&self.store, ctx, component).await?;
+            interactions::show_link_list(&self.repository, ctx, component).await?;
         } else if let Some((snapshot_id, page_index)) = parse_page(id) {
             interactions::show_page(
                 ctx,
@@ -74,7 +64,7 @@ impl LinkManagementEventHandler {
             )
             .await?;
         } else if let Some((owner, uuid)) = interactions::parse_unlink(id, UNLINK_BUTTON_PREFIX) {
-            interactions::show_unlink_confirmation(&self.store, ctx, component, owner, uuid).await?;
+            interactions::show_unlink_confirmation(&self.repository, ctx, component, owner, uuid).await?;
         }
         Ok(())
     }
@@ -85,14 +75,14 @@ impl LinkManagementEventHandler {
             return Ok(());
         }
         if let Some((owner, uuid)) = interactions::parse_unlink(&modal.data.custom_id, UNLINK_MODAL_PREFIX) {
-            interactions::complete_unlink(&self.store, ctx, modal, owner, uuid).await?;
+            interactions::complete_unlink(&self.repository, ctx, modal, owner, uuid).await?;
         }
         Ok(())
     }
 }
 
 #[async_trait]
-impl BotEventHandler for LinkManagementEventHandler {
+impl BotEventHandler for AccountLinksEventHandler {
     async fn dispatch(&self, ctx: &Context, event: &FullEvent) -> Result<(), AppError> {
         match event {
             FullEvent::GuildMemberRemoval { guild_id, user, .. } => {

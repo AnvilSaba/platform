@@ -1,24 +1,16 @@
-use super::{
-    ports::LinkCodeResult, repository::DatabaseMcGuildLinkRepository, service::LinkCodes, types::DiscordUserId,
-};
+use super::super::links::LIST_LINK_BUTTON_ID;
+use super::event_handler::START_LINK_BUTTON_ID;
 use crate::{
     app::{AppApplicationContext, AppError, BotDataExt, BotError},
     utils::{create_safe_allowed_mentions, create_safe_message},
 };
-use bot_macros::event_handler;
 use poise::CreateReply;
 use serenity::{
-    all::{
-        ButtonStyle, ComponentInteractionDataKind, Context, CreateActionRow, CreateButton, EditInteractionResponse,
-        FullEvent, Interaction, MessageFlags, ReactionType, SeparatorSpacingSize,
-    },
+    all::{ButtonStyle, CreateActionRow, CreateButton, MessageFlags, ReactionType, SeparatorSpacingSize},
     builder::{
         CreateComponent, CreateContainer, CreateContainerComponent, CreateMessage, CreateSeparator, CreateTextDisplay,
     },
 };
-
-const START_LINK_BUTTON_ID: &str = "start_link_button";
-pub(super) const LIST_LINK_BUTTON_ID: &str = "list_link_button";
 
 fn link_panel_message() -> CreateMessage<'static> {
     let buttons = CreateActionRow::buttons(vec![
@@ -40,59 +32,6 @@ fn link_panel_message() -> CreateMessage<'static> {
             CreateContainerComponent::Separator(CreateSeparator::new().spacing(SeparatorSpacingSize::Large)),
             CreateContainerComponent::ActionRow(buttons),
         ]))])
-}
-
-#[event_handler]
-pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), AppError> {
-    let FullEvent::InteractionCreate {
-        interaction: Interaction::Component(interaction),
-        ..
-    } = event
-    else {
-        return Ok(());
-    };
-
-    if interaction.data.custom_id != START_LINK_BUTTON_ID
-        || !matches!(interaction.data.kind, ComponentInteractionDataKind::Button)
-    {
-        return Ok(());
-    }
-
-    let config = ctx.app_config().await;
-    let config = &config.mcguildlink;
-    if interaction.guild_id != Some(config.guild_id) {
-        return Ok(());
-    }
-    let data = ctx.bot_data();
-
-    interaction.defer_ephemeral(&ctx.http).await?;
-
-    let codes = LinkCodes::new(DatabaseMcGuildLinkRepository::new(data.database.clone()));
-    let result = codes
-        .issue(DiscordUserId::new(interaction.user.id.get()), &interaction.user.name)
-        .await;
-
-    let content = match &result {
-        Ok(LinkCodeResult::Code(code)) => format!(
-            "Minecraft 26.3 で以下のサーバーに接続し、表示される入力欄にコードを入力してください。\n\nサーバーアドレス:\n```\n{}\n```\nコード:\n```\n{code}\n```",
-            config.display_server_address
-        ),
-        Ok(LinkCodeResult::Blocked) => {
-            "この Discordアカウントはブロックされているため、紐付けを開始できません。".into()
-        }
-        Err(_) => "コードを取得できませんでした。時間をおいて再度お試しください。".into(),
-    };
-
-    interaction
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new()
-                .content(content)
-                .allowed_mentions(create_safe_allowed_mentions()),
-        )
-        .await?;
-
-    result.map(|_| ())
 }
 
 /// 紐付けを開始するためのパネルを送信します。

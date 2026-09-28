@@ -1,6 +1,6 @@
 use super::{
+    ports::AccountLinksRepository,
     presentation::{Scope, get_snapshot, load, page, save_snapshot},
-    store::LinkManagement,
 };
 use crate::{
     app::AppError,
@@ -28,13 +28,13 @@ pub(super) fn parse_unlink(id: &str, prefix: &str) -> Option<(u64, Uuid)> {
 }
 
 pub(super) async fn show_link_list(
-    store: &LinkManagement,
+    store: &impl AccountLinksRepository,
     ctx: &Context,
     component: &ComponentInteraction,
 ) -> Result<(), AppError> {
     component.defer_ephemeral(&ctx.http).await?;
     let scope = Scope::User(component.user.id.get());
-    let links = load(&store, scope).await?;
+    let links = load(store, scope).await?;
     let snapshot = save_snapshot(component.id.get(), component.user.id.get(), scope, links);
     let (content, components) = page(component.id.get(), &snapshot, 0);
     component
@@ -104,7 +104,7 @@ pub(super) async fn show_page(
 }
 
 pub(super) async fn show_unlink_confirmation(
-    store: &LinkManagement,
+    store: &impl AccountLinksRepository,
     ctx: &Context,
     component: &ComponentInteraction,
     owner: u64,
@@ -160,7 +160,7 @@ pub(super) async fn show_unlink_confirmation(
 }
 
 pub(super) async fn complete_unlink(
-    store: &LinkManagement,
+    store: &impl AccountLinksRepository,
     ctx: &Context,
     modal: &ModalInteraction,
     owner: u64,

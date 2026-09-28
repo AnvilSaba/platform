@@ -1,6 +1,6 @@
 use super::{
     code_generator::RandomLinkCodeGenerator,
-    ports::{CodeIssuanceSession, LinkCodeGenerator, LinkCodeResult, McGuildLinkRepository},
+    ports::{CodeIssuanceRepository, CodeIssuanceSession, LinkCodeGenerator, LinkCodeResult},
     types::DiscordUserId,
 };
 use crate::app::AppError;
@@ -12,13 +12,13 @@ pub struct LinkCodes<R, G = RandomLinkCodeGenerator> {
     generator: G,
 }
 
-impl<R: McGuildLinkRepository> LinkCodes<R> {
+impl<R: CodeIssuanceRepository> LinkCodes<R> {
     pub fn new(repository: R) -> Self {
         Self::with_generator(repository, RandomLinkCodeGenerator)
     }
 }
 
-impl<R: McGuildLinkRepository, G: LinkCodeGenerator> LinkCodes<R, G> {
+impl<R: CodeIssuanceRepository, G: LinkCodeGenerator> LinkCodes<R, G> {
     pub fn with_generator(repository: R, generator: G) -> Self {
         Self { repository, generator }
     }
@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl McGuildLinkRepository for MemoryRepository {
+    impl CodeIssuanceRepository for MemoryRepository {
         type CodeIssuance = MemoryCodeIssuanceSession;
         async fn begin_code_issuance(&self, _: DiscordUserId, _: &str) -> Result<Self::CodeIssuance, AppError> {
             Ok(MemoryCodeIssuanceSession {
