@@ -49,6 +49,17 @@ user_limit = 10000
 rtc_region = { clear = true }
 video_quality = "full"
 
+[channels.questions]
+type = "forum"
+name = "質問"
+parent = "information"
+topic = "質問はこちら"
+default_auto_archive_minutes = 4320
+default_thread_slowmode_seconds = 10
+default_reaction = "❓"
+default_sort_order = "latest_activity"
+default_forum_layout = "list"
+
 [message_sets.guidelines]
 channel = "rules"
 

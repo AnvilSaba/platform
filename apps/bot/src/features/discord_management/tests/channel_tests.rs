@@ -349,6 +349,10 @@ impl ChannelLifecycleTarget for ApplyingFakeChannelSource {
                     ChannelUpdateValue::Set(region) => Some(region),
                 },
                 video_quality: create.video_quality,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: create.overwrites,
             });
             if let Some(remove_id) = self.create_remove_channel {
@@ -460,6 +464,10 @@ fn channel_snapshot(id: &str, kind: ChannelKind, name: &str, parent_id: Option<&
         user_limit: None,
         rtc_region: None,
         video_quality: None,
+        default_reaction: None,
+        default_sort_order: None,
+        default_forum_layout: None,
+        available_tags: Vec::new(),
         overwrites: BTreeMap::new(),
     }
 }
@@ -1446,6 +1454,10 @@ async fn channel_export_round_trip_is_idempotent() {
                     user_limit: None,
                     rtc_region: None,
                     video_quality: None,
+                    default_reaction: None,
+                    default_sort_order: None,
+                    default_forum_layout: None,
+                    available_tags: Vec::new(),
                     overwrites: BTreeMap::new(),
                 },
             ],
@@ -1580,6 +1592,10 @@ async fn channel_export_preserves_category_permission_sync() {
                     user_limit: None,
                     rtc_region: None,
                     video_quality: None,
+                    default_reaction: None,
+                    default_sort_order: None,
+                    default_forum_layout: None,
+                    available_tags: Vec::new(),
                     overwrites: overwrites.clone(),
                 },
                 ChannelSnapshot {
@@ -1598,6 +1614,10 @@ async fn channel_export_preserves_category_permission_sync() {
                     user_limit: None,
                     rtc_region: None,
                     video_quality: None,
+                    default_reaction: None,
+                    default_sort_order: None,
+                    default_forum_layout: None,
+                    available_tags: Vec::new(),
                     overwrites,
                 },
             ],
@@ -1643,6 +1663,10 @@ async fn initial_channel_export_registers_unmapped_overwrite_targets() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::from([
                     (
                         ChannelOverwriteTarget::Role(RoleId::new(400)),
@@ -1941,6 +1965,10 @@ async fn channel_default_thread_slowmode_zero_is_canonical_after_apply() {
             user_limit: None,
             rtc_region: None,
             video_quality: None,
+            default_reaction: None,
+            default_sort_order: None,
+            default_forum_layout: None,
+            available_tags: Vec::new(),
             overwrites: BTreeMap::new(),
         }],
     });
@@ -2365,6 +2393,10 @@ async fn channel_apply_updates_attributes_and_clears_optional_values() {
             user_limit: None,
             rtc_region: None,
             video_quality: None,
+            default_reaction: None,
+            default_sort_order: None,
+            default_forum_layout: None,
+            available_tags: Vec::new(),
             overwrites: BTreeMap::new(),
         }],
     });
@@ -2446,6 +2478,10 @@ async fn channel_apply_deletes_permission_overwrite_when_all_permissions_are_cle
             user_limit: None,
             rtc_region: None,
             video_quality: None,
+            default_reaction: None,
+            default_sort_order: None,
+            default_forum_layout: None,
+            available_tags: Vec::new(),
             overwrites: BTreeMap::from([(
                 ChannelOverwriteTarget::Everyone,
                 ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -2540,6 +2576,10 @@ async fn channel_apply_preserves_unknown_bits_and_untouched_targets_in_full_over
             user_limit: None,
             rtc_region: None,
             video_quality: None,
+            default_reaction: None,
+            default_sort_order: None,
+            default_forum_layout: None,
+            available_tags: Vec::new(),
             overwrites,
         }],
     });
@@ -2634,6 +2674,10 @@ async fn channel_apply_unparents_children_before_category_deletion() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::new(),
             },
         ],
@@ -2961,6 +3005,10 @@ async fn channel_plan_reports_category_permission_sync() {
                     user_limit: None,
                     rtc_region: None,
                     video_quality: None,
+                    default_reaction: None,
+                    default_sort_order: None,
+                    default_forum_layout: None,
+                    available_tags: Vec::new(),
                     overwrites: BTreeMap::from([(
                         ChannelOverwriteTarget::Everyone,
                         ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -2985,6 +3033,10 @@ async fn channel_plan_reports_category_permission_sync() {
                     user_limit: None,
                     rtc_region: None,
                     video_quality: None,
+                    default_reaction: None,
+                    default_sort_order: None,
+                    default_forum_layout: None,
+                    available_tags: Vec::new(),
                     overwrites: BTreeMap::from([(
                         ChannelOverwriteTarget::Everyone,
                         ChannelOverwritePermissions::from_known(BTreeMap::from([(view_channel, OverwriteValue::Deny)])),
@@ -3050,6 +3102,10 @@ async fn channel_apply_copies_category_permission_overwrites() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: category_overwrites.clone(),
             },
             ChannelSnapshot {
@@ -3068,6 +3124,10 @@ async fn channel_apply_copies_category_permission_overwrites() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::new(),
             },
         ],
@@ -3316,6 +3376,10 @@ async fn channel_apply_updates_category_before_syncing_child() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3340,6 +3404,10 @@ async fn channel_apply_updates_category_before_syncing_child() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3432,6 +3500,10 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3456,6 +3528,10 @@ async fn channel_apply_orders_category_updates_before_child_updates() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::from([(
                     ChannelOverwriteTarget::Everyone,
                     ChannelOverwritePermissions::from_known(BTreeMap::from([(
@@ -3665,6 +3741,10 @@ async fn announcement_channel_export_round_trip_is_idempotent() {
                 user_limit: None,
                 rtc_region: None,
                 video_quality: None,
+                default_reaction: None,
+                default_sort_order: None,
+                default_forum_layout: None,
+                available_tags: Vec::new(),
                 overwrites: BTreeMap::new(),
             }],
         },
@@ -3889,4 +3969,130 @@ async fn announcement_channel_creation_requires_community_feature() {
     .await
     .expect_err("COMMUNITY feature がない Guild では Announcement を作成できません");
     assert!(matches!(error, ManagementError::InvalidState(message) if message.contains("COMMUNITY")));
+}
+
+/// Forum の基本属性を全件 export し、再投入しても差分がない。
+#[tokio::test]
+async fn forum_export_round_trip_is_idempotent() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
+    forum.topic = Some("ask here".to_owned());
+    forum.nsfw = true;
+    forum.slowmode_seconds = 5;
+    forum.default_thread_slowmode_seconds = 10;
+    forum.default_reaction = Some("✅".to_owned());
+    forum.default_sort_order = Some(ForumSortOrder::CreationDate);
+    forum.default_forum_layout = Some(ForumLayout::List);
+    let source = ChannelCatalogSource {
+        catalog: ChannelCatalog { channels: vec![forum] },
+    };
+
+    let files = export_channels(&source, guild_id(100), None).await.unwrap();
+    assert!(files.definition_toml.contains("type = \"forum\""));
+    assert!(files.definition_toml.contains("default_reaction = \"✅\""));
+    assert!(files.definition_toml.contains("default_sort_order = \"creation_date\""));
+    assert!(files.definition_toml.contains("default_forum_layout = \"list\""));
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        &files.definition_toml,
+        &files.state_json,
+    )
+    .await
+    .unwrap();
+    assert!(plan.is_empty());
+}
+
+/// Forum 基本属性の PATCH は既存 available_tags と ID を同じ payload に保持する。
+#[tokio::test]
+async fn forum_apply_preserves_available_tags_and_supports_nullable_defaults() {
+    let mut forum = channel_snapshot("700", ChannelKind::Forum, "questions", None);
+    forum.default_reaction = Some("❓".to_owned());
+    forum.default_sort_order = Some(ForumSortOrder::LatestActivity);
+    forum.default_forum_layout = Some(ForumLayout::List);
+    forum.available_tags.push(ForumTagSnapshot {
+        id: 900,
+        name: "solved".to_owned(),
+        moderated: true,
+        emoji: Some("✅".to_owned()),
+    });
+    let source = lifecycle_channel_source(ChannelCatalog { channels: vec![forum] });
+    let definition = r#"
+        schema_version = 1
+        [channels.questions]
+        type = "forum"
+        name = "help"
+        default_reaction = { clear = true }
+        default_sort_order = { clear = true }
+        default_forum_layout = "gallery"
+    "#;
+    let state = channel_state(r#"{"questions":"700"}"#);
+    let plan = plan_channels(
+        &source,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        definition,
+        &state,
+    )
+    .await
+    .unwrap();
+    let rendered = plan.render();
+    assert!(rendered.contains("default_reaction"));
+    assert!(rendered.contains("default_sort_order"));
+    assert!(rendered.contains("default_forum_layout"));
+    let result = apply_channels(
+        &source,
+        guild_id(100),
+        definition,
+        &state,
+        &plan,
+        Instant::now() + Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, ChannelApplyStatus::Complete);
+    let updates = source.updates.lock().unwrap();
+    assert_eq!(updates[0].default_reaction, ChannelUpdateValue::Clear);
+    assert_eq!(updates[0].default_sort_order, ChannelUpdateValue::Clear);
+    assert_eq!(updates[0].available_tags.as_ref().unwrap()[0].id, 900);
+}
+
+#[tokio::test]
+async fn forum_creation_requires_community_and_rejects_invalid_archive_duration() {
+    let no_community = r#"
+        schema_version = 1
+        [channels.questions]
+        type = "forum"
+        name = "questions"
+    "#;
+    let error = plan_channels(
+        &FeaturelessChannelSource,
+        &test_permission_vocabulary(),
+        guild_id(100),
+        no_community,
+        &channel_state("{}"),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("COMMUNITY"));
+
+    let invalid_archive = r#"
+        schema_version = 1
+        [channels.questions]
+        type = "forum"
+        name = "questions"
+        default_auto_archive_minutes = 61
+    "#;
+    let error = plan_channels(
+        &ChannelCatalogSource {
+            catalog: ChannelCatalog { channels: Vec::new() },
+        },
+        &test_permission_vocabulary(),
+        guild_id(100),
+        invalid_archive,
+        &channel_state("{}"),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("default_auto_archive_minutes"));
 }
