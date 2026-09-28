@@ -636,7 +636,7 @@ fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
         (None, Some(discord_id)) => discord_id.to_string(),
         (None, None) => "None".to_owned(),
     };
-    if payload.kind == ChannelKind::Text {
+    if matches!(payload.kind, ChannelKind::Text | ChannelKind::Announcement) {
         output.push_str(&format!("    parent: {parent}\n"));
         output.push_str(&format!(
             "    topic: {}\n",
@@ -648,10 +648,12 @@ fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
             "    default_auto_archive_minutes: {}\n",
             display_nullable(payload.default_auto_archive_minutes.as_ref())
         ));
-        output.push_str(&format!(
-            "    default_thread_slowmode_seconds: {}\n",
-            payload.default_thread_slowmode_seconds
-        ));
+        if payload.kind == ChannelKind::Text {
+            output.push_str(&format!(
+                "    default_thread_slowmode_seconds: {}\n",
+                payload.default_thread_slowmode_seconds
+            ));
+        }
     }
     let overwrites = payload
         .overwrites
@@ -680,6 +682,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
     state: &StateFile,
     catalog: &ChannelCatalog,
     can_manage_roles: bool,
+    supports_announcement_channels: bool,
 ) -> Result<ChannelPlan, ManagementError> {
     let actual = catalog
         .channels
@@ -719,6 +722,11 @@ pub(crate) fn build_channel_plan_with_capabilities(
             &planned_channel_creations,
         )?;
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            if kind == ChannelKind::Announcement && !supports_announcement_channels {
+                return Err(ManagementError::InvalidState(format!(
+                    "Announcement Channel {logical_id} の作成には Guild の COMMUNITY feature が必要です"
+                )));
+            }
             let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
             if !can_manage_roles && !payload.overwrites.is_empty() {
                 return Err(ManagementError::ChannelPermissionDenied(
@@ -788,6 +796,14 @@ pub(crate) fn build_channel_plan_with_capabilities(
     plan.order = build_order_plan(definition, state, catalog)?;
 
     Ok(plan)
+}
+
+pub(crate) fn requires_announcement_feature(definition: &DefinitionFile, state: &StateFile) -> bool {
+    definition.channels.iter().any(|(logical_id, channel)| {
+        channel.is_managed()
+            && !state.channels.contains_key(logical_id)
+            && channel.attributes().kind == Some(ChannelKind::Announcement)
+    })
 }
 
 fn build_order_plan(
@@ -901,7 +917,7 @@ fn validate_deferred_child_order(
                 "order.children の Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
             )));
         };
-        if channel.kind != ChannelKind::Text {
+        if !matches!(channel.kind, ChannelKind::Text | ChannelKind::Announcement) {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order.children の Channel {logical_id} は Text の兄弟として指定できません"
             )));
@@ -1015,7 +1031,9 @@ fn build_order_group(
                 "order の Channel {logical_id} の Snowflake {discord_id} が対象の兄弟一覧にありません"
             )));
         };
-        if channel.kind != expected_kind {
+        if channel.kind != expected_kind
+            && !(expected_kind == ChannelKind::Text && channel.kind == ChannelKind::Announcement)
+        {
             return Err(ManagementError::InvalidDefinition(format!(
                 "order の Channel {logical_id} は {} の兄弟として指定できません",
                 expected_kind.as_str()
@@ -1337,7 +1355,7 @@ fn validate_channel_parent(
         )));
     }
     let declared_kind = compose_attributes(parent_definition).kind;
-    if declared_kind == Some(ChannelKind::Text) {
+    if matches!(declared_kind, Some(ChannelKind::Text | ChannelKind::Announcement)) {
         return Err(ManagementError::InvalidDefinition(format!(
             "Channel {logical_id} の親 {parent_logical_id} は Category である必要があります"
         )));

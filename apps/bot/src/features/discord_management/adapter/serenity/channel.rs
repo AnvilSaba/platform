@@ -66,6 +66,7 @@ impl Serialize for DiscordSnowflake {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiscordChannelType {
     Text,
+    Announcement,
     Category,
 }
 
@@ -76,6 +77,7 @@ impl Serialize for DiscordChannelType {
     {
         serializer.serialize_u8(match self {
             Self::Text => 0,
+            Self::Announcement => 5,
             Self::Category => 4,
         })
     }
@@ -239,6 +241,19 @@ impl ChannelSource for SerenityManagementAdapter<'_> {
         Ok(ChannelCatalog { channels })
     }
 
+    async fn supports_announcement_channels(&self, guild_id: &GuildId) -> Result<bool, ManagementError> {
+        self.http
+            .get_guild(SerenityGuildId::from(*guild_id))
+            .await
+            .map(|guild| {
+                guild
+                    .features
+                    .iter()
+                    .any(|feature| <_ as AsRef<str>>::as_ref(feature) == "COMMUNITY")
+            })
+            .map_err(map_channel_catalog_error)
+    }
+
     async fn validate_channel_permission_targets(
         &self,
         guild_id: &GuildId,
@@ -346,6 +361,7 @@ fn channel_snapshot(
     let kind = match channel.base.kind {
         ChannelType::Category => ChannelKind::Category,
         ChannelType::Text => ChannelKind::Text,
+        ChannelType::News => ChannelKind::Announcement,
         _ => ChannelKind::Unsupported,
     };
     let known_permission_mask = known_permission_mask(known_permissions);
@@ -529,15 +545,20 @@ fn create_channel_payload(guild_id: &GuildId, create: ChannelCreate) -> CreateCh
         .then(|| overwrite_payloads(guild_id, &create.overwrites))
         .filter(|overwrites| !overwrites.is_empty());
     match create.kind {
-        ChannelKind::Text => CreateChannelRequest::Text(CreateTextChannelRequest {
+        ChannelKind::Text | ChannelKind::Announcement => CreateChannelRequest::Text(CreateTextChannelRequest {
             name: create.name,
-            channel_type: DiscordChannelType::Text,
+            channel_type: if create.kind == ChannelKind::Text {
+                DiscordChannelType::Text
+            } else {
+                DiscordChannelType::Announcement
+            },
             parent_id: create.parent_id.map(|id| DiscordSnowflake(id.get())),
             topic: create.topic,
             nsfw: create.nsfw,
             rate_limit_per_user: Some(DiscordSeconds(create.slowmode_seconds)),
             default_auto_archive_duration: create.default_auto_archive_minutes.map(DiscordMinutes),
-            default_thread_rate_limit_per_user: Some(DiscordSeconds(create.default_thread_slowmode_seconds)),
+            default_thread_rate_limit_per_user: (create.kind == ChannelKind::Text)
+                .then_some(DiscordSeconds(create.default_thread_slowmode_seconds)),
             permission_overwrites,
         }),
         ChannelKind::Category => CreateChannelRequest::Category(CreateCategoryChannelRequest {
@@ -695,6 +716,38 @@ mod tests {
                     "rate_limit_per_user": 5,
                     "default_auto_archive_duration": 4320,
                     "default_thread_rate_limit_per_user": 10
+                }"#,
+            )
+        );
+    }
+
+    #[test]
+    fn create_payload_uses_announcement_type_without_unsupported_thread_slowmode() {
+        let payload = create_channel_payload(
+            &GuildId::new(100),
+            ChannelCreate {
+                kind: ChannelKind::Announcement,
+                name: "news".to_owned(),
+                parent_id: None,
+                topic: Some("updates".to_owned()),
+                nsfw: false,
+                slowmode_seconds: 5,
+                default_auto_archive_minutes: Some(4320),
+                default_thread_slowmode_seconds: 0,
+                overwrites: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(
+            payload_json(&payload),
+            expected_json(
+                r#"{
+                    "name": "news",
+                    "type": 5,
+                    "topic": "updates",
+                    "nsfw": false,
+                    "rate_limit_per_user": 5,
+                    "default_auto_archive_duration": 4320
                 }"#,
             )
         );

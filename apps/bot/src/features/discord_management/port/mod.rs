@@ -378,6 +378,9 @@ pub(super) enum ChannelPositionUpdateOutcome {
 pub(super) trait ChannelSource {
     async fn channel_catalog(&self, guild_id: &GuildId) -> Result<ChannelCatalog, ManagementError>;
 
+    /// Announcement Channel の作成に必要な Guild feature を確認します。
+    async fn supports_announcement_channels(&self, guild_id: &GuildId) -> Result<bool, ManagementError>;
+
     /// 権限上書きで参照する Role/Member が対象 Guild に存在するかを確認します。
     async fn validate_channel_permission_targets(
         &self,
