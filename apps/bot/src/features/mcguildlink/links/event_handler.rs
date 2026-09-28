@@ -1,6 +1,5 @@
 use super::{
     interactions::{self, UNLINK_BUTTON_PREFIX, UNLINK_MODAL_PREFIX},
-    ports::AccountLinksRepository,
     repository::DatabaseAccountLinksRepository,
 };
 use crate::{
@@ -8,9 +7,7 @@ use crate::{
     core::BotEventHandler,
 };
 use serenity::{
-    all::{
-        ComponentInteraction, ComponentInteractionDataKind, Context, FullEvent, GuildId, Interaction, ModalInteraction,
-    },
+    all::{ComponentInteraction, ComponentInteractionDataKind, Context, FullEvent, Interaction, ModalInteraction},
     async_trait,
 };
 use sqlx::PgPool;
@@ -27,20 +24,6 @@ impl AccountLinksEventHandler {
         Self {
             repository: DatabaseAccountLinksRepository::new(database.clone()),
         }
-    }
-
-    async fn handle_member_leave(
-        &self,
-        ctx: &Context,
-        event_guild: GuildId,
-        user_id: u64,
-        username: &str,
-    ) -> Result<(), AppError> {
-        let configured_guild = ctx.app_config().await.mcguildlink.guild_id;
-        if event_guild == configured_guild {
-            self.repository.member_left(user_id, username).await?;
-        }
-        Ok(())
     }
 
     async fn handle_component(&self, ctx: &Context, component: &ComponentInteraction) -> Result<(), AppError> {
@@ -85,10 +68,6 @@ impl AccountLinksEventHandler {
 impl BotEventHandler for AccountLinksEventHandler {
     async fn dispatch(&self, ctx: &Context, event: &FullEvent) -> Result<(), AppError> {
         match event {
-            FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
-                self.handle_member_leave(ctx, *guild_id, user.id.get(), &user.name)
-                    .await?;
-            }
             FullEvent::InteractionCreate {
                 interaction: Interaction::Component(component),
                 ..

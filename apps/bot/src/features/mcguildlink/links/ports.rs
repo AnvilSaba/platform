@@ -9,6 +9,4 @@ pub trait AccountLinksRepository: Send + Sync {
     async fn by_minecraft(&self, uuid: Uuid) -> Result<Vec<Link>, AppError>;
     async fn all(&self) -> Result<Vec<Link>, AppError>;
     async fn unlink(&self, user_id: u64, uuid: Uuid) -> Result<bool, AppError>;
-    /// 紐付け・未使用コードの削除と監査記録を同一トランザクションで確定する。
-    async fn member_left(&self, user_id: u64, username: &str) -> Result<Vec<Link>, AppError>;
 }

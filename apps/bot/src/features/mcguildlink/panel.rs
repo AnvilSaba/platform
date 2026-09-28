@@ -1,5 +1,4 @@
-use super::super::links::LIST_LINK_BUTTON_ID;
-use super::event_handler::START_LINK_BUTTON_ID;
+use super::{linking::START_LINK_BUTTON_ID, links::LIST_LINK_BUTTON_ID};
 use crate::{
     app::{AppApplicationContext, AppError, BotDataExt, BotError},
     utils::{create_safe_allowed_mentions, create_safe_message},

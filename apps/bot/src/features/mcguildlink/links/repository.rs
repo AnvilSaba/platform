@@ -36,20 +36,4 @@ impl AccountLinksRepository for DatabaseAccountLinksRepository {
     async fn unlink(&self, user_id: u64, uuid: Uuid) -> Result<bool, AppError> {
         Ok(queries::unlink(&self.pool, user_id, uuid).await?)
     }
-
-    async fn member_left(&self, user_id: u64, username: &str) -> Result<Vec<Link>, AppError> {
-        let mut tx = self.pool.begin().await?;
-        let account_id = queries::lock_discord_account(&mut tx, user_id).await?;
-        let Some(account_id) = account_id else {
-            return Ok(Vec::new());
-        };
-        let links = queries::links_for_account(&mut tx, account_id, user_id, username).await?;
-        queries::delete_account_links(&mut tx, account_id).await?;
-        queries::delete_link_request(&mut tx, account_id).await?;
-        for link in &links {
-            queries::record_member_leave(&mut tx, user_id, username, link).await?;
-        }
-        tx.commit().await?;
-        Ok(links)
-    }
 }

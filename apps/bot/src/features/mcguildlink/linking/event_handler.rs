@@ -12,7 +12,7 @@ use serenity::{
 };
 use sqlx::PgPool;
 
-pub(super) const START_LINK_BUTTON_ID: &str = "start_link_button";
+use super::START_LINK_BUTTON_ID;
 
 pub struct LinkCodeEventHandler {
     codes: LinkCodes<DatabaseLinkingRepository>,
