@@ -8,7 +8,7 @@ pub enum LinkCodeResult {
     Blocked,
 }
 
-/// MCGuildLink の永続化境界。ユースケースごとに必要なセッションを提供する。
+/// コード発行ユースケースの永続化ポート。行ロックを保持するセッションを提供する。
 #[async_trait]
 pub trait CodeIssuanceRepository: Send + Sync {
     type CodeIssuance: CodeIssuanceSession;
