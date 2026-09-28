@@ -21,6 +21,7 @@ use serenity::{
         CreateModal, CreateModalComponent, CreateTextDisplay,
     },
 };
+use sqlx::PgPool;
 use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
@@ -248,8 +249,10 @@ fn parse_unlink(id: &str, prefix: &str) -> Option<(u64, Uuid)> {
 }
 
 impl LinkManagementEventHandler {
-    pub fn new(store: LinkManagement) -> Self {
-        Self { store }
+    pub fn new(database: &PgPool) -> Self {
+        Self {
+            store: LinkManagement::new(database.clone()),
+        }
     }
 
     async fn handle_member_leave(
@@ -503,8 +506,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let store = LinkManagement::new(test_support::bot_pool(&pool).await);
-        LinkManagementEventHandler::new(store.clone())
+        let bot_pool = test_support::bot_pool(&pool).await;
+        let store = LinkManagement::new(bot_pool.clone());
+        LinkManagementEventHandler::new(&bot_pool)
             .handle_member_leave(GuildId::new(100), GuildId::new(200), 10, "alice")
             .await
             .unwrap();

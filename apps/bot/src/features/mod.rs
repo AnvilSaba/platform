@@ -8,6 +8,7 @@ mod pin;
 mod question;
 mod thread_auto_invite;
 
+use sqlx::PgPool;
 use std::borrow::Cow;
 
 use crate::{
@@ -16,7 +17,6 @@ use crate::{
     features::{
         auth::{AutoKickEventHandler, KeywordAuthEventHandler},
         honeypot::handle_honeypot_event,
-        mcguildlink::LinkManagement,
         message_cache_handler::MessageCacheHandler,
         message_logging::MessageLoggingEventHandler,
         question::handle_question_event,
@@ -24,10 +24,10 @@ use crate::{
     },
 };
 
-pub fn event_handlers(config: &AppConfig, link_management: LinkManagement) -> BotEventHandlers {
+pub fn event_handlers(config: &AppConfig, database: &PgPool) -> BotEventHandlers {
     BotEventHandlers::new()
         .add(mcguildlink::handle_link_event)
-        .add(mcguildlink::LinkManagementEventHandler::new(link_management))
+        .add(mcguildlink::LinkManagementEventHandler::new(database))
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
