@@ -160,6 +160,7 @@ impl RolePlan {
 
 pub struct RoleManagementService<S> {
     source: S,
+    apply_lock: apply::GuildApplyLock,
 }
 
 impl<S> RoleManagementService<S>
@@ -167,7 +168,11 @@ where
     S: RoleSource,
 {
     pub fn new(source: S) -> Self {
-        Self { source }
+        Self::with_apply_lock(source, apply::GuildApplyLock::default())
+    }
+
+    pub fn with_apply_lock(source: S, apply_lock: apply::GuildApplyLock) -> Self {
+        Self { source, apply_lock }
     }
 
     pub async fn export_roles(
@@ -329,7 +334,7 @@ fn build_plan(
     Ok(RolePlan { changes })
 }
 
-mod apply;
+pub(super) mod apply;
 
 
 mod model;

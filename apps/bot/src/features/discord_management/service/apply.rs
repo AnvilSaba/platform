@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -16,18 +16,24 @@ use crate::features::discord_management::ids::{GuildId, RoleLogicalId};
 
 const RESULT_STATE_REFRESH_BUDGET: Duration = Duration::from_secs(90);
 
-static APPLYING_GUILDS: OnceLock<Mutex<BTreeSet<GuildId>>> = OnceLock::new();
+#[derive(Clone, Default)]
+pub struct GuildApplyLock {
+    applying_guilds: Arc<Mutex<BTreeSet<GuildId>>>,
+}
 
-struct GuildApplyGuard(GuildId);
+struct GuildApplyGuard {
+    lock: GuildApplyLock,
+    guild_id: GuildId,
+}
 
 impl GuildApplyGuard {
-    fn acquire(guild_id: GuildId) -> Option<Self> {
-        let mut guilds = APPLYING_GUILDS
-            .get_or_init(|| Mutex::new(BTreeSet::new()))
-            .lock()
-            .expect("guild apply mutex poisoned");
+    fn acquire(lock: &GuildApplyLock, guild_id: GuildId) -> Option<Self> {
+        let mut guilds = lock.applying_guilds.lock().expect("guild apply mutex poisoned");
         if guilds.insert(guild_id) {
-            Some(Self(guild_id))
+            Some(Self {
+                lock: lock.clone(),
+                guild_id,
+            })
         } else {
             None
         }
@@ -36,11 +42,11 @@ impl GuildApplyGuard {
 
 impl Drop for GuildApplyGuard {
     fn drop(&mut self) {
-        APPLYING_GUILDS
-            .get_or_init(|| Mutex::new(BTreeSet::new()))
+        self.lock
+            .applying_guilds
             .lock()
             .expect("guild apply mutex poisoned")
-            .remove(&self.0);
+            .remove(&self.guild_id);
     }
 }
 
@@ -58,7 +64,7 @@ where
     ) -> Result<RoleApplyResult, ManagementError> {
         let state = deserialize_state_for_guild(state_json, guild_id)?;
         let latest_state_json = serialize_state(&state)?;
-        let Some(guard) = GuildApplyGuard::acquire(guild_id) else {
+        let Some(guard) = GuildApplyGuard::acquire(&self.apply_lock, guild_id) else {
             return Ok(RoleApplyResult {
                 status: RoleApplyStatus::GuildBusy,
                 applied: Vec::new(),

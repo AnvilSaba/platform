@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{sync::OnceLock, time::{Duration, Instant}};
 
 use futures::StreamExt as _;
 use poise::CreateReply;
@@ -17,12 +17,13 @@ use super::{
     adapter::SerenityRoleSource,
     confirmation::{ConfirmationError, ConfirmationStore},
     ids::GuildId,
-    service::{ManagementError, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan},
+    service::{ManagementError, RoleApplyResult, RoleApplyStatus, RoleManagementService, RolePlan, apply::GuildApplyLock},
 };
 
 const CONFIRMATION_WINDOW: Duration = Duration::from_secs(5 * 60);
 const APPLY_PROCESSING_BUDGET: Duration = Duration::from_secs(10 * 60);
 const APPLY_RESULT_BUDGET: Duration = Duration::from_secs(2 * 60);
+static APPLY_LOCK: OnceLock<GuildApplyLock> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct ApplyDeadlines {
@@ -257,7 +258,10 @@ pub async fn role_apply(
             Ok(payload) => {
                 let deadlines = apply_deadlines(Instant::now());
                 let source = SerenityRoleSource::new(ctx.http(), ctx.cache().current_user().id);
-                let service = RoleManagementService::new(source);
+                let service = RoleManagementService::with_apply_lock(
+                    source,
+                    APPLY_LOCK.get_or_init(GuildApplyLock::default).clone(),
+                );
                 let result = service
                     .apply_roles(
                         payload.guild_id,

@@ -1190,6 +1190,7 @@ impl RoleTarget for BlockingRoleTarget {
 /// 同一Guildへの並行applyを待機させず拒否し、競合更新と二重適用を防ぐ。
 #[tokio::test]
 async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
+    let apply_lock = apply::GuildApplyLock::default();
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let source = BlockingRoleTarget {
         catalog: Arc::new(Mutex::new(RoleCatalog {
@@ -1210,8 +1211,9 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
     let first_source = source.clone();
     let first_plan = plan.clone();
     let first_state = state.clone();
+    let first_apply_lock = apply_lock.clone();
     let first = tokio::spawn(async move {
-        RoleManagementService::new(first_source)
+        RoleManagementService::with_apply_lock(first_source, first_apply_lock)
             .apply_roles(
                 guild_id(100),
                 definition,
@@ -1228,7 +1230,7 @@ async fn concurrent_apply_for_the_same_guild_is_rejected_without_waiting() {
 
     let second = tokio::time::timeout(
         Duration::from_secs(1),
-        RoleManagementService::new(source.clone()).apply_roles(
+        RoleManagementService::with_apply_lock(source.clone(), apply_lock).apply_roles(
             guild_id(100),
             definition,
             &state,
