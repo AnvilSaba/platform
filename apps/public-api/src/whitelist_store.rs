@@ -28,8 +28,9 @@ pub(crate) async fn snapshot(pool: &PgPool) -> Result<WhitelistSnapshot, sqlx::E
         .execute(&mut *transaction)
         .await?;
     let version = version(&mut *transaction).await?;
-    let entries = read_entries(&mut *transaction).await?;
+    let entries = read_entries(&mut transaction).await?;
     transaction.commit().await?;
+
     Ok(WhitelistSnapshot { version, entries })
 }
 

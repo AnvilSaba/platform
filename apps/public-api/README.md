@@ -7,7 +7,7 @@
 成功応答には `Last-Modified`、本文の `ETag`、`Cache-Control: no-cache` を付ける。`If-Modified-Since` または `If-None-Match` で未変更を確認できた場合は本文なしの `304 Not Modified` を返す。DB の確認は条件付き GET でも毎回行う。同じ秒に変更が重なり、HTTP 日付だけでは旧版と区別できない場合は `If-Modified-Since` だけの要求に 200 を返す。`ETag` を送るクライアントはその場合も再取得を避けられる。
 
 ```powershell
-$env:DATABASE_URL = 'postgres://platform_public_api:<パスワード>@localhost:5432/platform'
+$env:DATABASE_URL = 'postgres://platform_public_api:<パスワード>@127.0.0.1:5432/platform'
 $env:PUBLIC_API_LISTEN = '0.0.0.0:8080' # 省略可
 cargo run -p public-api --locked
 ```

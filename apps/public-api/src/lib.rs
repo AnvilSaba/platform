@@ -76,6 +76,7 @@ async fn current_whitelist(state: &AppState) -> Result<CachedWhitelist, Box<dyn 
 fn respond_whitelist(cached: CachedWhitelist, request_headers: &HeaderMap) -> Response {
     let modified_at = UNIX_EPOCH + Duration::from_secs(cached.version.last_modified_at.timestamp() as u64);
     let last_modified = httpdate::fmt_http_date(modified_at);
+
     let mut headers = HeaderMap::new();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert(
@@ -83,6 +84,7 @@ fn respond_whitelist(cached: CachedWhitelist, request_headers: &HeaderMap) -> Re
         HeaderValue::from_str(&last_modified).expect("HTTP date"),
     );
     headers.insert(header::ETAG, HeaderValue::from_str(&cached.etag).expect("SHA-256 ETag"));
+
     if is_not_modified(request_headers, &cached, modified_at) {
         (StatusCode::NOT_MODIFIED, headers).into_response()
     } else {
@@ -100,6 +102,7 @@ fn is_not_modified(request_headers: &HeaderMap, cached: &CachedWhitelist, modifi
             })
         });
     }
+
     cached.version.if_modified_since_safe
         && request_headers.get(header::IF_MODIFIED_SINCE).is_some_and(|value| {
             value
