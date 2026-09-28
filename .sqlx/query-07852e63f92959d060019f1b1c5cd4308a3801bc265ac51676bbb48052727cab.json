@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mcguildlink.account_links l USING mcguildlink.discord_accounts d, mcguildlink.minecraft_accounts m WHERE l.discord_account_id = d.id AND l.minecraft_account_id = m.id AND d.user_id = $1::text::numeric AND m.uuid = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07852e63f92959d060019f1b1c5cd4308a3801bc265ac51676bbb48052727cab"
+}

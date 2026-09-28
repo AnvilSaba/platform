@@ -1,15 +1,14 @@
 mod code_generator;
-mod discord;
-mod management;
-mod management_store;
+mod linking;
+mod links;
 mod ports;
 mod queries;
 mod repository;
 mod service;
 mod types;
 
-pub use discord::{create_panel, handle_link_event};
-pub use management::{LinkManagementEventHandler, links};
+pub use linking::{create_panel, handle_link_event};
+pub use links::{LinkManagementEventHandler, links};
 
 #[cfg(test)]
 mod test_support;

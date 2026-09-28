@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SET ROLE platform_public_api_runtime",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b7490ef8b795c8403f4b72945e884cc29d422d295dfe6154b13a36188b731bd3"
+}
