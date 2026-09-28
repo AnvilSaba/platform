@@ -95,6 +95,8 @@ pub(crate) struct AttributeChanges {
     default_auto_archive_minutes: Option<NullableValueChange<u16>>,
     default_thread_slowmode_seconds: Option<ValueChange<u16>>,
     overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>,
+    /// 同期時に子へ送る Category の完成形です。空の map も有効な更新値です。
+    synced_overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +113,7 @@ impl AttributeChanges {
         state: &StateFile,
         planned_channel_creations: &BTreeSet<ChannelLogicalId>,
         can_manage_roles: bool,
+        synced_overwrites: Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>,
     ) -> Result<Option<Self>, ManagementError> {
         let parent_target = desired
             .parent
@@ -163,8 +166,13 @@ impl AttributeChanges {
             .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
             .transpose()?
             .and_then(|desired| ValueChange::between(actual.default_thread_slowmode_seconds, desired));
-        let overwrites = build_overwrite_changes(logical_id, desired, actual, state)?;
-        if !can_manage_roles && !overwrites.is_empty() {
+        let overwrites = if synced_overwrites.is_some() {
+            BTreeMap::new()
+        } else {
+            build_overwrite_changes(logical_id, desired, actual, state)?
+        };
+        let synced_overwrites = synced_overwrites.filter(|overwrites| actual.overwrites != *overwrites);
+        if !can_manage_roles && (!overwrites.is_empty() || synced_overwrites.is_some()) {
             return Err(ManagementError::ChannelPermissionDenied(
                 "Channel の permission overwrite 更新には MANAGE_ROLES 権限が必要です".to_owned(),
             ));
@@ -180,6 +188,7 @@ impl AttributeChanges {
             default_auto_archive_minutes,
             default_thread_slowmode_seconds,
             overwrites,
+            synced_overwrites,
         };
         Ok((!changes.is_empty()).then_some(changes))
     }
@@ -194,6 +203,7 @@ impl AttributeChanges {
             && self.default_auto_archive_minutes.is_none()
             && self.default_thread_slowmode_seconds.is_none()
             && self.overwrites.is_empty()
+            && self.synced_overwrites.is_none()
     }
 
     #[cfg(test)]
@@ -227,26 +237,31 @@ impl AttributeChanges {
     }
 
     fn to_update(&self, actual: &ChannelSnapshot, state: &StateFile) -> Result<ChannelUpdate, ManagementError> {
-        let mut overwrites = actual.overwrites.clone();
-        for (target, permissions) in &self.overwrites {
-            let target_permissions = overwrites.entry(target.clone()).or_default();
-            for (permission, change) in permissions {
-                match change.desired {
-                    OverwriteValue::Clear => {
-                        target_permissions.known.remove(permission);
-                    }
-                    value => {
-                        target_permissions.known.insert(permission.clone(), value);
+        let overwrites = if let Some(synced_overwrites) = &self.synced_overwrites {
+            synced_overwrites.clone()
+        } else {
+            let mut overwrites = actual.overwrites.clone();
+            for (target, permissions) in &self.overwrites {
+                let target_permissions = overwrites.entry(target.clone()).or_default();
+                for (permission, change) in permissions {
+                    match change.desired {
+                        OverwriteValue::Clear => {
+                            target_permissions.known.remove(permission);
+                        }
+                        value => {
+                            target_permissions.known.insert(permission.clone(), value);
+                        }
                     }
                 }
+                if target_permissions.known.is_empty()
+                    && target_permissions.allow_unknown.is_empty()
+                    && target_permissions.deny_unknown.is_empty()
+                {
+                    overwrites.remove(target);
+                }
             }
-            if target_permissions.known.is_empty()
-                && target_permissions.allow_unknown.is_empty()
-                && target_permissions.deny_unknown.is_empty()
-            {
-                overwrites.remove(target);
-            }
-        }
+            overwrites
+        };
         let parent_id = if let Some(change) = &self.planned_parent {
             let parent_id = state.channels.get(&change.logical_id).copied().ok_or_else(|| {
                 ManagementError::InvalidState(format!(
@@ -269,7 +284,7 @@ impl AttributeChanges {
                 .default_thread_slowmode_seconds
                 .as_ref()
                 .map(|change| *change.desired()),
-            overwrites: (!self.overwrites.is_empty()).then_some(overwrites),
+            overwrites: (self.synced_overwrites.is_some() || !self.overwrites.is_empty()).then_some(overwrites),
         })
     }
 
@@ -365,6 +380,9 @@ impl AttributeChanges {
                     display_overwrite_value(change.desired()),
                 );
             }
+        }
+        if self.synced_overwrites.is_some() {
+            render_change_line(output, logical_id, discord_id, "permissions_sync", "false", "true");
         }
     }
 }
@@ -639,6 +657,11 @@ pub(crate) fn build_channel_plan_with_capabilities(
         )?;
         let Some(discord_id) = state.channels.get(logical_id).copied() else {
             let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
+            if !can_manage_roles && !payload.overwrites.is_empty() {
+                return Err(ManagementError::ChannelPermissionDenied(
+                    "Channel の権限上書きには Bot の MANAGE_ROLES 権限が必要です".to_owned(),
+                ));
+            }
             let parent_logical_id = attributes.parent.as_ref().and_then(ChannelValue::as_value).cloned();
             plan.insert_create(
                 logical_id.clone(),
@@ -667,6 +690,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
                 "Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
             )));
         }
+        let synced_overwrites = desired_synced_overwrites(logical_id, &attributes, definition, state, &actual)?;
         if let Some(attributes) = AttributeChanges::between(
             logical_id,
             current,
@@ -674,6 +698,7 @@ pub(crate) fn build_channel_plan_with_capabilities(
             state,
             &planned_channel_creations,
             can_manage_roles,
+            synced_overwrites,
         )? {
             plan.insert(
                 logical_id.clone(),
@@ -698,6 +723,102 @@ pub(crate) fn build_channel_plan_with_capabilities(
     }
 
     Ok(plan)
+}
+
+fn desired_synced_overwrites(
+    logical_id: &ChannelLogicalId,
+    attributes: &ChannelAttributes,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    actual: &BTreeMap<ChannelId, &ChannelSnapshot>,
+) -> Result<Option<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>>, ManagementError> {
+    if attributes.permissions_sync != Some(true) {
+        return Ok(None);
+    }
+    let Some(parent_logical_id) = attributes.parent.as_ref().and_then(ChannelValue::as_value) else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の permissions_sync には Category の parent が必要です"
+        )));
+    };
+    let mut visiting = BTreeSet::new();
+    let overwrites = desired_overwrites_for_channel(parent_logical_id, definition, state, Some(actual), &mut visiting)?;
+    Ok(Some(overwrites))
+}
+
+fn desired_overwrites_for_channel(
+    logical_id: &ChannelLogicalId,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    actual: Option<&BTreeMap<ChannelId, &ChannelSnapshot>>,
+    visiting: &mut BTreeSet<ChannelLogicalId>,
+) -> Result<BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>, ManagementError> {
+    if !visiting.insert(logical_id.clone()) {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の permissions_sync に循環する親があります"
+        )));
+    }
+    let result = (|| {
+        let channel = definition.channels.get(logical_id).ok_or_else(|| {
+            ManagementError::InvalidDefinition(format!("Channel {logical_id} の同期先 Category の宣言がありません"))
+        })?;
+        if channel.is_absent() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {logical_id} の同期先 Category は削除宣言です"
+            )));
+        }
+        let attributes = compose_attributes(channel);
+        if attributes.permissions_sync == Some(true) {
+            let parent = attributes
+                .parent
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .ok_or_else(|| {
+                    ManagementError::InvalidDefinition(format!(
+                        "Channel {logical_id} の permissions_sync には Category の parent が必要です"
+                    ))
+                })?;
+            return desired_overwrites_for_channel(parent, definition, state, actual, visiting);
+        }
+        let mut overwrites = state
+            .channels
+            .get(logical_id)
+            .and_then(|discord_id| actual.and_then(|catalog| catalog.get(discord_id)))
+            .map(|channel| channel.overwrites.clone())
+            .unwrap_or_default();
+        apply_overwrite_values(logical_id, &attributes, state, &mut overwrites)?;
+        Ok(overwrites)
+    })();
+    visiting.remove(logical_id);
+    result
+}
+
+fn apply_overwrite_values(
+    logical_id: &ChannelLogicalId,
+    attributes: &ChannelAttributes,
+    state: &StateFile,
+    overwrites: &mut BTreeMap<ChannelOverwriteTarget, ChannelOverwritePermissions>,
+) -> Result<(), ManagementError> {
+    for (subject, permissions) in &attributes.overwrites {
+        let target = resolve_overwrite_target(subject, logical_id, state)?;
+        let target_permissions = overwrites.entry(target.clone()).or_default();
+        for (permission, value) in permissions {
+            match value {
+                OverwriteValue::Clear => {
+                    target_permissions.known.remove(permission);
+                }
+                value => {
+                    target_permissions.known.insert(permission.clone(), *value);
+                }
+            }
+        }
+        if target_permissions.known.is_empty()
+            && target_permissions.allow_unknown.is_empty()
+            && target_permissions.deny_unknown.is_empty()
+        {
+            overwrites.remove(&target);
+        }
+    }
+    Ok(())
 }
 
 fn planned_channel_creations(definition: &DefinitionFile, state: &StateFile) -> BTreeSet<ChannelLogicalId> {
@@ -1086,25 +1207,14 @@ pub(crate) fn desired_channel_create_with_catalog(
         .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
         .transpose()?
         .unwrap_or(DEFAULT_THREAD_SLOWMODE_SECONDS);
-    let mut overwrites = BTreeMap::new();
-    for (subject, permissions) in &attributes.overwrites {
-        let target = resolve_overwrite_target(subject, logical_id, state)?;
-        let permissions = permissions
-            .iter()
-            .filter_map(|(permission, value)| {
-                (!matches!(value, OverwriteValue::Clear)).then_some((permission.clone(), *value))
-            })
-            .collect::<BTreeMap<_, _>>();
-        if !permissions.is_empty() {
-            overwrites.insert(
-                target,
-                ChannelOverwritePermissions {
-                    known: permissions,
-                    ..ChannelOverwritePermissions::default()
-                },
-            );
-        }
-    }
+    let overwrites = if attributes.permissions_sync == Some(true) {
+        let mut visiting = BTreeSet::new();
+        desired_overwrites_for_channel(logical_id, definition_file, state, actual.as_ref(), &mut visiting)?
+    } else {
+        let mut overwrites = BTreeMap::new();
+        apply_overwrite_values(logical_id, &attributes, state, &mut overwrites)?;
+        overwrites
+    };
     Ok(ChannelCreate {
         kind,
         name,
