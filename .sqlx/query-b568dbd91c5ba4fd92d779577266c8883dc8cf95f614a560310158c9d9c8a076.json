@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT m.uuid AS \"uuid!\", m.last_known_name AS \"name!\"\n         FROM mcguildlink.account_links AS links\n         JOIN mcguildlink.minecraft_accounts AS m ON m.id = links.minecraft_account_id\n         WHERE NOT EXISTS (\n             SELECT 1 FROM mcguildlink.blocked_discord_accounts AS blocked\n             WHERE blocked.discord_account_id = links.discord_account_id\n         ) AND NOT EXISTS (\n             SELECT 1 FROM mcguildlink.blocked_minecraft_accounts AS blocked\n             WHERE blocked.minecraft_account_id = m.id\n         )\n         ORDER BY m.uuid",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uuid!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b568dbd91c5ba4fd92d779577266c8883dc8cf95f614a560310158c9d9c8a076"
+}

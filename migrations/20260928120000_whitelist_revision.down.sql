@@ -1,0 +1,12 @@
+DROP TRIGGER whitelist_minecraft_block_update ON mcguildlink.blocked_minecraft_accounts;
+DROP TRIGGER whitelist_minecraft_block_delete ON mcguildlink.blocked_minecraft_accounts;
+DROP TRIGGER whitelist_minecraft_block_insert ON mcguildlink.blocked_minecraft_accounts;
+DROP TRIGGER whitelist_discord_block_update ON mcguildlink.blocked_discord_accounts;
+DROP TRIGGER whitelist_discord_block_delete ON mcguildlink.blocked_discord_accounts;
+DROP TRIGGER whitelist_discord_block_insert ON mcguildlink.blocked_discord_accounts;
+DROP TRIGGER whitelist_minecraft_update ON mcguildlink.minecraft_accounts;
+DROP TRIGGER whitelist_links_update ON mcguildlink.account_links;
+DROP TRIGGER whitelist_links_delete ON mcguildlink.account_links;
+DROP TRIGGER whitelist_links_insert ON mcguildlink.account_links;
+DROP FUNCTION mcguildlink.bump_whitelist_revision();
+DROP TABLE mcguildlink.whitelist_revision;
