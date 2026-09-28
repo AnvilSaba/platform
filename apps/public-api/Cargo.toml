@@ -7,10 +7,13 @@ publish = false
 
 [dependencies]
 axum = "0.8"
+chrono = "0.4"
+httpdate = "1"
 platform-database = { path = "../../crates/platform-database" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "uuid"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "uuid", "chrono"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 uuid = { version = "1", features = ["serde"] }
 

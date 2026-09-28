@@ -1,7 +1,7 @@
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -26,25 +26,99 @@ async fn reader(pool: &PgPool) -> PgPool {
         .unwrap()
 }
 
-async fn get(app: &Router) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(Request::builder().uri("/whitelist.json").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+async fn request(app: &Router, condition: Option<(&str, &str)>) -> (StatusCode, HeaderMap, Value) {
+    let mut request = Request::builder().uri("/whitelist.json");
+    if let Some((name, value)) = condition {
+        request = request.header(name, value);
+    }
+    let response = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     if status == StatusCode::OK {
         assert_eq!(response.headers()["content-type"], "application/json");
     }
     let body = response.into_body().collect().await.unwrap().to_bytes();
     (
         status,
+        headers,
         if status != StatusCode::OK || body.is_empty() {
             Value::Null
         } else {
             serde_json::from_slice(&body).unwrap()
         },
     )
+}
+
+async fn get(app: &Router) -> (StatusCode, Value) {
+    let (status, _, body) = request(app, None).await;
+    (status, body)
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn conditional_get_reuses_unchanged_json_and_refreshes_after_an_update(pool: PgPool) {
+    // 秒の境界に依存せず、通常の更新日時の進行を確認する。
+    sqlx::query("UPDATE mcguildlink.whitelist_revision SET last_modified_at = now() - interval '5 seconds'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = router(reader(&pool).await);
+    let (status, headers, body) = request(&app, None).await;
+    assert_eq!((status, body), (StatusCode::OK, json!([])));
+    let last_modified = headers[header::LAST_MODIFIED].to_str().unwrap();
+    let etag = headers[header::ETAG].to_str().unwrap();
+    assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+
+    let (status, headers, body) = request(&app, Some(("if-modified-since", last_modified))).await;
+    assert_eq!((status, body), (StatusCode::NOT_MODIFIED, Value::Null));
+    assert_eq!(headers[header::LAST_MODIFIED], last_modified);
+    let (status, _, body) = request(&app, Some(("if-none-match", etag))).await;
+    assert_eq!((status, body), (StatusCode::NOT_MODIFIED, Value::Null));
+
+    let discord = add_discord(&pool, 1).await;
+    let minecraft = add_minecraft(&pool, FIRST, "First").await;
+    link(&pool, discord, minecraft).await;
+    let (status, headers, body) = request(&app, Some(("if-modified-since", last_modified))).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!([{"uuid": FIRST, "name": "First"}]))
+    );
+    assert_ne!(headers[header::LAST_MODIFIED], last_modified);
+    let (status, _, body) = request(&app, Some(("if-none-match", etag))).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!([{"uuid": FIRST, "name": "First"}]))
+    );
+
+    let updated_etag = headers[header::ETAG].to_str().unwrap();
+    let (status, _, body) = request(&app, Some(("if-none-match", updated_etag))).await;
+    assert_eq!((status, body), (StatusCode::NOT_MODIFIED, Value::Null));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn same_second_change_and_db_failure_never_return_304(pool: PgPool) {
+    // 直前の更新日時と同じ秒に次の更新が起きた状況を確実に作る。
+    sqlx::query("UPDATE mcguildlink.whitelist_revision SET last_modified_at = now() + interval '30 seconds'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = router(reader(&pool).await);
+    let (_, headers, _) = request(&app, None).await;
+    let last_modified = headers[header::LAST_MODIFIED].to_str().unwrap().to_owned();
+    let discord = add_discord(&pool, 1).await;
+    let minecraft = add_minecraft(&pool, FIRST, "First").await;
+    link(&pool, discord, minecraft).await;
+    let (status, _, body) = request(&app, Some(("if-modified-since", &last_modified))).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!([{"uuid": FIRST, "name": "First"}]))
+    );
+
+    sqlx::query("REVOKE SELECT ON mcguildlink.whitelist_revision FROM platform_public_api_runtime")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, _, body) = request(&app, Some(("if-modified-since", &last_modified))).await;
+    assert_eq!((status, body), (StatusCode::SERVICE_UNAVAILABLE, Value::Null));
 }
 
 async fn add_discord(pool: &PgPool, user_id: i64) -> i64 {
