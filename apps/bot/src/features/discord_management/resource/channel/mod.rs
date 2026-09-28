@@ -1,0 +1,1119 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::super::{
+    configuration::{
+        ChannelAttributes, ChannelDefinition, ChannelKind, ChannelValue, DefinitionFile, KnownPermission,
+        OverwriteTarget, OverwriteValue, StateFile,
+    },
+    domain::ManagementError,
+    ids::{ChannelId, ChannelLogicalId, RoleId},
+    port::{
+        ChannelCatalog, ChannelCreate, ChannelOverwritePermissions, ChannelOverwriteTarget, ChannelSnapshot,
+        ChannelUpdate, ChannelUpdateValue,
+    },
+};
+
+pub(crate) mod apply;
+
+use super::{display_quoted_string, render_change_line};
+
+const DEFAULT_CHANNEL_NSFW: bool = false;
+const DEFAULT_SLOWMODE_SECONDS: u16 = 0;
+const DEFAULT_AUTO_ARCHIVE_MINUTES: Option<u16> = Some(1440);
+const DEFAULT_THREAD_SLOWMODE_SECONDS: u16 = 0;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ValueChange<T> {
+    current: T,
+    desired: T,
+}
+
+impl<T> ValueChange<T> {
+    fn between(current: T, desired: T) -> Option<Self>
+    where
+        T: PartialEq,
+    {
+        (current != desired).then_some(Self { current, desired })
+    }
+
+    pub(crate) fn current(&self) -> &T {
+        &self.current
+    }
+
+    pub(crate) fn desired(&self) -> &T {
+        &self.desired
+    }
+}
+
+/// Nullable な属性の差分を、値設定と解除の意図ごとに表します。
+///
+/// 変更がない場合は `AttributeChanges` 側の外側の `Option` が `None` になり、
+/// この型の値がある場合は必ず `Set` または `Clear` になります。内側の
+/// `Option` は、属性の現在値が未設定であることを表します。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NullableValueChange<T> {
+    Set { current: Option<T>, desired: T },
+    Clear { current: Option<T> },
+}
+
+impl<T> NullableValueChange<T>
+where
+    T: PartialEq,
+{
+    fn between(current: Option<T>, desired: Option<T>) -> Option<Self> {
+        match desired {
+            Some(desired) if current.as_ref() != Some(&desired) => Some(Self::Set { current, desired }),
+            None if current.is_some() => Some(Self::Clear { current }),
+            _ => None,
+        }
+    }
+}
+
+impl<T> NullableValueChange<T> {
+    pub(crate) fn current(&self) -> &Option<T> {
+        match self {
+            Self::Set { current, .. } | Self::Clear { current } => current,
+        }
+    }
+
+    pub(crate) fn desired(&self) -> Option<&T> {
+        match self {
+            Self::Set { desired, .. } => Some(desired),
+            Self::Clear { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AttributeChanges {
+    name: Option<ValueChange<String>>,
+    parent: Option<NullableValueChange<ChannelId>>,
+    planned_parent: Option<PlannedParentChange>,
+    topic: Option<NullableValueChange<String>>,
+    nsfw: Option<ValueChange<bool>>,
+    slowmode_seconds: Option<ValueChange<u16>>,
+    default_auto_archive_minutes: Option<NullableValueChange<u16>>,
+    default_thread_slowmode_seconds: Option<ValueChange<u16>>,
+    overwrites: BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlannedParentChange {
+    current: Option<ChannelId>,
+    logical_id: ChannelLogicalId,
+}
+
+impl AttributeChanges {
+    fn between(
+        logical_id: &ChannelLogicalId,
+        actual: &ChannelSnapshot,
+        desired: &ChannelAttributes,
+        state: &StateFile,
+        planned_channel_creations: &BTreeSet<ChannelLogicalId>,
+        can_manage_roles: bool,
+    ) -> Result<Option<Self>, ManagementError> {
+        let parent_target = desired
+            .parent
+            .as_ref()
+            .map(|value| resolve_parent_target(value, logical_id, state, planned_channel_creations))
+            .transpose()?;
+        let name = desired
+            .name
+            .as_ref()
+            .map(|value| resolve_name(value, logical_id))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.name.clone(), desired));
+        let (parent, planned_parent) = match parent_target {
+            Some(ParentTarget::Resolved(desired)) => (NullableValueChange::between(actual.parent_id, desired), None),
+            Some(ParentTarget::Planned(logical_id)) => (
+                None,
+                Some(PlannedParentChange {
+                    current: actual.parent_id,
+                    logical_id,
+                }),
+            ),
+            None => (None, None),
+        };
+        let topic = desired
+            .topic
+            .as_ref()
+            .map(resolve_topic)
+            .and_then(|desired| NullableValueChange::between(actual.topic.clone(), desired));
+        let nsfw = desired
+            .nsfw
+            .as_ref()
+            .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.nsfw, desired));
+        let slowmode_seconds = desired
+            .slowmode_seconds
+            .as_ref()
+            .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.slowmode_seconds, desired));
+        let default_auto_archive_minutes = desired
+            .default_auto_archive_minutes
+            .as_ref()
+            .map(|value| resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES))
+            .transpose()?
+            .and_then(|desired| NullableValueChange::between(actual.default_auto_archive_minutes, desired));
+        let default_thread_slowmode_seconds = desired
+            .default_thread_slowmode_seconds
+            .as_ref()
+            .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
+            .transpose()?
+            .and_then(|desired| ValueChange::between(actual.default_thread_slowmode_seconds, desired));
+        let overwrites = build_overwrite_changes(logical_id, desired, actual, state)?;
+        if !can_manage_roles && !overwrites.is_empty() {
+            return Err(ManagementError::ChannelPermissionDenied(
+                "Channel の permission overwrite 更新には MANAGE_ROLES 権限が必要です".to_owned(),
+            ));
+        }
+
+        let changes = Self {
+            name,
+            parent,
+            planned_parent,
+            topic,
+            nsfw,
+            slowmode_seconds,
+            default_auto_archive_minutes,
+            default_thread_slowmode_seconds,
+            overwrites,
+        };
+        Ok((!changes.is_empty()).then_some(changes))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.parent.is_none()
+            && self.planned_parent.is_none()
+            && self.topic.is_none()
+            && self.nsfw.is_none()
+            && self.slowmode_seconds.is_none()
+            && self.default_auto_archive_minutes.is_none()
+            && self.default_thread_slowmode_seconds.is_none()
+            && self.overwrites.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn name(&self) -> Option<&ValueChange<String>> {
+        self.name.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn topic(&self) -> Option<&NullableValueChange<String>> {
+        self.topic.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn nsfw(&self) -> Option<&ValueChange<bool>> {
+        self.nsfw.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn slowmode_seconds(&self) -> Option<&ValueChange<u16>> {
+        self.slowmode_seconds.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn default_auto_archive_minutes(&self) -> Option<&NullableValueChange<u16>> {
+        self.default_auto_archive_minutes.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn default_thread_slowmode_seconds(&self) -> Option<&ValueChange<u16>> {
+        self.default_thread_slowmode_seconds.as_ref()
+    }
+
+    fn to_update(&self, actual: &ChannelSnapshot, state: &StateFile) -> Result<ChannelUpdate, ManagementError> {
+        let mut overwrites = actual.overwrites.clone();
+        for (target, permissions) in &self.overwrites {
+            let target_permissions = overwrites.entry(target.clone()).or_default();
+            for (permission, change) in permissions {
+                match change.desired {
+                    OverwriteValue::Clear => {
+                        target_permissions.known.remove(permission);
+                    }
+                    value => {
+                        target_permissions.known.insert(permission.clone(), value);
+                    }
+                }
+            }
+            if target_permissions.known.is_empty()
+                && target_permissions.allow_unknown.is_empty()
+                && target_permissions.deny_unknown.is_empty()
+            {
+                overwrites.remove(target);
+            }
+        }
+        let parent_id = if let Some(change) = &self.planned_parent {
+            let parent_id = state.channels.get(&change.logical_id).copied().ok_or_else(|| {
+                ManagementError::InvalidState(format!(
+                    "Channel の親 {} の作成結果が state にありません",
+                    change.logical_id
+                ))
+            })?;
+            ChannelUpdateValue::Set(parent_id)
+        } else {
+            nullable_update(self.parent.as_ref())
+        };
+        Ok(ChannelUpdate {
+            name: self.name.as_ref().map(|change| change.desired.clone()),
+            parent_id,
+            topic: nullable_update(self.topic.as_ref()),
+            nsfw: self.nsfw.as_ref().map(|change| *change.desired()),
+            slowmode_seconds: self.slowmode_seconds.as_ref().map(|change| *change.desired()),
+            default_auto_archive_minutes: nullable_update(self.default_auto_archive_minutes.as_ref()),
+            default_thread_slowmode_seconds: self
+                .default_thread_slowmode_seconds
+                .as_ref()
+                .map(|change| *change.desired()),
+            overwrites: (!self.overwrites.is_empty()).then_some(overwrites),
+        })
+    }
+
+    fn render(&self, logical_id: &ChannelLogicalId, discord_id: &ChannelId, output: &mut String) {
+        if let Some(change) = &self.name {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "name",
+                display_quoted_string(change.current()),
+                display_quoted_string(change.desired()),
+            );
+        }
+        if let Some(change) = &self.parent {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "parent",
+                display_nullable(change.current().as_ref()),
+                display_nullable(change.desired()),
+            );
+        }
+        if let Some(change) = &self.planned_parent {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "parent",
+                display_nullable(change.current.as_ref()),
+                format!("planned:{}", change.logical_id),
+            );
+        }
+        if let Some(change) = &self.topic {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "topic",
+                display_nullable_string(change.current().as_ref()),
+                display_nullable_string(change.desired()),
+            );
+        }
+        if let Some(change) = &self.nsfw {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "nsfw",
+                change.current(),
+                change.desired(),
+            );
+        }
+        if let Some(change) = &self.slowmode_seconds {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "slowmode_seconds",
+                change.current(),
+                change.desired(),
+            );
+        }
+        if let Some(change) = &self.default_auto_archive_minutes {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_auto_archive_minutes",
+                display_nullable(change.current().as_ref()),
+                display_nullable(change.desired()),
+            );
+        }
+        if let Some(change) = &self.default_thread_slowmode_seconds {
+            render_change_line(
+                output,
+                logical_id,
+                discord_id,
+                "default_thread_slowmode_seconds",
+                change.current(),
+                change.desired(),
+            );
+        }
+        for (target, permissions) in &self.overwrites {
+            for (permission, change) in permissions {
+                render_change_line(
+                    output,
+                    logical_id,
+                    discord_id,
+                    &format!("overwrites.{target}.{permission}"),
+                    display_overwrite_value(change.current()),
+                    display_overwrite_value(change.desired()),
+                );
+            }
+        }
+    }
+}
+
+fn nullable_update<T: Clone>(change: Option<&NullableValueChange<T>>) -> ChannelUpdateValue<T> {
+    let Some(change) = change else {
+        return ChannelUpdateValue::Keep;
+    };
+    match change {
+        NullableValueChange::Set { desired, .. } => ChannelUpdateValue::Set(desired.clone()),
+        NullableValueChange::Clear { .. } => ChannelUpdateValue::Clear,
+    }
+}
+
+fn display_nullable<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value.map_or_else(|| "None".to_owned(), ToString::to_string)
+}
+
+fn display_nullable_string(value: Option<&String>) -> String {
+    value.map_or_else(
+        || "None".to_owned(),
+        |value| format!("Some({})", display_quoted_string(value)),
+    )
+}
+
+fn display_overwrite_value(value: &OverwriteValue) -> &'static str {
+    match value {
+        OverwriteValue::Allow => "allow",
+        OverwriteValue::Deny => "deny",
+        OverwriteValue::Clear => "clear",
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
+    Create,
+    Update {
+        discord_id: ChannelId,
+        attributes: Box<AttributeChanges>,
+    },
+    Release {
+        discord_id: ChannelId,
+    },
+    Delete {
+        discord_id: ChannelId,
+    },
+}
+
+#[cfg(test)]
+pub(crate) type ChannelChange = Change;
+
+impl Change {
+    pub(crate) fn is_update(&self) -> bool {
+        matches!(self, Self::Update { .. })
+    }
+
+    pub(crate) fn is_delete(&self) -> bool {
+        matches!(self, Self::Delete { .. })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attributes(&self) -> Option<&AttributeChanges> {
+        match self {
+            Self::Update { attributes, .. } => Some(attributes),
+            Self::Create | Self::Release { .. } | Self::Delete { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Plan {
+    changes: BTreeMap<ChannelLogicalId, Change>,
+    create_desired: BTreeMap<ChannelLogicalId, CreateDesired>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CreateDesired {
+    payload: ChannelCreate,
+    parent_logical_id: Option<ChannelLogicalId>,
+}
+
+impl CreateDesired {
+    /// Plan 時に解決できなかった親だけを、直前の作成結果を含む state から補完します。
+    /// その他の create payload は plan 時の concrete 値をそのまま使います。
+    fn payload_for_apply(
+        &self,
+        state: &StateFile,
+        catalog: &ChannelCatalog,
+        logical_id: &ChannelLogicalId,
+    ) -> Result<ChannelCreate, ManagementError> {
+        let mut payload = self.payload.clone();
+        if let Some(parent_logical_id) = &self.parent_logical_id {
+            if payload.parent_id.is_none() {
+                let parent_id = state.channels.get(parent_logical_id).copied().ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel {logical_id} の親 {parent_logical_id} の作成結果が state にありません"
+                    ))
+                })?;
+                payload.parent_id = Some(parent_id);
+            }
+            let parent_id = payload
+                .parent_id
+                .expect("親論理 ID がある create payload は親IDを持ちます");
+            if !catalog.channels.iter().any(|channel| channel.id == parent_id) {
+                return Err(ManagementError::InvalidState(format!(
+                    "Channel {logical_id} の親 {parent_logical_id} の Snowflake {parent_id} が Guild から予期せず消失しています"
+                )));
+            }
+        }
+        Ok(payload)
+    }
+}
+
+pub(crate) type ChannelPlan = Plan;
+
+impl Plan {
+    pub(crate) fn len(&self) -> usize {
+        self.changes.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ChannelLogicalId, &Change)> {
+        self.changes.iter()
+    }
+
+    pub(crate) fn get(&self, logical_id: &ChannelLogicalId) -> Option<&Change> {
+        self.changes.get(logical_id)
+    }
+
+    pub(crate) fn contains_deletions(&self) -> bool {
+        self.changes.values().any(Change::is_delete)
+    }
+
+    pub(super) fn insert(&mut self, logical_id: ChannelLogicalId, change: Change) {
+        debug_assert!(self.changes.insert(logical_id, change).is_none());
+    }
+
+    fn insert_create(&mut self, logical_id: ChannelLogicalId, change: Change, desired: CreateDesired) {
+        debug_assert!(matches!(change, Change::Create));
+        debug_assert!(self.changes.insert(logical_id.clone(), change).is_none());
+        self.create_desired.insert(logical_id, desired);
+    }
+
+    pub(super) fn remove(&mut self, logical_id: &ChannelLogicalId) -> Option<Change> {
+        self.create_desired.remove(logical_id);
+        self.changes.remove(logical_id)
+    }
+
+    pub(crate) fn render(&self) -> String {
+        if self.is_empty() {
+            return "変更はありません。\n".to_owned();
+        }
+        let mut output = String::from("Channel の変更計画\n\n");
+        for (logical_id, change) in &self.changes {
+            match change {
+                Change::Create => {
+                    output.push_str(&format!("- 新規作成: {logical_id}\n"));
+                    if let Some(desired) = self.create_desired.get(logical_id) {
+                        render_create_attributes(desired, &mut output);
+                    }
+                }
+                Change::Update { discord_id, attributes } => {
+                    attributes.render(logical_id, discord_id, &mut output)
+                }
+                Change::Release { discord_id } => {
+                    output.push_str(&format!("- 管理解除: {logical_id} ({discord_id})\n"));
+                }
+                Change::Delete { discord_id } => output.push_str(&format!(
+                    "- 削除: {logical_id} ({discord_id})\n  影響: Channel と配下の投稿・Thread が失われる可能性があります。\n"
+                )),
+            }
+        }
+        output
+    }
+}
+
+fn render_create_attributes(desired: &CreateDesired, output: &mut String) {
+    let payload = &desired.payload;
+    output.push_str("  desired:\n");
+    output.push_str(&format!("    type: {}\n", payload.kind.as_str()));
+    output.push_str(&format!("    name: {}\n", display_quoted_string(&payload.name)));
+    let parent = match (desired.parent_logical_id.as_ref(), payload.parent_id) {
+        (Some(logical_id), Some(discord_id)) => format!("{logical_id} ({discord_id})"),
+        (Some(logical_id), None) => logical_id.to_string(),
+        (None, Some(discord_id)) => discord_id.to_string(),
+        (None, None) => "None".to_owned(),
+    };
+    if payload.kind == ChannelKind::Text {
+        output.push_str(&format!("    parent: {parent}\n"));
+        output.push_str(&format!(
+            "    topic: {}\n",
+            display_nullable_string(payload.topic.as_ref())
+        ));
+        output.push_str(&format!("    nsfw: {}\n", payload.nsfw));
+        output.push_str(&format!("    slowmode_seconds: {}\n", payload.slowmode_seconds));
+        output.push_str(&format!(
+            "    default_auto_archive_minutes: {}\n",
+            display_nullable(payload.default_auto_archive_minutes.as_ref())
+        ));
+        output.push_str(&format!(
+            "    default_thread_slowmode_seconds: {}\n",
+            payload.default_thread_slowmode_seconds
+        ));
+    }
+    let overwrites = payload
+        .overwrites
+        .iter()
+        .filter_map(|(subject, permissions)| {
+            let permissions = permissions
+                .known
+                .iter()
+                .map(|(permission, value)| format!("{permission}: {}", display_overwrite_value(value)))
+                .collect::<Vec<_>>();
+            (!permissions.is_empty()).then_some(format!("{subject}: {{{}}}", permissions.join(", ")))
+        })
+        .collect::<Vec<_>>();
+    if !overwrites.is_empty() {
+        output.push_str(&format!("    overwrites: {{{}}}\n", overwrites.join(", ")));
+    }
+}
+
+pub(crate) fn compose_attributes(definition: &ChannelDefinition) -> ChannelAttributes {
+    definition.attributes().clone()
+}
+
+/// 実環境の権限を明示して Channel の変更計画を組み立てます。
+pub(crate) fn build_channel_plan_with_capabilities(
+    definition: &DefinitionFile,
+    state: &StateFile,
+    catalog: &ChannelCatalog,
+    can_manage_roles: bool,
+) -> Result<ChannelPlan, ManagementError> {
+    let actual = catalog
+        .channels
+        .iter()
+        .map(|channel| (channel.id, channel))
+        .collect::<BTreeMap<_, _>>();
+    let planned_channel_creations = planned_channel_creations(definition, state);
+    let mut plan = Plan::default();
+
+    for (logical_id, desired) in &definition.channels {
+        if desired.is_absent() {
+            plan_absent_channel(logical_id, state, &actual, definition, &mut plan)?;
+            continue;
+        }
+        if desired.is_reference() {
+            let discord_id = state
+                .channels
+                .get(logical_id)
+                .copied()
+                .ok_or_else(|| ManagementError::InvalidState(format!("Channel {logical_id} の対応がありません")))?;
+            ensure_actual_channel(logical_id, discord_id, &actual)?;
+            continue;
+        }
+
+        let attributes = compose_attributes(desired);
+        let kind = attributes.kind.ok_or_else(|| {
+            ManagementError::InvalidDefinition(format!("管理対象 Channel {logical_id} には type が必要です"))
+        })?;
+        attributes.validate_for_kind(logical_id)?;
+        validate_channel_parent(
+            logical_id,
+            kind,
+            attributes.parent.as_ref(),
+            definition,
+            state,
+            Some(&actual),
+            &planned_channel_creations,
+        )?;
+        let Some(discord_id) = state.channels.get(logical_id).copied() else {
+            let payload = desired_channel_create_with_catalog(desired, logical_id, state, definition, Some(catalog))?;
+            let parent_logical_id = attributes.parent.as_ref().and_then(ChannelValue::as_value).cloned();
+            plan.insert_create(
+                logical_id.clone(),
+                Change::Create,
+                CreateDesired {
+                    payload,
+                    parent_logical_id,
+                },
+            );
+            continue;
+        };
+        let Some(current) = actual.get(&discord_id).copied() else {
+            return Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+            )));
+        };
+        if current.kind != kind {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {logical_id} の種類変更はサポートしていません（{} -> {}）",
+                current.kind.as_str(),
+                kind.as_str()
+            )));
+        }
+        if !current.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の Snowflake {discord_id} は Bot が管理できません"
+            )));
+        }
+        if let Some(attributes) = AttributeChanges::between(
+            logical_id,
+            current,
+            &attributes,
+            state,
+            &planned_channel_creations,
+            can_manage_roles,
+        )? {
+            plan.insert(
+                logical_id.clone(),
+                Change::Update {
+                    discord_id,
+                    attributes: Box::new(attributes),
+                },
+            );
+        }
+    }
+
+    for (logical_id, discord_id) in &state.channels {
+        if definition.channels.contains_key(logical_id) {
+            continue;
+        }
+        plan.insert(
+            logical_id.clone(),
+            Change::Release {
+                discord_id: *discord_id,
+            },
+        );
+    }
+
+    Ok(plan)
+}
+
+fn planned_channel_creations(definition: &DefinitionFile, state: &StateFile) -> BTreeSet<ChannelLogicalId> {
+    definition
+        .channels
+        .iter()
+        .filter_map(|(logical_id, channel_definition)| {
+            let is_managed_category = channel_definition.is_managed()
+                && compose_attributes(channel_definition).kind == Some(ChannelKind::Category);
+            if !is_managed_category {
+                return None;
+            }
+            (!state.channels.contains_key(logical_id)).then_some(logical_id.clone())
+        })
+        .collect()
+}
+
+fn plan_absent_channel(
+    logical_id: &ChannelLogicalId,
+    state: &StateFile,
+    actual: &BTreeMap<ChannelId, &ChannelSnapshot>,
+    definition: &DefinitionFile,
+    plan: &mut Plan,
+) -> Result<(), ManagementError> {
+    let Some(discord_id) = state.channels.get(logical_id).copied() else {
+        return Ok(());
+    };
+    let current = actual.get(&discord_id).copied();
+    if let Some(current) = current {
+        if !current.manageable {
+            return Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の Snowflake {discord_id} は Bot が管理できないため削除できません"
+            )));
+        }
+        if current.kind == ChannelKind::Category {
+            validate_category_children(logical_id, discord_id, definition, state, actual)?;
+        }
+    }
+    plan.insert(logical_id.clone(), Change::Delete { discord_id });
+    Ok(())
+}
+
+fn validate_category_children(
+    category_logical_id: &ChannelLogicalId,
+    category_id: ChannelId,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    actual: &BTreeMap<ChannelId, &ChannelSnapshot>,
+) -> Result<(), ManagementError> {
+    for child in actual.values().filter(|channel| channel.parent_id == Some(category_id)) {
+        let child_logical_id = state
+            .channels
+            .iter()
+            .find_map(|(logical_id, discord_id)| (*discord_id == child.id).then_some(logical_id));
+        let Some(child_logical_id) = child_logical_id else {
+            return Err(ManagementError::InvalidState(format!(
+                "Category {category_logical_id} の削除前に、管理外の子 Channel {} の移動または親解除を明示してください",
+                child.id
+            )));
+        };
+        let Some(child_definition) = definition.channels.get(child_logical_id) else {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Category {category_logical_id} の削除前に子 Channel {child_logical_id} の移動または削除を明示してください"
+            )));
+        };
+        if child_definition.is_absent() {
+            continue;
+        }
+        if child_definition.is_reference() {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Category {category_logical_id} の削除時、参照専用の子 Channel {child_logical_id} の移動または親解除が必要です"
+            )));
+        }
+        let attributes = compose_attributes(child_definition);
+        if attributes.parent.is_none()
+            || attributes.parent.as_ref().is_some_and(ChannelValue::is_default)
+            || attributes
+                .parent
+                .as_ref()
+                .and_then(ChannelValue::as_value)
+                .is_some_and(|parent| parent == category_logical_id)
+        {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Category {category_logical_id} の削除時、子 Channel {child_logical_id} の parent を変更または clear してください"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_actual_channel<'a>(
+    logical_id: &ChannelLogicalId,
+    discord_id: ChannelId,
+    actual: &'a BTreeMap<ChannelId, &'a ChannelSnapshot>,
+) -> Result<&'a ChannelSnapshot, ManagementError> {
+    actual.get(&discord_id).copied().ok_or_else(|| {
+        ManagementError::InvalidState(format!(
+            "Channel {logical_id} の Snowflake {discord_id} が Guild から予期せず消失しています"
+        ))
+    })
+}
+
+fn validate_channel_parent(
+    logical_id: &ChannelLogicalId,
+    kind: ChannelKind,
+    parent: Option<&ChannelValue<ChannelLogicalId>>,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    actual: Option<&BTreeMap<ChannelId, &ChannelSnapshot>>,
+    planned_channel_creations: &BTreeSet<ChannelLogicalId>,
+) -> Result<(), ManagementError> {
+    let Some(parent) = parent else {
+        return Ok(());
+    };
+    if kind == ChannelKind::Category {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Category {logical_id} には parent を指定できません"
+        )));
+    }
+    let Some(parent_logical_id) = parent.as_value() else {
+        return Ok(());
+    };
+    let Some(parent_definition) = definition.channels.get(parent_logical_id) else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の親 {parent_logical_id} の宣言がありません"
+        )));
+    };
+    if parent_definition.is_absent() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の親 {parent_logical_id} は削除宣言です"
+        )));
+    }
+    let declared_kind = compose_attributes(parent_definition).kind;
+    if declared_kind == Some(ChannelKind::Text) {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の親 {parent_logical_id} は Category である必要があります"
+        )));
+    }
+    let parent_discord_id = state.channels.get(parent_logical_id).copied();
+    if declared_kind.is_none() && !parent_definition.is_reference() {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の親 {parent_logical_id} の type がありません"
+        )));
+    }
+    if planned_channel_creations.contains(parent_logical_id) {
+        return Ok(());
+    }
+    if parent_definition.is_reference() && parent_discord_id.is_none() {
+        return Err(ManagementError::InvalidState(format!(
+            "Channel {logical_id} の親 {parent_logical_id} の対応がありません"
+        )));
+    }
+    if let Some(parent_discord_id) = parent_discord_id
+        && let Some(actual) = actual
+    {
+        let parent_actual = actual.get(&parent_discord_id).ok_or_else(|| {
+            ManagementError::InvalidState(format!(
+                "Channel {logical_id} の親 {parent_logical_id} の Snowflake {parent_discord_id} が Guild から予期せず消失しています"
+            ))
+        })?;
+        if parent_actual.kind != ChannelKind::Category {
+            return Err(ManagementError::InvalidDefinition(format!(
+                "Channel {logical_id} の親 {parent_logical_id} は Category である必要があります"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_channel_creation(
+    logical_id: &ChannelLogicalId,
+    attributes: &ChannelAttributes,
+    definition: &DefinitionFile,
+    state: &StateFile,
+    actual: Option<&BTreeMap<ChannelId, &ChannelSnapshot>>,
+    planned_channel_creations: &BTreeSet<ChannelLogicalId>,
+) -> Result<(), ManagementError> {
+    let kind = attributes.kind.ok_or_else(|| {
+        ManagementError::InvalidDefinition(format!("新しい Channel {logical_id} には type が必要です"))
+    })?;
+    let Some(_) = attributes.name.as_ref().and_then(ChannelValue::as_value) else {
+        return Err(ManagementError::InvalidDefinition(format!(
+            "新しい Channel {logical_id} には name の具体値が必要です"
+        )));
+    };
+    validate_channel_parent(
+        logical_id,
+        kind,
+        attributes.parent.as_ref(),
+        definition,
+        state,
+        actual,
+        planned_channel_creations,
+    )?;
+    if let Some(parent) = attributes.parent.as_ref().and_then(ChannelValue::as_value)
+        && definition
+            .channels
+            .get(parent)
+            .is_some_and(ChannelDefinition::is_reference)
+        && !state.channels.contains_key(parent)
+    {
+        return Err(ManagementError::InvalidState(format!(
+            "Channel {logical_id} の親 {parent} を作成または bind できません"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_name(value: &ChannelValue<String>, logical_id: &ChannelLogicalId) -> Result<String, ManagementError> {
+    value
+        .as_value()
+        .cloned()
+        .ok_or_else(|| ManagementError::InvalidDefinition(format!("Channel {logical_id} の name は空にできません")))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ParentTarget {
+    Resolved(Option<ChannelId>),
+    Planned(ChannelLogicalId),
+}
+
+fn resolve_parent_target(
+    value: &ChannelValue<ChannelLogicalId>,
+    logical_id: &ChannelLogicalId,
+    state: &StateFile,
+    planned_channel_creations: &BTreeSet<ChannelLogicalId>,
+) -> Result<ParentTarget, ManagementError> {
+    if let Some(parent) = value.as_value() {
+        if planned_channel_creations.contains(parent) {
+            Ok(ParentTarget::Planned(parent.clone()))
+        } else if let Some(parent_id) = state.channels.get(parent).copied() {
+            Ok(ParentTarget::Resolved(Some(parent_id)))
+        } else {
+            Err(ManagementError::InvalidState(format!(
+                "Channel {logical_id} の親 {parent} の対応がありません"
+            )))
+        }
+    } else if value.is_clear() {
+        Ok(ParentTarget::Resolved(None))
+    } else {
+        Err(ManagementError::InvalidDefinition(format!(
+            "Channel {logical_id} の parent に default は指定できません"
+        )))
+    }
+}
+
+fn resolve_topic(value: &ChannelValue<String>) -> Option<String> {
+    value.resolve_optional(None)
+}
+
+fn resolve_bool(value: &ChannelValue<bool>, default: bool) -> Result<bool, ManagementError> {
+    if value.is_clear() {
+        return Err(ManagementError::InvalidDefinition(
+            "この属性は解除できません".to_owned(),
+        ));
+    }
+    Ok(value.resolve(default, default))
+}
+
+fn resolve_u16(value: &ChannelValue<u16>, default: u16) -> Result<u16, ManagementError> {
+    Ok(value.resolve(default, 0))
+}
+
+fn resolve_nullable_u16(value: &ChannelValue<u16>, default: Option<u16>) -> Result<Option<u16>, ManagementError> {
+    Ok(value.resolve_optional(default))
+}
+
+fn build_overwrite_changes(
+    logical_id: &ChannelLogicalId,
+    desired: &ChannelAttributes,
+    actual: &ChannelSnapshot,
+    state: &StateFile,
+) -> Result<BTreeMap<ChannelOverwriteTarget, BTreeMap<KnownPermission, ValueChange<OverwriteValue>>>, ManagementError> {
+    let mut changes = BTreeMap::new();
+    for (subject, permissions) in &desired.overwrites {
+        let target = resolve_overwrite_target(subject, logical_id, state)?;
+        let current_permissions = actual.overwrites.get(&target);
+        let mut target_changes = BTreeMap::new();
+        for (permission, desired_value) in permissions {
+            let current = current_permissions
+                .and_then(|permissions| permissions.known.get(permission).copied())
+                .unwrap_or(OverwriteValue::Clear);
+            if let Some(change) = ValueChange::between(current, *desired_value) {
+                target_changes.insert(permission.clone(), change);
+            }
+        }
+        if !target_changes.is_empty() {
+            changes.insert(target, target_changes);
+        }
+    }
+    Ok(changes)
+}
+
+fn resolve_overwrite_target(
+    subject: &OverwriteTarget,
+    logical_id: &ChannelLogicalId,
+    state: &StateFile,
+) -> Result<ChannelOverwriteTarget, ManagementError> {
+    match subject {
+        OverwriteTarget::Everyone => Ok(ChannelOverwriteTarget::Everyone),
+        OverwriteTarget::Role(role) => {
+            let discord_id = if *role == super::super::configuration::everyone_logical_id() {
+                RoleId::new(state.guild_id.get())
+            } else {
+                state.roles.get(role).copied().ok_or_else(|| {
+                    ManagementError::InvalidState(format!(
+                        "Channel {logical_id} の権限対象 Role {role} の対応がありません"
+                    ))
+                })?
+            };
+            Ok(ChannelOverwriteTarget::Role(discord_id))
+        }
+        OverwriteTarget::Member(member) => {
+            let discord_id = state.members.get(member).copied().ok_or_else(|| {
+                ManagementError::InvalidState(format!(
+                    "Channel {logical_id} の権限対象 Member {member} の対応がありません"
+                ))
+            })?;
+            Ok(ChannelOverwriteTarget::Member(discord_id))
+        }
+    }
+}
+
+pub(crate) fn desired_channel_create_with_catalog(
+    definition: &ChannelDefinition,
+    logical_id: &ChannelLogicalId,
+    state: &StateFile,
+    definition_file: &DefinitionFile,
+    catalog: Option<&ChannelCatalog>,
+) -> Result<ChannelCreate, ManagementError> {
+    let attributes = compose_attributes(definition);
+    let actual = catalog.map(|catalog| {
+        catalog
+            .channels
+            .iter()
+            .map(|channel| (channel.id, channel))
+            .collect::<BTreeMap<_, _>>()
+    });
+    let planned_channel_creations = planned_channel_creations(definition_file, state);
+    validate_channel_creation(
+        logical_id,
+        &attributes,
+        definition_file,
+        state,
+        actual.as_ref(),
+        &planned_channel_creations,
+    )?;
+    let kind = attributes.kind.expect("作成前に Channel kind を検証します");
+    let name = resolve_name(
+        attributes.name.as_ref().expect("作成前に Channel name を検証します"),
+        logical_id,
+    )?;
+    let parent_id = attributes
+        .parent
+        .as_ref()
+        .map(|value| resolve_parent_target(value, logical_id, state, &planned_channel_creations))
+        .transpose()?
+        .and_then(|target| match target {
+            ParentTarget::Resolved(parent_id) => parent_id,
+            // 同じ plan 内で先に作成する Category は、作成後に state へ追加された
+            // snowflake を apply 時にもう一度解決します。
+            ParentTarget::Planned(_) => None,
+        });
+    let topic = attributes.topic.as_ref().and_then(resolve_topic);
+    let nsfw = attributes
+        .nsfw
+        .as_ref()
+        .map(|value| resolve_bool(value, DEFAULT_CHANNEL_NSFW))
+        .transpose()?
+        .unwrap_or(DEFAULT_CHANNEL_NSFW);
+    let slowmode_seconds = attributes
+        .slowmode_seconds
+        .as_ref()
+        .map(|value| resolve_u16(value, DEFAULT_SLOWMODE_SECONDS))
+        .transpose()?
+        .unwrap_or(DEFAULT_SLOWMODE_SECONDS);
+    let default_auto_archive_minutes = attributes
+        .default_auto_archive_minutes
+        .as_ref()
+        .map(|value| resolve_nullable_u16(value, DEFAULT_AUTO_ARCHIVE_MINUTES))
+        .transpose()?
+        .unwrap_or(DEFAULT_AUTO_ARCHIVE_MINUTES);
+    let default_thread_slowmode_seconds = attributes
+        .default_thread_slowmode_seconds
+        .as_ref()
+        .map(|value| resolve_u16(value, DEFAULT_THREAD_SLOWMODE_SECONDS))
+        .transpose()?
+        .unwrap_or(DEFAULT_THREAD_SLOWMODE_SECONDS);
+    let mut overwrites = BTreeMap::new();
+    for (subject, permissions) in &attributes.overwrites {
+        let target = resolve_overwrite_target(subject, logical_id, state)?;
+        let permissions = permissions
+            .iter()
+            .filter_map(|(permission, value)| {
+                (!matches!(value, OverwriteValue::Clear)).then_some((permission.clone(), *value))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if !permissions.is_empty() {
+            overwrites.insert(
+                target,
+                ChannelOverwritePermissions {
+                    known: permissions,
+                    ..ChannelOverwritePermissions::default()
+                },
+            );
+        }
+    }
+    Ok(ChannelCreate {
+        kind,
+        name,
+        parent_id,
+        topic,
+        nsfw,
+        slowmode_seconds,
+        default_auto_archive_minutes,
+        default_thread_slowmode_seconds,
+        overwrites,
+    })
+}
