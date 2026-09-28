@@ -179,7 +179,8 @@ async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Resu
     }
     ctx.defer_ephemeral().await?;
     let data = ctx.bot_data();
-    let links = load(&data.link_management, scope).await?;
+    let store = LinkManagement::new(data.database.clone());
+    let links = load(&store, scope).await?;
     let snapshot = save_snapshot(ctx.interaction.id.get(), ctx.author().id.get(), scope, links);
     let (content, components) = page(ctx.interaction.id.get(), &snapshot, 0);
     ctx.send(

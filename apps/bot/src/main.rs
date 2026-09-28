@@ -95,13 +95,13 @@ async fn main() -> Result<(), AppError> {
     let mut client = create_client(
         config.bot.token.clone(),
         intents,
-        event_handlers(&config, link_management.clone())
+        event_handlers(&config, link_management)
             .add(MainEventHandler::new())
             .on_error(handle_event_error),
     )
     .framework(Box::new(framework))
     .cache_settings(settings)
-    .data(Arc::new(BotData::new(config, database, link_management)))
+    .data(Arc::new(BotData::new(config, database)))
     .await
     .context("Failed to create Discord client")?;
 
