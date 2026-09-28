@@ -16,6 +16,7 @@ use serenity::{
 };
 
 const START_LINK_BUTTON_ID: &str = "start_link_button";
+pub(super) const LIST_LINK_BUTTON_ID: &str = "list_link_button";
 
 #[event_handler]
 pub async fn handle_link_event(ctx: &Context, event: &FullEvent) -> Result<(), AppError> {
@@ -90,7 +91,8 @@ pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError
     ctx.channel_id().send_message(ctx.http(), create_safe_message()
         .content("Minecraftアカウントと Discordアカウントを紐付けます。\n「MCアカウントと紐付ける」ボタンを押して、指示に従ってください。")
         .components(&[CreateComponent::ActionRow(CreateActionRow::buttons(&[
-            CreateButton::new(START_LINK_BUTTON_ID).label("MCアカウントと紐付ける").style(ButtonStyle::Primary)
+            CreateButton::new(START_LINK_BUTTON_ID).label("MCアカウントと紐付ける").style(ButtonStyle::Primary),
+            CreateButton::new(LIST_LINK_BUTTON_ID).label("紐付け一覧").style(ButtonStyle::Secondary),
         ]))])).await?;
 
     ctx.send(

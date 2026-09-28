@@ -26,6 +26,7 @@ use crate::{
 pub fn event_handlers(config: &AppConfig) -> BotEventHandlers {
     BotEventHandlers::new()
         .add(mcguildlink::handle_link_event)
+        .add(mcguildlink::handle_management_event)
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
@@ -39,6 +40,7 @@ pub fn commands() -> Vec<AppCommand> {
     build_commands(
         [
             mcguildlink::create_panel,
+            mcguildlink::links,
             auth::create_keyword_button,
             question::question,
             pin::pin,

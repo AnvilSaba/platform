@@ -7,7 +7,7 @@ mod utils;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 // Bot が利用するスキーマだけを必須とする。
-const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758];
+const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260929120000];
 
 use std::sync::Arc;
 
