@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mcguildlink.audit_outbox\n         SET needs_attention = $2,\n             next_attempt_at = now() + make_interval(secs =>\n                 LEAST(3600.0, 60.0 * power(2.0, LEAST(retry_count, 6)))),\n             retry_count = LEAST(retry_count, 2147483646) + 1\n         WHERE log_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ddc8be7a8c63044a0b8c3a67fac84c6332f886da6d8260794c55402f0b0f0eb0"
+}

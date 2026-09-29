@@ -1,3 +1,7 @@
+mod queries;
+
+pub use queries::resume_stopped;
+
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -22,7 +26,6 @@ use crate::{
     utils::create_components_v2_message,
 };
 
-const BATCH_SIZE: i64 = 100;
 const MAX_MESSAGE_UNITS: usize = 4_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,7 +122,6 @@ struct MinecraftSnapshot {
     name: String,
 }
 
-#[derive(sqlx::FromRow)]
 struct PendingAudit {
     id: i64,
     event_type: String,
@@ -226,20 +228,7 @@ impl<S: AuditSender> AuditDelivery<S> {
     }
 
     pub async fn deliver_pending(&self) -> Result<()> {
-        let pending = sqlx::query_as::<_, PendingAudit>(
-            "SELECT a.id, a.event_type, a.occurred_at, a.actor_type, a.actor_minecraft_uuid,
-                    a.actor_minecraft_name, a.actor_discord_user_id::text AS actor_discord_user_id,
-                    a.actor_discord_username, a.target_discord_user_id::text AS target_discord_user_id,
-                    a.target_discord_username, a.target_minecraft_uuid, a.target_minecraft_name,
-                    a.related_discord_accounts, a.related_minecraft_accounts
-             FROM mcguildlink.audit_outbox o
-             JOIN mcguildlink.audit_logs a ON a.id = o.log_id
-             WHERE NOT o.needs_attention AND o.next_attempt_at <= now()
-             ORDER BY o.log_id LIMIT $1",
-        )
-        .bind(BATCH_SIZE)
-        .fetch_all(&self.pool)
-        .await?;
+        let pending = queries::pending(&self.pool).await?;
         for event in pending {
             let id = event.id;
             if let Err(error) = self.sender.send(event.post(self.channel_id)).await {
@@ -248,24 +237,10 @@ impl<S: AuditSender> AuditDelivery<S> {
                     matches!(error, serenity::Error::Http(error)
                         if error.status_code().is_some_and(|status| matches!(status.as_u16(), 403 | 404)))
                 });
-                sqlx::query!(
-                    "UPDATE mcguildlink.audit_outbox
-                     SET needs_attention = $2,
-                         next_attempt_at = now() + make_interval(secs =>
-                             LEAST(3600.0, 60.0 * power(2.0, LEAST(retry_count, 6)))),
-                         retry_count = LEAST(retry_count, 2147483646) + 1
-                     WHERE log_id = $1",
-                    id,
-                    needs_attention,
-                )
-                .execute(&self.pool)
-                .await?;
+                queries::record_failure(&self.pool, id, needs_attention).await?;
                 continue;
             }
-            sqlx::query("DELETE FROM mcguildlink.audit_outbox WHERE log_id = $1")
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
+            queries::delete_delivered(&self.pool, id).await?;
         }
         Ok(())
     }
@@ -286,19 +261,6 @@ pub async fn run_delivery(data: Arc<BotData>, http: Arc<Http>) {
             warn!("監査ログの配送状態の読み取りまたは更新に失敗しました: {error:#}");
         }
     }
-}
-
-/// 要対応の監査配送を再試行待ちへ戻す。ID未指定なら停止中の全件を対象とする。
-pub async fn resume_stopped(pool: &PgPool, event_id: Option<i64>) -> Result<u64> {
-    Ok(sqlx::query!(
-        "UPDATE mcguildlink.audit_outbox
-         SET needs_attention = false, retry_count = 0, next_attempt_at = now()
-         WHERE needs_attention AND ($1::bigint IS NULL OR log_id = $1)",
-        event_id,
-    )
-    .execute(pool)
-    .await?
-    .rows_affected())
 }
 
 #[cfg(test)]
