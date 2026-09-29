@@ -13,7 +13,7 @@ bot:
 mcguildlink:
   replicas: 1
   image:
-    repository: ghcr.io/anvilsaba/mcguildlink
+    repository: ghcr.io/anvilsaba/mcguildlink-old
     tag: ""
     pullPolicy: IfNotPresent
   configSecretName: mcguildlink-config
@@ -24,6 +24,38 @@ mcguildlink:
     port: 8080
   minecraft:
     port: 25565
+
+# 旧 Kotlin 版は既存の mcguildlink 設定で保持する。本番切替は別作業。
+mcLinkServer:
+  replicas: 0
+  image:
+    repository: ghcr.io/anvilsaba/mc-link-server
+    tag: ""
+    pullPolicy: IfNotPresent
+  configSecretName: mc-link-server-config
+  databaseUsername: platform_mcguildlink
+  databaseSecretName: mc-link-server-database
+  port: 25565
+  serviceType: ClusterIP
+
+publicApi:
+  replicas: 0
+  image:
+    repository: ghcr.io/anvilsaba/public-api
+    tag: ""
+    pullPolicy: IfNotPresent
+  databaseUsername: platform_public_api
+  databaseSecretName: public-api-database
+  port: 8080
+
+migration:
+  enabled: false
+  image:
+    repository: ghcr.io/anvilsaba/platform-database
+    tag: ""
+    pullPolicy: IfNotPresent
+  databaseUsername: platform_migrator_job
+  databaseSecretName: migration-database
 
 postgres:
   replicas: 1

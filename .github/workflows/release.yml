@@ -11,7 +11,10 @@ on:
         type: choice
         options:
           - bot
-          - mcguildlink
+          - mcguildlink-old
+          - mc-link-server
+          - public-api
+          - platform-database
           - chart
       bump:
         description: バージョン更新（auto は Conventional Commits から判定）
@@ -111,13 +114,43 @@ jobs:
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
-  build-mcguildlink-image:
-    if: ${{ inputs.app == 'mcguildlink' && !inputs.dry_run }}
+  build-mcguildlink-old-image:
+    if: ${{ inputs.app == 'mcguildlink-old' && !inputs.dry_run }}
     needs: release
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/image-mcguildlink.yml
+    uses: ./.github/workflows/image-mcguildlink-old.yml
+    with:
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  build-mc-link-server-image:
+    if: ${{ inputs.app == 'mc-link-server' && !inputs.dry_run }}
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-mc-link-server.yml
+    with:
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  build-public-api-image:
+    if: ${{ inputs.app == 'public-api' && !inputs.dry_run }}
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-public-api.yml
+    with:
+      release_ref: ${{ needs.release.outputs.tag }}
+
+  build-platform-database-image:
+    if: ${{ inputs.app == 'platform-database' && !inputs.dry_run }}
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-platform-database.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
@@ -139,13 +172,19 @@ jobs:
       needs.release.result == 'success' &&
       (
         (inputs.app == 'bot' && needs.build-bot-image.result == 'success') ||
-        (inputs.app == 'mcguildlink' && needs.build-mcguildlink-image.result == 'success') ||
+        (inputs.app == 'mcguildlink-old' && needs.build-mcguildlink-old-image.result == 'success') ||
+        (inputs.app == 'mc-link-server' && needs.build-mc-link-server-image.result == 'success') ||
+        (inputs.app == 'public-api' && needs.build-public-api-image.result == 'success') ||
+        (inputs.app == 'platform-database' && needs.build-platform-database-image.result == 'success') ||
         (inputs.app == 'chart' && needs.publish-platform-chart.result == 'success')
       )
     needs:
       - release
       - build-bot-image
-      - build-mcguildlink-image
+      - build-mcguildlink-old-image
+      - build-mc-link-server-image
+      - build-public-api-image
+      - build-platform-database-image
       - publish-platform-chart
     runs-on: ubuntu-latest
     environment: production

@@ -1,5 +1,7 @@
 # 本番デプロイ手順
 
+この手順の MCGuildLink は旧 Kotlin 版。分離した Rust サービスの統合環境は [独立リリース手順](independent-deployment.md) を参照する。本番切替は別段階で行う。
+
 ## 1. デプロイ構成
 
 本番はLinuxサーバー上のk3sへ、GHCRのDockerイメージをHelmでデプロイします。アプリケーションのソースコード全体は本番サーバーに不要です。

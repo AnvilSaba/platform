@@ -5,7 +5,7 @@ bot:
 
 mcguildlink:
   image:
-    repository: localhost/anvilsaba/mcguildlink
+    repository: localhost/anvilsaba/mcguildlink-old
     tag: test
 
 cloudflared:

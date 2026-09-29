@@ -1,5 +1,7 @@
 # 開発・個別テスト・統合テスト手順
 
+分離した Rust 版・公開 API・専用マイグレーション Job は [独立リリース手順](independent-deployment.md) を参照する。以下の MCGuildLink 配置は旧 Kotlin 版の検証用として保持する。
+
 ## 1. 開発環境に必要なもの
 
 開発時はWindows上で各アプリを個別に検証し、全体の統合テストではDocker DesktopまたはPodman上のk3dを使用します。

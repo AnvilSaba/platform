@@ -1,0 +1,25 @@
+# 実 Discord と旧 Kotlin 版を起動しない統合環境。
+bot:
+  replicas: 0
+  image:
+    tag: test
+mcguildlink:
+  replicas: 0
+  image:
+    tag: test
+cloudflared:
+  replicas: 0
+mcLinkServer:
+  replicas: 1
+  image:
+    repository: localhost/anvilsaba/mc-link-server
+    tag: test
+publicApi:
+  replicas: 1
+  image:
+    repository: localhost/anvilsaba/public-api
+    tag: test
+migration:
+  image:
+    repository: localhost/anvilsaba/platform-database
+    tag: test

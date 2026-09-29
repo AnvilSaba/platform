@@ -11,7 +11,10 @@ on:
         type: choice
         options:
           - bot
-          - mcguildlink
+          - mcguildlink-old
+          - mc-link-server
+          - public-api
+          - platform-database
           - chart
       release_ref:
         description: デプロイする既存リリースタグ

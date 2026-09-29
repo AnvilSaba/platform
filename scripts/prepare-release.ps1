@@ -22,8 +22,8 @@ $settings = $releaseConfig[$App]
 
 $versionText = Get-Content -Raw $settings.VersionFile
 $versionPattern = switch ($App) {
-    "bot" { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
-    "mcguildlink" { '(?m)^version=(?<version>\d+\.\d+\.\d+)$' }
+    { $_ -in @("bot", "mc-link-server", "public-api", "platform-database") } { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
+    "mcguildlink-old" { '(?m)^version=(?<version>\d+\.\d+\.\d+)$' }
     "chart" { '(?m)^version: (?<version>\d+\.\d+\.\d+)$' }
     default { throw "未対応のリリース対象です: $App" }
 }
@@ -80,15 +80,16 @@ if ($DryRun) {
     } finally {
         if (Test-Path $previewPath) { Remove-Item -LiteralPath $previewPath -Force }
     }
-} elseif ($App -eq "bot") {
+} elseif ($App -in @("bot", "mc-link-server", "public-api", "platform-database")) {
     $updated = [regex]::Replace($versionText, $versionPattern, "version = `"$nextVersion`"", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 
     $lockText = Get-Content -Raw "Cargo.lock"
-    $lockPattern = '(?ms)(\[\[package\]\]\r?\nname = "bot"\r?\nversion = ")\d+\.\d+\.\d+("\r?\n)'
+    $packageName = [regex]::Match($versionText, '(?m)^name = "(?<name>[^\"]+)"$').Groups['name'].Value
+    $lockPattern = '(?ms)(\[\[package\]\]\r?\nname = "' + [regex]::Escape($packageName) + '"\r?\nversion = ")\d+\.\d+\.\d+("\r?\n)'
     $lockUpdated = [regex]::Replace($lockText, $lockPattern, "`${1}$nextVersion`${2}", 1)
     Set-Content -Path "Cargo.lock" -Value $lockUpdated -NoNewline
-} elseif ($App -eq "mcguildlink") {
+} elseif ($App -eq "mcguildlink-old") {
     $updated = [regex]::Replace($versionText, $versionPattern, "version=$nextVersion", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 } else {

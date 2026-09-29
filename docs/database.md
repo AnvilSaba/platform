@@ -75,7 +75,7 @@ sqlx migrate info
 ```
 
 運用時は専用マイグレーション Job が実行する。アプリ自身はスキーマ変更を行わない。
-Job のデプロイ構成は後続のデプロイ Issue で扱う。
+Job のデプロイ構成・配置順序は [分離サービスの統合環境と独立リリース](independent-deployment.md) を参照する。
 
 起動時は `public._sqlx_migrations` を読み取り、必須の適用履歴・チェックサム・成功状態を検証する。
 Bot ロールには `version`・`success`・`checksum` の読み取り権限だけを付与する。

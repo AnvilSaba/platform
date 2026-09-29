@@ -1,0 +1,32 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: platform-migrate
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: "{{ .Values.migration.image.repository }}:{{ required "migration.image.tag is required" .Values.migration.image.tag }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy }}
+          securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
+          env:
+            - name: DATABASE_URL
+              value: {{ printf "postgres://%s@%s:%v/%s" .Values.migration.databaseUsername .Values.postgres.serviceName .Values.postgres.port .Values.postgres.database | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.migration.databaseSecretName }}, key: password }
+{{- end }}

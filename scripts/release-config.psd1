@@ -19,12 +19,33 @@
         BaselineTag   = "bot/v3.5.0"
         DisplayName   = "Bot"
     }
-    mcguildlink = @{
+    'mcguildlink-old' = @{
         VersionFile   = "apps/mcguildlink/gradle.properties"
         Changelog     = "apps/mcguildlink/CHANGELOG.md"
         Paths         = @("apps/mcguildlink/**")
-        BaselineTag   = "mcguildlink/v1.0.0"
+        FullHistory   = $true
         DisplayName   = "MCGuildLink"
+    }
+    'mc-link-server' = @{
+        VersionFile = 'apps/mcguildlink-rust/Cargo.toml'
+        Changelog = 'apps/mcguildlink-rust/CHANGELOG.md'
+        Paths = @('apps/mcguildlink-rust/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'Cargo.toml', 'Cargo.lock', 'deploy/Dockerfile.rust')
+        FullHistory = $true
+        DisplayName = 'mc-link-server'
+    }
+    'public-api' = @{
+        VersionFile = 'apps/public-api/Cargo.toml'
+        Changelog = 'apps/public-api/CHANGELOG.md'
+        Paths = @('apps/public-api/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'Cargo.toml', 'Cargo.lock', 'deploy/Dockerfile.rust')
+        FullHistory = $true
+        DisplayName = 'public-api'
+    }
+    'platform-database' = @{
+        VersionFile = 'crates/platform-database/Cargo.toml'
+        Changelog = 'crates/platform-database/CHANGELOG.md'
+        Paths = @('crates/platform-database/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'Cargo.toml', 'Cargo.lock', 'deploy/Dockerfile.rust')
+        FullHistory = $true
+        DisplayName = 'platform-database'
     }
     chart = @{
         VersionFile   = "deploy/helm/platform/Chart.yaml"

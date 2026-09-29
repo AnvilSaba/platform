@@ -38,7 +38,7 @@ if ($Tag) {
     }
     $cliffArgs += @("--tag", $Tag)
 }
-$cliffArgs += if ($settings.FullHistory) { "HEAD" } else { "$baselineTag..HEAD" }
+$cliffArgs += if ($settings.FullHistory) { (git rev-parse HEAD).Trim() } else { "$baselineTag..HEAD" }
 foreach ($path in $settings.Paths) { $cliffArgs += "--include-path=$path" }
 
 & git-cliff @cliffArgs

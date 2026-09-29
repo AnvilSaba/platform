@@ -6,8 +6,8 @@ target="${1:-}"
 release_ref="${2:-}"
 chart_version="${3:-}"
 
-if [[ ! "$target" =~ ^(bot|mcguildlink|chart)$ ]]; then
-  echo "デプロイ対象は bot、mcguildlink、chart のいずれかを指定してください。" >&2
+if [[ ! "$target" =~ ^(bot|mcguildlink-old|mc-link-server|public-api|platform-database|chart)$ ]]; then
+  echo "デプロイ対象が不正です: $target" >&2
   exit 2
 fi
 if [[ ! "$release_ref" =~ ^${target}/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -51,13 +51,22 @@ if ! helm status "$helm_release" --namespace "$namespace" >/dev/null 2>&1; then
   exit 1
 fi
 
-image_args=()
+image_args=(--set migration.enabled=false)
 case "$target" in
   bot)
-    image_args=(--set-string "bot.image.tag=$release_version")
+    image_args+=(--set-string "bot.image.tag=$release_version")
     ;;
-  mcguildlink)
-    image_args=(--set-string "mcguildlink.image.tag=$release_version")
+  mcguildlink-old)
+    image_args+=(--set-string "mcguildlink.image.tag=$release_version" --set-string "mcguildlink.image.repository=ghcr.io/anvilsaba/mcguildlink-old")
+    ;;
+  mc-link-server)
+    image_args+=(--set-string "mcLinkServer.image.tag=$release_version")
+    ;;
+  public-api)
+    image_args+=(--set-string "publicApi.image.tag=$release_version")
+    ;;
+  platform-database)
+    image_args+=(--set migration.enabled=true --set-string "migration.image.tag=$release_version")
     ;;
 esac
 

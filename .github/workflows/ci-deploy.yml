@@ -32,6 +32,7 @@ jobs:
         values:
           - values.dev.yaml
           - values.prod.yaml
+          - values.integration.yaml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint chart
@@ -64,3 +65,6 @@ jobs:
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/deploy-production/action.yml')"
       - name: Check syntax
         run: bash -n ./scripts/deploy-production.sh
+      - name: Verify deployment behavior
+        shell: pwsh
+        run: ./scripts/check-deployment.ps1
