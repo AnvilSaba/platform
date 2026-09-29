@@ -23,4 +23,6 @@ if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name:
 if ($LASTEXITCODE -eq 0) { throw 'Rust サービスの必須タグ検証がない' }
 & helm template platform $chart @tags --set migration.enabled=true 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { throw 'Job の必須タグ検証がない' }
+# 必須タグ不足の想定した終了コードを CI 呼び出し元へ引き継がない。
+$global:LASTEXITCODE = 0
 Write-Host '配置の検証に成功しました。'
