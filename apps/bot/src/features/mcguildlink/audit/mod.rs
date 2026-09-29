@@ -1,4 +1,7 @@
 mod queries;
+mod retry;
+
+pub use retry::audit_retry;
 
 pub use queries::resume_stopped;
 

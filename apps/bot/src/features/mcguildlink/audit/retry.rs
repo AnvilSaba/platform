@@ -1,5 +1,6 @@
-use super::{audit_delivery::resume_stopped, permissions::require_moderator};
+use super::resume_stopped;
 use crate::app::{AppApplicationContext, AppError, BotDataExt};
+use crate::features::mcguildlink::permissions::require_moderator;
 
 /// 停止中の監査配送を再開します。ID省略時は停止中の全件が対象です。
 #[poise::command(slash_command, ephemeral, guild_only, check = "require_moderator")]
