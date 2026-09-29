@@ -249,7 +249,6 @@ mod tests {
     use super::*;
     use crate::features::mcguildlink::test_support;
     use std::{sync::Mutex, time::Duration};
-    use tokio::sync::Notify;
 
     #[derive(Default)]
     struct CapturingSender(Mutex<Vec<AuditPost>>);
@@ -307,21 +306,6 @@ mod tests {
         );
     }
 
-    #[derive(Default)]
-    struct NotifyingSender {
-        sent: Mutex<Vec<AuditPost>>,
-        sent_signal: Notify,
-    }
-
-    #[async_trait]
-    impl AuditSender for Arc<NotifyingSender> {
-        async fn send(&self, post: AuditPost) -> Result<()> {
-            self.sent.lock().unwrap().push(post);
-            self.sent_signal.notify_one();
-            Ok(())
-        }
-    }
-
     #[sqlx::test(migrations = "../../migrations")]
     async fn restart_after_post_before_delete_delivers_same_event_again(pool: PgPool) {
         sqlx::query(
@@ -336,20 +320,39 @@ mod tests {
         .unwrap();
         // 投稿完了後の DELETE だけを止め、Bot 停止時に outbox が残ることを確認する。
         let mut locked = pool.begin().await.unwrap();
-        sqlx::query("SELECT log_id FROM mcguildlink.audit_outbox FOR UPDATE")
+        let lock_pid = sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid() FROM mcguildlink.audit_outbox FOR UPDATE")
             .fetch_one(&mut *locked)
             .await
             .unwrap();
-        let sender = Arc::new(NotifyingSender::default());
+        let sender = Arc::new(CapturingSender::default());
         let delivery = AuditDelivery::new(test_support::bot_pool(&pool).await, sender.clone(), ChannelId::new(123));
-        let task = tokio::spawn(async move { delivery.deliver_pending().await.unwrap() });
-        tokio::time::timeout(Duration::from_secs(10), sender.sent_signal.notified())
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!task.is_finished());
-        task.abort();
-        task.await.unwrap_err();
+        let task = tokio::spawn(async move { delivery.deliver_pending().await });
+        let delete_pid = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(pid) = sqlx::query_scalar::<_, i32>(
+                    "SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                )
+                .bind(lock_pid)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // タスクの abort だけでは送信済み SQL は止まらない。DB 接続を切って停止を再現する。
+        assert!(
+            sqlx::query_scalar::<_, bool>("SELECT pg_terminate_backend($1, 5000)")
+                .bind(delete_pid)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        );
+        assert!(task.await.unwrap().is_err());
         locked.rollback().await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcguildlink.audit_outbox")
@@ -368,8 +371,10 @@ mod tests {
         .deliver_pending()
         .await
         .unwrap();
-        let first = sender.sent.lock().unwrap();
+        let first = sender.0.lock().unwrap();
         let second = retry_sender.0.lock().unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
         assert_eq!(first[0].event_id, second[0].event_id);
         assert_eq!(second[0].channel_id, ChannelId::new(456));
         assert_eq!(
