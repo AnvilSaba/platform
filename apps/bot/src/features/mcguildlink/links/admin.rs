@@ -12,7 +12,6 @@ use serenity::all::{MessageFlags, User};
 use uuid::Uuid;
 
 async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let data = ctx.bot_data();
     let repository = DatabaseAccountLinksRepository::new(data.database.clone());
@@ -34,6 +33,7 @@ async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Resu
     slash_command,
     ephemeral,
     guild_only,
+    check = "require_moderator",
     subcommands("links_discord", "links_minecraft", "links_all")
 )]
 pub async fn links(_: AppApplicationContext<'_>) -> Result<(), AppError> {
@@ -55,7 +55,6 @@ pub async fn links_minecraft(
     ctx: AppApplicationContext<'_>,
     #[description = "一覧表示する Minecraft UUID"] uuid: String,
 ) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
     let Ok(uuid) = Uuid::parse_str(&uuid) else {
         ctx.say("Minecraft UUID は `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` 形式で指定してください。")
             .await?;

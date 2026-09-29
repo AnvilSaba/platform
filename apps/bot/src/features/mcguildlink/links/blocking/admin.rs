@@ -38,6 +38,7 @@ fn format_accounts(group: &BlockGroup) -> String {
     slash_command,
     ephemeral,
     guild_only,
+    check = "require_moderator",
     subcommands("block_add", "block_remove", "block_list")
 )]
 pub async fn block(_: AppApplicationContext<'_>) -> Result<(), AppError> {
@@ -50,7 +51,6 @@ pub async fn block_add(
     ctx: AppApplicationContext<'_>,
     #[description = "ブロックする Discordユーザー"] user: User,
 ) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let content = match store.block(user.id.get(), &user.name, BlockCause::Moderator).await? {
@@ -73,7 +73,6 @@ pub async fn block_remove(
     ctx: AppApplicationContext<'_>,
     #[description = "ブロック解除する Discordユーザー"] user: User,
 ) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let content = match store.unblock(user.id.get()).await? {
@@ -96,7 +95,6 @@ pub async fn block_remove(
 /// ブロック中の関連アカウントグループを表示します。
 #[poise::command(slash_command, ephemeral, guild_only, rename = "list")]
 pub async fn block_list(ctx: AppApplicationContext<'_>) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let groups = store.list().await?;

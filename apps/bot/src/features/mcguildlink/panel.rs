@@ -35,10 +35,8 @@ fn link_panel_message() -> CreateMessage<'static> {
 }
 
 /// 紐付けを開始するためのパネルを送信します。
-#[poise::command(slash_command, ephemeral, guild_only)]
+#[poise::command(slash_command, ephemeral, guild_only, check = "require_moderator")]
 pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError> {
-    require_moderator(ctx).await?;
-
     ctx.defer_ephemeral().await?;
 
     ctx.channel_id().send_message(ctx.http(), link_panel_message()).await?;
