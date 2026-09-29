@@ -1,7 +1,5 @@
-use super::{
-    event_handler::BlockingEventHandler,
-    repository::{BlockCause, BlockResult, DatabaseBlockRepository},
-};
+use super::repository::{BlockCause, BlockResult, DatabaseBlockRepository};
+use crate::features::mcguildlink::GuildMembershipEventHandler;
 use crate::features::mcguildlink::test_support::{self, FIRST, SECOND};
 use serde_json::json;
 use sqlx::PgPool;
@@ -31,7 +29,7 @@ async fn counts(pool: &PgPool) -> (i64, i64, i64, i64) {
 async fn ban_blocks_the_full_many_to_many_component_and_unblock_releases_it(pool: PgPool) {
     test_support::seed_linked_accounts(&pool).await;
     let store = DatabaseBlockRepository::new(test_support::bot_pool(&pool).await);
-    let handler = BlockingEventHandler::new(&test_support::bot_pool(&pool).await);
+    let handler = GuildMembershipEventHandler::new(&test_support::bot_pool(&pool).await);
 
     handler.on_ban(100, 200, 10, "alice").await.unwrap();
     assert_eq!(counts(&pool).await, (3, 1, 0, 0));
@@ -185,7 +183,7 @@ async fn failed_ban_audit_rolls_back_the_whole_block(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let handler = BlockingEventHandler::new(&test_support::bot_pool(&pool).await);
+    let handler = GuildMembershipEventHandler::new(&test_support::bot_pool(&pool).await);
     assert!(handler.on_ban(100, 100, 10, "alice").await.is_err());
     assert_eq!(counts(&pool).await, (3, 1, 0, 0));
     assert_eq!(

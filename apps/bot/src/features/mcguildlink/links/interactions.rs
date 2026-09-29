@@ -66,7 +66,7 @@ pub(super) async fn show_page(
             .await?;
         return Ok(());
     }
-    if snapshot.as_ref().is_some_and(|snapshot| snapshot.scope.is_admin())
+    if snapshot.as_ref().is_some_and(|snapshot| snapshot.context.is_admin())
         && !component
             .member
             .as_ref()

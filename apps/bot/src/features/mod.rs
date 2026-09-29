@@ -29,7 +29,6 @@ pub fn event_handlers(config: &AppConfig, database: &PgPool) -> BotEventHandlers
         .add(mcguildlink::LinkCodeEventHandler::new(database))
         .add(mcguildlink::AccountLinksEventHandler::new(database))
         .add(mcguildlink::GuildMembershipEventHandler::new(database))
-        .add(mcguildlink::BlockingEventHandler::new(database))
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)

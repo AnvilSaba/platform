@@ -32,5 +32,5 @@ async fn page_uses_initial_snapshot_after_a_link_changes(pool: PgPool) {
         panic!("expected a populated list");
     };
     assert!(serde_json::to_string(&components).unwrap().contains("First"));
-    assert_eq!(snapshot.links.len(), 1);
+    assert_eq!(snapshot.entries.len(), 1);
 }
