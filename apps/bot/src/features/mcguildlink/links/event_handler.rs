@@ -6,7 +6,6 @@ use super::{
 use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
-    utils::create_ephemeral_message,
 };
 use serenity::{
     all::{ComponentInteraction, ComponentInteractionDataKind, Context, FullEvent, Interaction, ModalInteraction},
@@ -15,7 +14,7 @@ use serenity::{
 use sqlx::PgPool;
 
 use super::LIST_LINK_BUTTON_ID;
-use super::presentation::{get_snapshot, parse_page};
+use super::presentation::parse_page;
 
 pub struct AccountLinksEventHandler {
     repository: DatabaseAccountLinksRepository,
@@ -37,27 +36,11 @@ impl AccountLinksEventHandler {
         }
 
         let id = component.data.custom_id.as_str();
-        let is_moderator = component
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&config.mcguildlink.moderator_role_id));
         if id == LIST_LINK_BUTTON_ID {
             interactions::show_link_list(&self.repository, ctx, component).await?;
         } else if let Some((snapshot_id, page_index)) = parse_page(id) {
-            if get_snapshot(snapshot_id).is_some_and(|snapshot| snapshot.context.is_admin()) && !is_moderator {
-                component
-                    .create_response(&ctx.http, create_ephemeral_message("管理者権限が必要です。", None))
-                    .await?;
-                return Ok(());
-            }
             interactions::show_page(ctx, component, snapshot_id, page_index).await?;
         } else if let Some((snapshot_id, page_index)) = block_presentation::parse(id) {
-            if !is_moderator {
-                component
-                    .create_response(&ctx.http, create_ephemeral_message("管理者権限が必要です。", None))
-                    .await?;
-                return Ok(());
-            }
             block_interactions::show_page(ctx, component, snapshot_id, page_index).await?;
         } else if let Some((owner, uuid)) = interactions::parse_unlink(id, UNLINK_BUTTON_PREFIX) {
             interactions::show_unlink_confirmation(&self.repository, ctx, component, owner, uuid).await?;

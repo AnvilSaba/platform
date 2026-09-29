@@ -38,12 +38,6 @@ pub(super) enum Scope {
     All,
 }
 
-impl Scope {
-    pub(super) fn is_admin(self) -> bool {
-        !matches!(self, Self::User(_))
-    }
-}
-
 pub(super) async fn load(repository: &impl AccountLinksRepository, scope: Scope) -> Result<Vec<Link>, AppError> {
     match scope {
         Scope::User(id) | Scope::Discord(id) => repository.by_discord(id).await,
