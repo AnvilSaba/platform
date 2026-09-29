@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mcguildlink.audit_outbox\n         SET needs_attention = false, retry_count = 0, next_attempt_at = now()\n         WHERE needs_attention AND ($1::bigint IS NULL OR log_id = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e790292a023a764dcfd66ae2ba2a84e29a042b2ee55f9b2808c27938907e9351"
+}

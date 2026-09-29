@@ -244,6 +244,22 @@ impl<S: AuditSender> AuditDelivery<S> {
             let id = event.id;
             if let Err(error) = self.sender.send(event.post(self.channel_id)).await {
                 warn!(event_id = id, "監査ログの配送に失敗しました: {error:#}");
+                let needs_attention = error.downcast_ref::<serenity::Error>().is_some_and(|error| {
+                    matches!(error, serenity::Error::Http(error)
+                        if error.status_code().is_some_and(|status| matches!(status.as_u16(), 403 | 404)))
+                });
+                sqlx::query!(
+                    "UPDATE mcguildlink.audit_outbox
+                     SET needs_attention = $2,
+                         next_attempt_at = now() + make_interval(secs =>
+                             LEAST(3600.0, 60.0 * power(2.0, LEAST(retry_count, 6)))),
+                         retry_count = LEAST(retry_count, 2147483646) + 1
+                     WHERE log_id = $1",
+                    id,
+                    needs_attention,
+                )
+                .execute(&self.pool)
+                .await?;
                 continue;
             }
             sqlx::query("DELETE FROM mcguildlink.audit_outbox WHERE log_id = $1")
@@ -267,9 +283,22 @@ pub async fn run_delivery(data: Arc<BotData>, http: Arc<Http>) {
             config.mcguildlink.audit_channel_id,
         );
         if let Err(error) = delivery.deliver_pending().await {
-            warn!("監査ログの読み取りまたは削除に失敗しました: {error:#}");
+            warn!("監査ログの配送状態の読み取りまたは更新に失敗しました: {error:#}");
         }
     }
+}
+
+/// 要対応の監査配送を再試行待ちへ戻す。ID未指定なら停止中の全件を対象とする。
+pub async fn resume_stopped(pool: &PgPool, event_id: Option<i64>) -> Result<u64> {
+    Ok(sqlx::query!(
+        "UPDATE mcguildlink.audit_outbox
+         SET needs_attention = false, retry_count = 0, next_attempt_at = now()
+         WHERE needs_attention AND ($1::bigint IS NULL OR log_id = $1)",
+        event_id,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 #[cfg(test)]
@@ -513,6 +542,100 @@ mod tests {
 
     struct FailsFirstSender(Mutex<Vec<i64>>);
 
+    struct HttpFailureSender;
+
+    #[async_trait]
+    impl AuditSender for HttpFailureSender {
+        async fn send(&self, post: AuditPost) -> Result<()> {
+            let status = match post.event_id {
+                1 => 403,
+                2 => 404,
+                3 => 429,
+                4 => 500,
+                _ => return Ok(()),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let app = axum::Router::new().fallback(move || async move {
+                (
+                    axum::http::StatusCode::from_u16(status).unwrap(),
+                    axum::Json(serde_json::json!({"code": 0, "message": "配送失敗"})),
+                )
+            });
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let http = serenity::http::HttpBuilder::without_token()
+                .proxy(format!("http://{address}"))
+                .ratelimiter_disabled(true)
+                .build();
+            let result = DiscordAuditSender::new(Arc::new(http)).send(post).await;
+            server.abort();
+            result
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn stops_permanent_failures_and_resumes_selected_or_all(pool: PgPool) {
+        sqlx::query(
+            "INSERT INTO mcguildlink.audit_logs
+             (event_type, actor_type, target_discord_user_id, target_discord_username,
+              target_minecraft_uuid, target_minecraft_name)
+             SELECT 'member_leave_unlinked', 'system', n, 'user',
+                    '00000000-0000-0000-0000-000000000001', 'Player'
+             FROM generate_series(1, 5) n",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let bot = test_support::bot_pool(&pool).await;
+        AuditDelivery::new(bot.clone(), HttpFailureSender, ChannelId::new(123))
+            .deliver_pending()
+            .await
+            .unwrap();
+        let states = sqlx::query_as::<_, (i64, bool, i32, bool)>(
+            "SELECT log_id, needs_attention, retry_count, next_attempt_at > now()
+             FROM mcguildlink.audit_outbox ORDER BY log_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            states,
+            vec![
+                (1, true, 1, true),
+                (2, true, 1, true),
+                (3, false, 1, true),
+                (4, false, 1, true)
+            ]
+        );
+        let sender = Arc::new(CapturingSender::default());
+        AuditDelivery::new(bot.clone(), sender.clone(), ChannelId::new(456))
+            .deliver_pending()
+            .await
+            .unwrap();
+        assert!(sender.0.lock().unwrap().is_empty());
+        assert_eq!(resume_stopped(&bot, Some(3)).await.unwrap(), 0);
+        assert_eq!(resume_stopped(&bot, Some(999)).await.unwrap(), 0);
+        assert_eq!(resume_stopped(&bot, Some(1)).await.unwrap(), 1);
+        AuditDelivery::new(bot.clone(), sender.clone(), ChannelId::new(456))
+            .deliver_pending()
+            .await
+            .unwrap();
+        assert_eq!(
+            sender.0.lock().unwrap().iter().map(|p| p.event_id).collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(resume_stopped(&bot, None).await.unwrap(), 1);
+        AuditDelivery::new(bot, sender.clone(), ChannelId::new(456))
+            .deliver_pending()
+            .await
+            .unwrap();
+        assert_eq!(
+            sender.0.lock().unwrap().iter().map(|p| p.event_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(resume_stopped(&pool, None).await.unwrap(), 0);
+    }
+
     #[async_trait]
     impl AuditSender for &FailsFirstSender {
         async fn send(&self, post: AuditPost) -> Result<()> {
@@ -550,6 +673,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, vec![1]);
+        let (retry_count, delayed, needs_attention) = sqlx::query_as::<_, (i32, bool, bool)>(
+            "SELECT retry_count, next_attempt_at >= now() + interval '50 seconds', needs_attention
+             FROM mcguildlink.audit_outbox WHERE log_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((retry_count, delayed, needs_attention), (1, true, false));
+        // 再生成した配送役でも、保存した再試行時刻までは送信しない。
+        AuditDelivery::new(test_support::bot_pool(&pool).await, &sender, ChannelId::new(123))
+            .deliver_pending()
+            .await
+            .unwrap();
+        assert_eq!(*sender.0.lock().unwrap(), vec![1, 2]);
+        sqlx::query("UPDATE mcguildlink.audit_outbox SET next_attempt_at = now() WHERE log_id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        AuditDelivery::new(test_support::bot_pool(&pool).await, &sender, ChannelId::new(123))
+            .deliver_pending()
+            .await
+            .unwrap();
+        let state = sqlx::query_as::<_, (i32, bool)>(
+            "SELECT retry_count, next_attempt_at >= now() + interval '110 seconds'
+             FROM mcguildlink.audit_outbox WHERE log_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state, (2, true));
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcguildlink.audit_logs")
                 .fetch_one(&pool)
