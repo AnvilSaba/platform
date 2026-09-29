@@ -4,14 +4,13 @@ use crate::{
     utils::{create_ephemeral_message, create_safe_allowed_mentions},
 };
 use serenity::{
-    all::{ComponentInteraction, Context, MessageFlags, RoleId},
+    all::{ComponentInteraction, Context, MessageFlags},
     builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
 };
 
 pub(in crate::features::mcguildlink::links) async fn show_page(
     ctx: &Context,
     component: &ComponentInteraction,
-    moderator_role: RoleId,
     snapshot_id: u64,
     page: usize,
 ) -> Result<(), AppError> {
@@ -24,14 +23,12 @@ pub(in crate::features::mcguildlink::links) async fn show_page(
             .await?;
         return Ok(());
     };
-    if snapshot.owner != component.user.id.get()
-        || !component
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&moderator_role))
-    {
+    if snapshot.owner != component.user.id.get() {
         component
-            .create_response(&ctx.http, create_ephemeral_message("管理者権限が必要です。", None))
+            .create_response(
+                &ctx.http,
+                create_ephemeral_message("不正な操作です。このボタンはあなたのものではありません。", None),
+            )
             .await?;
         return Ok(());
     }

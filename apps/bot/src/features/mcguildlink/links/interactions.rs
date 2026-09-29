@@ -9,7 +9,7 @@ use crate::{
 use serenity::{
     all::{
         ComponentInteraction, Context, EditInteractionResponse, LabelComponent, MessageFlags, ModalComponent,
-        ModalInteraction, RoleId,
+        ModalInteraction,
     },
     builder::{
         CreateCheckbox, CreateInteractionResponse, CreateInteractionResponseMessage, CreateLabel, CreateModal,
@@ -49,7 +49,6 @@ pub(super) async fn show_link_list(
 pub(super) async fn show_page(
     ctx: &Context,
     component: &ComponentInteraction,
-    moderator_role: RoleId,
     snapshot_id: u64,
     page_index: usize,
 ) -> Result<(), AppError> {
@@ -63,17 +62,6 @@ pub(super) async fn show_page(
                 &ctx.http,
                 create_ephemeral_message("不正な操作です。このボタンはあなたのものではありません。", None),
             )
-            .await?;
-        return Ok(());
-    }
-    if snapshot.as_ref().is_some_and(|snapshot| snapshot.context.is_admin())
-        && !component
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&moderator_role))
-    {
-        component
-            .create_response(&ctx.http, create_ephemeral_message("管理者権限が必要です。", None))
             .await?;
         return Ok(());
     }
