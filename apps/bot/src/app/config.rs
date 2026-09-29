@@ -46,6 +46,7 @@ pub struct McGuildLinkConfig {
     pub guild_id: GuildId,
     pub moderator_role_id: RoleId,
     pub display_server_address: String,
+    pub audit_channel_id: ChannelId,
 }
 
 #[derive(Debug, Deserialize)]
