@@ -3,6 +3,7 @@ mod linking;
 mod links;
 mod pagination;
 mod panel;
+mod permissions;
 
 pub use guild_membership::GuildMembershipEventHandler;
 pub use linking::LinkCodeEventHandler;

@@ -2,22 +2,13 @@ use super::{
     presentation::{render, save},
     repository::{BlockCause, BlockGroup, BlockResult, DatabaseBlockRepository},
 };
+use crate::features::mcguildlink::permissions::require_moderator;
 use crate::{
-    app::{AppApplicationContext, AppError, BotDataExt, BotError},
+    app::{AppApplicationContext, AppError, BotDataExt},
     utils::create_safe_allowed_mentions,
 };
 use poise::CreateReply;
 use serenity::all::{MessageFlags, User};
-
-async fn moderator(ctx: AppApplicationContext<'_>) -> Result<bool, AppError> {
-    let config = ctx.app_config().await;
-    Ok(ctx.guild_id() == Some(config.mcguildlink.guild_id)
-        && ctx
-            .interaction
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&config.mcguildlink.moderator_role_id)))
-}
 
 fn format_accounts(group: &BlockGroup) -> String {
     let mut text = String::from("ブロックした Discordアカウント:\n");
@@ -59,9 +50,7 @@ pub async fn block_add(
     ctx: AppApplicationContext<'_>,
     #[description = "ブロックする Discordユーザー"] user: User,
 ) -> Result<(), AppError> {
-    if !moderator(ctx).await? {
-        return Err(BotError::HasNoRole.into());
-    }
+    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let content = match store.block(user.id.get(), &user.name, BlockCause::Moderator).await? {
@@ -84,9 +73,7 @@ pub async fn block_remove(
     ctx: AppApplicationContext<'_>,
     #[description = "ブロック解除する Discordユーザー"] user: User,
 ) -> Result<(), AppError> {
-    if !moderator(ctx).await? {
-        return Err(BotError::HasNoRole.into());
-    }
+    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let content = match store.unblock(user.id.get()).await? {
@@ -109,9 +96,7 @@ pub async fn block_remove(
 /// ブロック中の関連アカウントグループを表示します。
 #[poise::command(slash_command, ephemeral, guild_only, rename = "list")]
 pub async fn block_list(ctx: AppApplicationContext<'_>) -> Result<(), AppError> {
-    if !moderator(ctx).await? {
-        return Err(BotError::HasNoRole.into());
-    }
+    require_moderator(ctx).await?;
     ctx.defer_ephemeral().await?;
     let store = DatabaseBlockRepository::new(ctx.bot_data().database.clone());
     let groups = store.list().await?;
