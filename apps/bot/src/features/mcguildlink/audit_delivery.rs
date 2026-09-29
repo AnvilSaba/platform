@@ -4,17 +4,26 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serenity::{
-    all::{ChannelId, CreateEmbed, CreateMessage, Http},
+    all::{ChannelId, CreateMessage, Http},
     async_trait,
 };
 use sqlx::{PgPool, types::Json};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::{app::BotData, utils::create_safe_message};
+use crate::{
+    app::{
+        BotData,
+        utils::components::{
+            create_container, create_container_section, create_container_text, create_section_text,
+            create_section_thumbnail, create_separator,
+        },
+    },
+    utils::create_components_v2_message,
+};
 
 const BATCH_SIZE: i64 = 100;
-const MAX_DESCRIPTION_UNITS: usize = 4_000;
+const MAX_MESSAGE_UNITS: usize = 4_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditPost {
@@ -23,16 +32,26 @@ pub struct AuditPost {
     pub occurred_at: DateTime<Utc>,
     pub title: String,
     pub description: String,
+    pub actor: String,
+    pub thumbnail_uuid: Option<Uuid>,
     pub color: u32,
 }
 
 impl AuditPost {
     fn into_message(self) -> CreateMessage<'static> {
-        let description = if self.description.encode_utf16().count() > MAX_DESCRIPTION_UNITS {
+        let footer = format!(
+            "-# 操作主体: {}\n-# <t:{}:F> · イベントID: {}",
+            self.actor,
+            self.occurred_at.timestamp(),
+            self.event_id
+        );
+        let max_description_units =
+            MAX_MESSAGE_UNITS - self.title.encode_utf16().count() - footer.encode_utf16().count();
+        let description = if self.description.encode_utf16().count() > max_description_units {
             let mut shortened = String::new();
             let mut units = 0;
             for ch in self.description.chars() {
-                if units + ch.len_utf16() > MAX_DESCRIPTION_UNITS - 12 {
+                if units + ch.len_utf16() > max_description_units - 12 {
                     break;
                 }
                 shortened.push(ch);
@@ -43,17 +62,24 @@ impl AuditPost {
         } else {
             self.description
         };
-        let embed = CreateEmbed::new()
-            .title(self.title)
-            .description(description)
-            .color(self.color);
-        create_safe_message()
-            .content(format!(
-                "発生日時: <t:{}:F> · イベントID: {}",
-                self.occurred_at.timestamp(),
-                self.event_id
-            ))
-            .embed(embed)
+        let accounts = match self.thumbnail_uuid {
+            Some(uuid) => create_container_section(
+                vec![create_section_text(description)],
+                create_section_thumbnail(format!("https://mc-heads.net/avatar/{uuid}"), None, false),
+            ),
+            None => create_container_text(description),
+        };
+        create_components_v2_message(vec![create_container(
+            vec![
+                create_container_text(self.title),
+                create_separator(false),
+                accounts,
+                create_separator(false),
+                create_container_text(footer),
+            ],
+            Some(self.color),
+            false,
+        )])
     }
 }
 
@@ -113,70 +139,72 @@ struct PendingAudit {
 
 impl PendingAudit {
     fn post(self, channel_id: ChannelId) -> AuditPost {
-        let target_discord = format!("{} ({})", self.target_discord_username, self.target_discord_user_id);
+        let target_discord = format!("{} (`{}`)", self.target_discord_username, self.target_discord_user_id);
         let target_minecraft = self
             .target_minecraft_uuid
             .zip(self.target_minecraft_name)
-            .map(|(uuid, name)| format!("{name} ({uuid})"));
-        let (title, mut description) = match self.event_type.as_str() {
-            "link_succeeded" => (
-                "アカウントの紐付けが完了しました。".to_owned(),
+            .map(|(uuid, name)| format!("{name} (`{uuid}`)"));
+        let (title, description) = match self.event_type.as_str() {
+            "link_succeeded" | "member_leave_unlinked" => (
+                if self.event_type == "link_succeeded" {
+                    "下記のアカウントの紐付けが完了しました。"
+                } else {
+                    "メンバーの退出を検知したため、下記アカウントの紐付けを自動解除しました。"
+                }
+                .to_owned(),
                 format!(
-                    "Discordユーザー: {target_discord}\nMinecraftアカウント: {}",
-                    target_minecraft.unwrap_or_default()
-                ),
-            ),
-            "member_leave_unlinked" => (
-                "メンバーの退出により紐付けを自動解除しました。".to_owned(),
-                format!(
-                    "Discordユーザー: {target_discord}\nMinecraftアカウント: {}",
+                    "- Discordユーザー\n  - {target_discord}\n- Minecraftアカウント\n  - {}",
                     target_minecraft.unwrap_or_default()
                 ),
             ),
             "member_banned_blocked" => {
-                let mut description = format!("BAN対象のDiscordユーザー: {target_discord}");
+                let mut description = format!("- BAN対象の Discordユーザー\n  - {target_discord}");
                 if let Some(accounts) = self.related_discord_accounts {
-                    description.push_str("\nブロックしたDiscordアカウント:");
+                    description.push_str("\n\n- ブロックした Discordアカウント");
                     for account in accounts.0 {
-                        description.push_str(&format!("\n- {} ({})", account.name, account.user_id));
+                        description.push_str(&format!("\n  - {} (`{}`)", account.name, account.user_id));
                     }
                 }
                 if let Some(accounts) = self.related_minecraft_accounts {
-                    description.push_str("\nブロックしたMinecraftアカウント:");
+                    description.push_str("\n\n- ブロックした Minecraftアカウント");
                     for account in accounts.0 {
-                        description.push_str(&format!("\n- {} ({})", account.name, account.uuid));
+                        description.push_str(&format!("\n  - {} (`{}`)", account.name, account.uuid));
                     }
                 }
                 (
-                    "メンバーのBANにより関連アカウントを自動ブロックしました。".to_owned(),
+                    "メンバーのBANを検知したため、関連アカウントを自動ブロックしました。".to_owned(),
                     description,
                 )
             }
             _ => (
                 format!("監査イベント: {}", self.event_type),
-                format!("Discordユーザー: {target_discord}"),
+                format!("- Discordユーザー\n  - {target_discord}"),
             ),
         };
-        match self.actor_type.as_str() {
-            "minecraft_player" => {
-                if let Some((uuid, name)) = self.actor_minecraft_uuid.zip(self.actor_minecraft_name) {
-                    description.push_str(&format!("\n操作主体: Minecraft {name} ({uuid})"));
-                }
-            }
-            "discord_member" => {
-                if let Some((id, name)) = self.actor_discord_user_id.zip(self.actor_discord_username) {
-                    description.push_str(&format!("\n操作主体: Discord {name} ({id})"));
-                }
-            }
-            "system" => description.push_str("\n操作主体: システム"),
-            _ => description.push_str(&format!("\n操作主体: {}", self.actor_type)),
-        }
+        let actor = match self.actor_type.as_str() {
+            "minecraft_player" => self
+                .actor_minecraft_uuid
+                .zip(self.actor_minecraft_name)
+                .map(|(uuid, name)| format!("Minecraft {name} (`{uuid}`)"))
+                .unwrap_or_else(|| "Minecraft".to_owned()),
+            "discord_member" => self
+                .actor_discord_user_id
+                .zip(self.actor_discord_username)
+                .map(|(id, name)| format!("Discord {name} (`{id}`)"))
+                .unwrap_or_else(|| "Discord".to_owned()),
+            "system" => "システム".to_owned(),
+            _ => self.actor_type,
+        };
         AuditPost {
             channel_id,
             event_id: self.id,
             occurred_at: self.occurred_at,
             title,
             description,
+            actor,
+            thumbnail_uuid: (self.event_type == "link_succeeded")
+                .then_some(self.target_minecraft_uuid)
+                .flatten(),
             color: 0x57F287,
         }
     }
@@ -283,13 +311,37 @@ mod tests {
         assert_eq!(sent[0].channel_id, ChannelId::new(123));
         assert!(sent[0].description.contains("DiscordOld"));
         assert!(sent[0].description.contains("AliceOld"));
-        assert!(sent[0].description.contains("操作主体: Minecraft"));
         assert_eq!(sent[0].event_id, 1);
         assert_eq!(sent[0].occurred_at.timestamp(), 1_790_685_296);
-        let message = serde_json::to_string(&sent[0].clone().into_message()).unwrap();
-        assert!(message.contains("<t:1790685296:F>"));
-        assert!(message.contains("イベントID: 1"));
-        assert!(message.contains("DiscordOld"));
+        let message = serde_json::to_value(sent[0].clone().into_message()).unwrap();
+        assert_eq!(message["flags"], 32768);
+        assert!(message["content"].as_str().unwrap_or_default().is_empty());
+        assert!(message["embeds"].as_array().is_none_or(Vec::is_empty));
+        assert_eq!(message["allowed_mentions"]["parse"], serde_json::json!([]));
+        let container = &message["components"][0];
+        assert_eq!(container["type"], 17);
+        assert_eq!(container["accent_color"], 0x57F287);
+        let components = container["components"].as_array().unwrap();
+        assert_eq!(components.len(), 5);
+        assert_eq!(components[0]["content"], "下記のアカウントの紐付けが完了しました。");
+        assert_eq!(components[1]["type"], 14);
+        assert_eq!(components[1]["divider"], false);
+        assert_eq!(components[2]["type"], 9);
+        assert_eq!(
+            components[2]["components"][0]["content"],
+            "- Discordユーザー\n  - DiscordOld (`42`)\n- Minecraftアカウント\n  - AliceOld (`00000000-0000-0000-0000-000000000001`)"
+        );
+        assert_eq!(components[2]["accessory"]["type"], 11);
+        assert_eq!(
+            components[2]["accessory"]["media"]["url"],
+            "https://mc-heads.net/avatar/00000000-0000-0000-0000-000000000001"
+        );
+        assert_eq!(components[3]["type"], 14);
+        assert_eq!(components[3]["divider"], false);
+        assert_eq!(
+            components[4]["content"],
+            "-# 操作主体: Minecraft AliceOld (`00000000-0000-0000-0000-000000000001`)\n-# <t:1790685296:F> · イベントID: 1"
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcguildlink.audit_outbox")
                 .fetch_one(&pool)
@@ -419,12 +471,44 @@ mod tests {
             .unwrap();
         let sent = sender.0.lock().unwrap();
         assert_eq!(sent.len(), 2);
-        assert!(sent[0].title.contains("退出"));
-        assert!(sent[0].description.contains("BeforeLeave"));
-        assert!(sent[0].description.contains("OldPlayer"));
-        assert!(sent[1].title.contains("BAN"));
-        assert!(sent[1].description.contains("BeforeBan"));
-        assert!(sent[1].description.contains("BeforeBlock"));
+        for post in sent.iter() {
+            let message = serde_json::to_value(post.clone().into_message()).unwrap();
+            assert_eq!(message["flags"], 32768);
+            let components = message["components"][0]["components"].as_array().unwrap();
+            assert_eq!(components.len(), 5);
+            assert_eq!(components[0]["content"], post.title);
+            assert_eq!(components[1]["divider"], false);
+            assert_eq!(components[2]["type"], 10);
+            assert_eq!(components[2]["content"], post.description);
+            assert_eq!(components[3]["divider"], false);
+        }
+        assert_eq!(
+            sent[0].title,
+            "メンバーの退出を検知したため、下記アカウントの紐付けを自動解除しました。"
+        );
+        assert_eq!(
+            sent[0].description,
+            "- Discordユーザー\n  - BeforeLeave (`55`)\n- Minecraftアカウント\n  - OldPlayer (`00000000-0000-0000-0000-000000000002`)"
+        );
+        assert_eq!(
+            sent[1].title,
+            "メンバーのBANを検知したため、関連アカウントを自動ブロックしました。"
+        );
+        assert_eq!(
+            sent[1].description,
+            "- BAN対象の Discordユーザー\n  - BeforeBan (`66`)\n\n- ブロックした Discordアカウント\n  - BeforeBan (`66`)\n\n- ブロックした Minecraftアカウント\n  - BeforeBlock (`00000000-0000-0000-0000-000000000003`)"
+        );
+        let mut large_post = sent[1].clone();
+        large_post.description = "😀".repeat(4_000);
+        let message = serde_json::to_value(large_post.into_message()).unwrap();
+        let components = message["components"][0]["components"].as_array().unwrap();
+        let total_units: usize = components
+            .iter()
+            .filter_map(|component| component["content"].as_str())
+            .map(|content| content.encode_utf16().count())
+            .sum();
+        assert!(total_units <= MAX_MESSAGE_UNITS);
+        assert!(components[2]["content"].as_str().unwrap().ends_with("…（以下省略）"));
     }
 
     struct FailsFirstSender(Mutex<Vec<i64>>);
