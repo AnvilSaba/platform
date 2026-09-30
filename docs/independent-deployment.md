@@ -42,7 +42,7 @@ psql の `\password <ロール名>` で各 LOGIN ロールに別パスワード�
 | public-api-database | platform_public_api |
 | migration-database | platform_migrator_job |
 
-MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。`mcLinkServer.serviceType` の既定値は `LoadBalancer` とし、k3s の ServiceLB で外部の Minecraft クライアントへ公開する。開発・統合環境は `ClusterIP` に上書きし、port-forward を使う。
+MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。`mcLinkServer.serviceType` の既定値は `LoadBalancer` とし、k3s の ServiceLB で外部の Minecraft クライアントへ公開する。開発・統合環境でも同じ公開方式を使う。
 
 DB Secret はアプリと同じ namespace に作成し、`password` キーを使用する。名前は `mcLinkServer.databaseSecretName` で変更できる。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
 
@@ -95,7 +95,7 @@ Helm のロールバックでは DB を戻せない。down SQL はデータ削�
 統合クラスタでは Pod の起動、HTTP、PostgreSQL 再起動後のデータ保持を確認する。
 障害確認はテスト環境で PostgreSQL を一時停止し、API の /whitelist.json が503になることと、復旧後に200へ戻ることを確認する。
 実 Discord の配送と Minecraft Java 26.3 の本人認証→ダイアログ→結果表示→切断は手動確認とする。
-Minecraft の確認は `kubectl port-forward -n anvilsaba service/mc-link-server 25565:25565` を使用し、本番ポートへ接続しない。
+Minecraft の確認は開発用 `mc-link-server` Service の公開アドレスと `25565/TCP` を使用し、本番ポートへ接続しない。
 
 ## 公開 API の Cloudflare Tunnel 経路
 

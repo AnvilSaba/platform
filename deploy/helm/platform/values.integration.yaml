@@ -6,7 +6,6 @@ bot:
 cloudflared:
   replicas: 0
 mcLinkServer:
-  serviceType: ClusterIP
   replicas: 1
   image:
     repository: localhost/anvilsaba/mc-link-server
