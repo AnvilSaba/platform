@@ -3,7 +3,7 @@ kind: Service
 metadata:
   name: mc-link-server
 spec:
-  type: {{ .Values.mcLinkServer.serviceType }}
+  type: LoadBalancer
   selector: { app.kubernetes.io/name: mc-link-server }
   ports:
     - { name: tcp, port: {{ .Values.mcLinkServer.port }}, targetPort: tcp }

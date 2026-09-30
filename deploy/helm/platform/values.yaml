@@ -20,7 +20,6 @@ mcLinkServer:
   databaseSecretName: mc-link-server-db-credentials
   # Service 側のポート。コンテナ内は25565固定。
   port: 25565
-  serviceType: LoadBalancer
 
 publicApi:
   replicas: 1
