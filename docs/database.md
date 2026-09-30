@@ -48,7 +48,7 @@ GRANT CONNECT ON DATABASE platform TO platform_public_api;
 GRANT platform_public_api_runtime TO platform_public_api;
 ```
 
-Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `password` には
+Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-credentials`）の `password` には
 `platform_bot` のパスワードを設定する。Helm は `bot.databaseUsername`、
 `postgres.serviceName`、`postgres.port`、`postgres.database` から `DATABASE_URL` を作る。
 

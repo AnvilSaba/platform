@@ -15,8 +15,8 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
         }
         if ($manifest -notmatch 'name: DATABASE_PASSWORD') { throw 'DB Secret 設定がない' }
         foreach ($reference in @(
-            'name: mc-link-server-database, key: password',
-            'name: public-api-database, key: password',
+            'name: mc-link-server-credentials, key: password',
+            'name: public-api-credentials, key: password',
             'name: cloudflare-tunnel, key: token'
         )) {
             if (-not $manifest.Contains($reference)) { throw "Secret 参照がない: $reference" }
@@ -24,10 +24,10 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
         $documents = $manifest -split '(?m)^---\s*$'
         $mc = ($documents | Where-Object { $_ -match 'kind: Deployment\nmetadata:\n  name: mc-link-server\n' }) -join "`n"
         $api = ($documents | Where-Object { $_ -match 'kind: Deployment\nmetadata:\n  name: public-api\n' }) -join "`n"
-        if ($mc -notmatch 'tcpSocket: \{ port: tcp \}' -or $mc -match 'PUBLIC_API_LISTEN|httpGet:|public-api-database|volumeMounts:|volumes:') {
+        if ($mc -notmatch 'tcpSocket: \{ port: tcp \}' -or $mc -match 'PUBLIC_API_LISTEN|httpGet:|public-api-credentials|volumeMounts:|volumes:') {
             throw 'MC Link Server に API 用の設定が混在している'
         }
-        if ($api -notmatch 'httpGet: \{ path: /whitelist.json, port: http \}' -or $api -match 'PUBLIC_API_LISTEN|volumeMounts:|volumes:|tcpSocket:|mc-link-server-database') {
+        if ($api -notmatch 'httpGet: \{ path: /whitelist.json, port: http \}' -or $api -match 'PUBLIC_API_LISTEN|volumeMounts:|volumes:|tcpSocket:|mc-link-server-credentials') {
             throw '公開 API に MC 用の設定が混在している'
         }
     } elseif ($manifest -match 'name: db-migrator') {
