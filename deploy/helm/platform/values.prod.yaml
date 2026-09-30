@@ -3,3 +3,4 @@ imagePullSecrets:
 
 mcLinkServer:
   port: 25600
+  serviceType: LoadBalancer

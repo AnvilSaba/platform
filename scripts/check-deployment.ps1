@@ -36,6 +36,11 @@ $productionMc = (& helm template platform $chart -f "$chart/values.prod.yaml" @t
 if ($LASTEXITCODE -ne 0 -or $productionMc -notmatch 'containerPort: 25565' -or $productionMc -notmatch 'port: 25600, targetPort: tcp') {
     throw '本番 MC Link Server の Service:25600 → コンテナ:25565 が不正'
 }
+$productionServices = $productionMc -split '(?m)^---\s*$'
+foreach ($service in @{ 'mc-link-server' = 'LoadBalancer'; 'public-api' = 'ClusterIP' }.GetEnumerator()) {
+    $manifest = ($productionServices | Where-Object { $_ -match "kind: Service\nmetadata:\n  name: $($service.Key)\n" }) -join "`n"
+    if ($manifest -notmatch "type: $($service.Value)\b") { throw "本番 $($service.Key) の Service type が不正" }
+}
 foreach ($name in @('mc-link-server', 'public-api')) {
     $deployment = ($productionMc -split '(?m)^---\s*$' | Where-Object { $_ -match "kind: Deployment\nmetadata:\n  name: $name\n" }) -join "`n"
     if ($deployment -notmatch 'replicas: 1') { throw "$name の既定 replicas が1ではない" }
