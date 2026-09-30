@@ -40,7 +40,7 @@ psql の `\password <ロール名>` で各 LOGIN ロールに別パスワード�
 | bot-database | platform_bot |
 | mc-link-server-database | platform_mc_link_server |
 | public-api-database | platform_public_api |
-| db-migrator-database | platform_db_migrator |
+| db-migrator-credentials | platform_db_migrator |
 
 MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。`mcLinkServer.serviceType` の既定値は `LoadBalancer` とし、k3s の ServiceLB で外部の Minecraft クライアントへ公開する。開発・統合環境でも同じ公開方式を使う。
 

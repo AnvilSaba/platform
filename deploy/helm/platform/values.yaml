@@ -40,7 +40,7 @@ migration:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_db_migrator
-  databaseSecretName: db-migrator-database
+  databaseSecretName: db-migrator-credentials
 
 postgres:
   replicas: 1
