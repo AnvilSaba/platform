@@ -7,7 +7,7 @@
 本番はLinuxサーバー上のk3sへ、GHCRのDockerイメージをHelmでデプロイします。アプリケーションのソースコード全体は本番サーバーに不要です。
 
 - Botイメージ：`ghcr.io/anvilsaba/bot:<tag>`
-- MCGuildLinkイメージ：`ghcr.io/anvilsaba/mcguildlink:<tag>`
+- MCGuildLinkイメージ：`ghcr.io/anvilsaba/mcguildlink-old:<tag>`
 - Helm Chart：`oci://ghcr.io/anvilsaba/charts/platform`
 - namespace：`anvilsaba`
 - release：`platform`

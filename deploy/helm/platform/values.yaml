@@ -51,7 +51,7 @@ publicApi:
 migration:
   enabled: false
   image:
-    repository: ghcr.io/anvilsaba/platform-database
+    repository: ghcr.io/anvilsaba/db-migrator
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_migrator_job

@@ -1,8 +1,8 @@
-name: MCGuildLink old image
+name: db-migrator image
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/mcguildlink/**", ".github/actions/build-image/**", ".github/workflows/image-mcguildlink-old.yml"]
+    paths: ["LICENSE", "deploy/rust/about.toml", "deploy/rust/about.hbs", ".github/actions/build-image/**", "apps/db-migrator/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deploy/Dockerfile.rust", ".github/workflows/image-db-migrator.yml"]
   workflow_call:
     inputs:
       release_ref:
@@ -14,17 +14,17 @@ permissions:
   packages: write
 jobs:
   build:
-    # jlink は配布先と同じ ARM64 JDK で実行する。
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release_ref || github.ref }}
-      - name: Make Gradle Wrapper executable
-        run: chmod +x apps/mcguildlink/gradlew
       - uses: ./.github/actions/build-image
         with:
-          image: ghcr.io/anvilsaba/mcguildlink-old
+          image: ghcr.io/anvilsaba/db-migrator
           token: ${{ secrets.GITHUB_TOKEN }}
           release-ref: ${{ inputs.release_ref }}
-          dockerfile: apps/mcguildlink/Dockerfile
+          build-args: |
+            PACKAGE=db-migrator
+            BINARY=db-migrator
+            SOURCE_DIR=apps/db-migrator

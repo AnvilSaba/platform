@@ -6,7 +6,7 @@ target="${1:-}"
 release_ref="${2:-}"
 chart_version="${3:-}"
 
-if [[ ! "$target" =~ ^(bot|mcguildlink-old|mc-link-server|public-api|platform-database|chart)$ ]]; then
+if [[ ! "$target" =~ ^(bot|mcguildlink-old|mc-link-server|public-api|db-migrator|chart)$ ]]; then
   echo "デプロイ対象が不正です: $target" >&2
   exit 2
 fi
@@ -65,7 +65,7 @@ case "$target" in
   public-api)
     image_args+=(--set-string "publicApi.image.tag=$release_version")
     ;;
-  platform-database)
+  db-migrator)
     image_args+=(--set migration.enabled=true --set-string "migration.image.tag=$release_version")
     ;;
 esac

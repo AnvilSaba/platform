@@ -715,6 +715,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "db-migrator"
+version = "0.1.0"
+dependencies = [
+ "platform-database",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1780,6 +1789,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "mc-link-server"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "cfb8",
+ "fastnbt",
+ "mc_protocol",
+ "nutype",
+ "platform-database",
+ "reqwest",
+ "rsa",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha1 0.11.0",
+ "sqlx",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "mc_protocol"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1799,28 +1830,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "mcguildlink-rust"
-version = "0.1.0"
-dependencies = [
- "aes",
- "cfb8",
- "fastnbt",
- "mc_protocol",
- "nutype",
- "platform-database",
- "reqwest",
- "rsa",
- "serde",
- "serde_json",
- "serde_with",
- "sha1 0.11.0",
- "sqlx",
- "tokio",
- "toml",
- "uuid",
 ]
 
 [[package]]
@@ -2176,7 +2185,6 @@ dependencies = [
  "rustls",
  "sqlx",
  "thiserror",
- "tokio",
 ]
 
 [[package]]

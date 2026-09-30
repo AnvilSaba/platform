@@ -1,8 +1,8 @@
 # 変更履歴とリリース
 
-Bot、MC Link Server、公開 API、DB マイグレーション、旧 Kotlin 版、Platform Helm Chart は独立してバージョン管理します。タグ接頭辞はそれぞれ `bot`、`mc-link-server`、`public-api`、`platform-database`、`mcguildlink-old`、`chart` で、形式は `<対象>/vX.Y.Z` です。変更履歴は各リリース対象の `CHANGELOG.md` に生成されます。
+Bot、MC Link Server、公開 API、DB マイグレーション、旧 Kotlin 版、Platform Helm Chart は独立してバージョン管理します。タグ接頭辞はそれぞれ `bot`、`mc-link-server`、`public-api`、`db-migrator`、`mcguildlink-old`、`chart` で、形式は `<対象>/vX.Y.Z` です。変更履歴は各リリース対象の `CHANGELOG.md` に生成されます。
 
-既存の `mcguildlink/v*` は旧 Kotlin 版の履歴として保持します。新 Rust 版のリリース名は `mc-link-server`、Cargo package 名は `mcguildlink-rust` です。旧版の Helm 設定キー・Workload・PVC 名は `mcguildlink` を維持し、配布名のみ `mcguildlink-old` に変更します。既存イメージを使う環境は repository と tag を維持してください。
+既存の `mcguildlink/v*` は旧 Kotlin 版の履歴として保持します。新 Rust 版のリリース名は `mc-link-server`、Cargo package 名は `mc-link-server` です。旧版の Helm 設定キー・Workload・PVC 名は `mcguildlink` を維持し、配布名のみ `mcguildlink-old` に変更します。既存イメージを使う環境は repository と tag を維持してください。
 
 ## コミット規約
 
@@ -32,7 +32,7 @@ Workflow は次を自動実行します。
 ./scripts/prepare-release.ps1 -App bot -Bump auto
 ./scripts/prepare-release.ps1 -App mc-link-server -Bump auto
 ./scripts/prepare-release.ps1 -App public-api -Bump auto
-./scripts/prepare-release.ps1 -App platform-database -Bump auto
+./scripts/prepare-release.ps1 -App db-migrator -Bump auto
 ./scripts/prepare-release.ps1 -App mcguildlink-old -Bump auto
 ./scripts/prepare-release.ps1 -App chart -Bump auto
 ```
@@ -47,7 +47,7 @@ Workflow は次を自動実行します。
 ./scripts/generate-changelog.ps1 -App bot
 ./scripts/generate-changelog.ps1 -App mc-link-server
 ./scripts/generate-changelog.ps1 -App public-api
-./scripts/generate-changelog.ps1 -App platform-database
+./scripts/generate-changelog.ps1 -App db-migrator
 ./scripts/generate-changelog.ps1 -App mcguildlink-old
 ./scripts/generate-changelog.ps1 -App chart
 ```

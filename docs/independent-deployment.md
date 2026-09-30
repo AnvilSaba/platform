@@ -10,7 +10,7 @@ Issue #64、親仕様 #55 と ADR 0001・0005 に従う。ここでの手順は�
 | bot | ghcr.io/anvilsaba/bot | bot | platform_bot |
 | mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mcguildlink |
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
-| platform-database | ghcr.io/anvilsaba/platform-database | migration | platform_migrator_job |
+| db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_migrator_job |
 | mcguildlink-old（旧 Kotlin） | ghcr.io/anvilsaba/mcguildlink-old | mcguildlink | SQLite |
 
 GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
@@ -18,13 +18,13 @@ Production deployment と既存デプロイスクリプトは対象の image.tag
 Rust 版の既定 replicas は 0。イメージのリリースだけでは本番の Minecraft 接続先を切り替えない。
 Bot の監査送信役は1つなので replicas=1 を維持する。公開 API の HTTP Service は ClusterIP のままにする。
 
-新しい3イメージは次の Dockerfile を共有する。Bot と旧 Kotlin 版の Dockerfile は従来どおり。
+Rust の4イメージは deploy/Dockerfile.rust の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。旧 Kotlin 版は従来の Dockerfile を ARM64 ランナーでビルドする。イメージ公開処理は .github/actions/build-image に集約する。
 
 ```powershell
-podman build -f deploy/Dockerfile.rust --build-arg PACKAGE=mcguildlink-rust --build-arg BINARY=mcguildlink-rust -t localhost/anvilsaba/mc-link-server:test .
-podman build -f deploy/Dockerfile.rust --build-arg PACKAGE=public-api --build-arg BINARY=public-api -t localhost/anvilsaba/public-api:test .
-podman build -f deploy/Dockerfile.rust --build-arg PACKAGE=platform-database --build-arg BINARY=platform-migrate -t localhost/anvilsaba/platform-database:test .
-k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/platform-database:test -c anvilsaba
+podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=mc-link-server --build-arg BINARY=mc-link-server --build-arg SOURCE_DIR=apps/mc-link-server -t localhost/anvilsaba/mc-link-server:test .
+podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=public-api --build-arg BINARY=public-api --build-arg SOURCE_DIR=apps/public-api -t localhost/anvilsaba/public-api:test .
+podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=db-migrator --build-arg BINARY=db-migrator --build-arg SOURCE_DIR=apps/db-migrator -t localhost/anvilsaba/db-migrator:test .
+k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c anvilsaba
 ```
 
 ## DB と Secret の準備
@@ -58,18 +58,22 @@ Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.t
 ## 配置順序
 
 まず既存の開発手順で k3d と namespace、PostgreSQL Secret を準備する。
-初回はアプリの起動前に Job を完了させる。post-install/post-upgrade hook なので、PostgreSQL の Ready 後に実行される。
+初回はアプリと Job を無効にして PostgreSQL を先に配置し、Ready 後に DB ロールと Secret を準備する。続いて Job を完了させ、その後でアプリを起動する。post-install/post-upgrade hook は PostgreSQL の配置後に実行され、Helm は Job の完了を待つ。旧 Kotlin 用 PVC を保持したまま replicas=0 にするため、一括の --wait は指定せず、各リソースの Ready を個別に確認する。
 
 ```powershell
-helm upgrade --install platform deploy/helm/platform -n anvilsaba --create-namespace -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set migration.enabled=true --wait --timeout 10m
-kubectl logs -n anvilsaba job/platform-migrate
-helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set migration.enabled=false --wait --timeout 10m
+helm upgrade --install platform deploy/helm/platform -n anvilsaba --create-namespace -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set migration.enabled=false --timeout 10m
+kubectl rollout status statefulset/postgres -n anvilsaba
+Get-Content deploy/postgres/bootstrap.sql -Raw | kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_migrator -d platform -v ON_ERROR_STOP=1
+# ここで「DB と Secret の準備」に従い、各ロールのパスワードと Secret を設定する。
+helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set migration.enabled=true --timeout 10m
+kubectl logs -n anvilsaba job/db-migrator
+helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set migration.enabled=false --timeout 10m
 kubectl rollout status deployment/mc-link-server -n anvilsaba
 kubectl rollout status deployment/public-api -n anvilsaba
 kubectl run curl-test -n anvilsaba --rm --restart=Never -i --image=curlimages/curl:8.15.0 -- http://public-api:8080/whitelist.json
 ```
 
-Job は `sqlx::migrate!()` で SQL をバイナリへ埋め込み、sqlx の適用履歴・チェックサム・ロックを使用する。
+専用 apps/db-migrator アプリは `sqlx::migrate!()` で SQL をバイナリへ埋め込み、sqlx の適用履歴・チェックサム・ロックを使用する。platform-database は接続設定・互換性検証を共有するライブラリとして保持し、リリース対象にしない。
 失敗した Job は残し、ログと履歴を確認してから再実行する。アプリ自身は DDL を実行しない。
 Job を無効化した通常のリリースではマイグレーションは実行しない。
 

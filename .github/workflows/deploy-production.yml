@@ -14,7 +14,7 @@ on:
           - mcguildlink-old
           - mc-link-server
           - public-api
-          - platform-database
+          - db-migrator
           - chart
       release_ref:
         description: デプロイする既存リリースタグ

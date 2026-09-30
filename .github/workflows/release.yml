@@ -14,7 +14,7 @@ on:
           - mcguildlink-old
           - mc-link-server
           - public-api
-          - platform-database
+          - db-migrator
           - chart
       bump:
         description: バージョン更新（auto は Conventional Commits から判定）
@@ -144,13 +144,13 @@ jobs:
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
-  build-platform-database-image:
-    if: ${{ inputs.app == 'platform-database' && !inputs.dry_run }}
+  build-db-migrator-image:
+    if: ${{ inputs.app == 'db-migrator' && !inputs.dry_run }}
     needs: release
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/image-platform-database.yml
+    uses: ./.github/workflows/image-db-migrator.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
 
@@ -175,7 +175,7 @@ jobs:
         (inputs.app == 'mcguildlink-old' && needs.build-mcguildlink-old-image.result == 'success') ||
         (inputs.app == 'mc-link-server' && needs.build-mc-link-server-image.result == 'success') ||
         (inputs.app == 'public-api' && needs.build-public-api-image.result == 'success') ||
-        (inputs.app == 'platform-database' && needs.build-platform-database-image.result == 'success') ||
+        (inputs.app == 'db-migrator' && needs.build-db-migrator-image.result == 'success') ||
         (inputs.app == 'chart' && needs.publish-platform-chart.result == 'success')
       )
     needs:
@@ -184,7 +184,7 @@ jobs:
       - build-mcguildlink-old-image
       - build-mc-link-server-image
       - build-public-api-image
-      - build-platform-database-image
+      - build-db-migrator-image
       - publish-platform-chart
     runs-on: ubuntu-latest
     environment: production

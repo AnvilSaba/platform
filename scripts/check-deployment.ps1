@@ -11,12 +11,12 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
             if ($manifest -notmatch "name: $name") { throw "サービスがない: $name" }
         }
         if ($manifest -notmatch 'name: DATABASE_PASSWORD') { throw 'DB Secret 設定がない' }
-    } elseif ($manifest -match 'name: mc-link-server\r?\n|name: public-api|name: platform-migrate') {
+    } elseif ($manifest -match 'name: mc-link-server\r?\n|name: public-api|name: db-migrator') {
         throw '既定構成で Rust サービスまたは Job が有効になっている'
     }
 }
 $job = (& helm template platform $chart @tags --set migration.enabled=true --set-string migration.image.tag=ci) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name: platform-migrate') {
+if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name: db-migrator') {
     throw 'マイグレーション Job を配置できない'
 }
 & helm template platform $chart @tags --set mcLinkServer.replicas=1 2>$null | Out-Null

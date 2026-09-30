@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/mcguildlink-rust",
+    "apps/mc-link-server",
     "apps/public-api",
+    "apps/db-migrator",
     "apps/bot",
     "crates/bot-macros",
     "crates/platform-database",

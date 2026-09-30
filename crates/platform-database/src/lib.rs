@@ -124,10 +124,10 @@ mod tests {
     async fn optional_migration_history_is_ignored(pool: PgPool) {
         let supported = sqlx::migrate!("tests/compatibility");
         sqlx::query("UPDATE public._sqlx_migrations SET success = false, checksum = $1 WHERE version = 2")
-        .bind(&[0_u8][..])
-        .execute(&pool)
-        .await
-        .unwrap();
+            .bind(&[0_u8][..])
+            .execute(&pool)
+            .await
+            .unwrap();
         check_migrations(&pool, &supported, &[1]).await.unwrap();
     }
 

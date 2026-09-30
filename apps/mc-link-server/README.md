@@ -1,11 +1,11 @@
-# MCGuildLink Rust 通信サーバー
+# MC Link Server
 
 Minecraft Java 26.3（プロトコル 777）の online-mode 本人認証後、Play に進めず Configuration ダイアログでコードを受け付ける。コードは PostgreSQL で照合し、成功時は紐付け、コード消費、監査ログ、配送予定を同一トランザクションで保存する。本番環境へはまだ配置しない。
 
 ```powershell
-Copy-Item apps/mcguildlink-rust/config.example.toml config.toml
+Copy-Item apps/mc-link-server/config.example.toml config.toml
 $env:DATABASE_URL = 'postgres://platform_mcguildlink:<パスワード>@localhost:5432/platform'
-cargo run -p mcguildlink-rust
+cargo run -p mc-link-server
 ```
 
 作業ディレクトリの `config.toml` に待受アドレスを設定する。書式は [config.example.toml](config.example.toml) を参照。`DATABASE_URL` は必須。接続時に Mojang セッションサーバーへ問い合わせ、返された UUID と名前が Login Start の値と一致した場合だけ Configuration に進む。接続から 5 分でコード入力を打ち切る。

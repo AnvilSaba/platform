@@ -2,9 +2,9 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/mcguildlink-rust/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/mcguildlink-rust/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest

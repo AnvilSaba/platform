@@ -1,11 +1,11 @@
 [package]
-name = "platform-database"
+name = "db-migrator"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
 
 [dependencies]
-rustls = { version = "0.23", default-features = false, features = [ "aws-lc-rs", "std" ] }
+platform-database = { path = "../../crates/platform-database" }
 sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
-thiserror = "2"
+tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }

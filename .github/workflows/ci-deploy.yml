@@ -7,6 +7,7 @@ on:
       - "deploy/**"
       - "scripts/deploy-production.sh"
       - ".github/actions/deploy-production/**"
+      - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
       - ".github/workflows/chart-platform.yml"
       - ".github/workflows/deploy-production.yml"
@@ -16,6 +17,7 @@ on:
       - "deploy/**"
       - "scripts/deploy-production.sh"
       - ".github/actions/deploy-production/**"
+      - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
       - ".github/workflows/chart-platform.yml"
       - ".github/workflows/deploy-production.yml"
@@ -63,6 +65,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Parse deployment action
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/deploy-production/action.yml')"
+      - name: Parse image action
+        run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/build-image/action.yml')"
       - name: Check syntax
         run: bash -n ./scripts/deploy-production.sh
       - name: Verify deployment behavior

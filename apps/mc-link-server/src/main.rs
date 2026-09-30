@@ -31,7 +31,7 @@ async fn main() -> AppResult<()> {
     let linker = LinkStore::connect().await?;
     let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
     let listener = TcpListener::bind(config.server.listen).await?;
-    eprintln!("MCGuildLink 26.3 listening on {}", config.server.listen);
+    eprintln!("MC Link Server 26.3 listening on {}", config.server.listen);
     loop {
         let (stream, _) = listener.accept().await?;
         let server = Arc::clone(&server);

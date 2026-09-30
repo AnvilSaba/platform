@@ -61,11 +61,11 @@ helm template platform deploy/helm/platform `
 ```powershell
 podman machine start
 
-podman build --file apps/bot/Dockerfile `
+podman build --file deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 `
   --tag localhost/anvilsaba/bot:test .
 
 podman build --file apps/mcguildlink/Dockerfile `
-  --tag localhost/anvilsaba/mcguildlink:test .
+  --tag localhost/anvilsaba/mcguildlink-old:test .
 ```
 
 Botの設定構文を確認します。
@@ -81,7 +81,7 @@ MCGuildLinkの起動ファイルを確認します。
 
 ```powershell
 podman run --rm --entrypoint /runtime/bin/java `
-  localhost/anvilsaba/mcguildlink:test --version
+  localhost/anvilsaba/mcguildlink-old:test --version
 ```
 
 ## 3. 統合テスト環境のセットアップ
@@ -105,7 +105,7 @@ kubectl config current-context
 
 ```powershell
 k3d image import localhost/anvilsaba/bot:test -c anvilsaba
-k3d image import localhost/anvilsaba/mcguildlink:test -c anvilsaba
+k3d image import localhost/anvilsaba/mcguildlink-old:test -c anvilsaba
 ```
 
 ### 3.3 開発用Secretを作成
