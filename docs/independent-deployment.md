@@ -18,12 +18,12 @@ Production deployment と既存デプロイスクリプトは対象の image.tag
 Rust 版の既定 replicas は 0。イメージのリリースだけでは本番の Minecraft 接続先を切り替えない。
 Bot の監査送信役は1つなので replicas=1 を維持する。公開 API の HTTP Service は ClusterIP のままにする。
 
-Rust の4イメージは deploy/Dockerfile.rust の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。イメージ公開処理は .github/actions/build-image に集約する。旧 Kotlin 版の Dockerfile はローカルの移行検証用に保持する。
+Rust の4イメージは deploy/rust/Dockerfile の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。イメージ公開処理は .github/actions/build-image に集約する。旧 Kotlin 版の Dockerfile はローカルの移行検証用に保持する。
 
 ```powershell
-podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=mc-link-server --build-arg BINARY=mc-link-server --build-arg SOURCE_DIR=apps/mc-link-server -t localhost/anvilsaba/mc-link-server:test .
-podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=public-api --build-arg BINARY=public-api --build-arg SOURCE_DIR=apps/public-api -t localhost/anvilsaba/public-api:test .
-podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=db-migrator --build-arg BINARY=db-migrator --build-arg SOURCE_DIR=apps/db-migrator -t localhost/anvilsaba/db-migrator:test .
+podman build -f deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 --build-arg PACKAGE=mc-link-server --build-arg BINARY=mc-link-server --build-arg SOURCE_DIR=apps/mc-link-server -t localhost/anvilsaba/mc-link-server:test .
+podman build -f deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 --build-arg PACKAGE=public-api --build-arg BINARY=public-api --build-arg SOURCE_DIR=apps/public-api -t localhost/anvilsaba/public-api:test .
+podman build -f deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 --build-arg PACKAGE=db-migrator --build-arg BINARY=db-migrator --build-arg SOURCE_DIR=apps/db-migrator -t localhost/anvilsaba/db-migrator:test .
 k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c anvilsaba
 ```
 

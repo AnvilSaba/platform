@@ -61,7 +61,8 @@ helm template platform deploy/helm/platform `
 ```powershell
 podman machine start
 
-podman build --file deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 `
+podman build --file deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 `
+  --build-arg PACKAGE=bot --build-arg BINARY=bot --build-arg SOURCE_DIR=apps/bot `
   --tag localhost/anvilsaba/bot:test .
 
 podman build --file apps/mcguildlink/Dockerfile `

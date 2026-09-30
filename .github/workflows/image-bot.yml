@@ -2,7 +2,7 @@ name: Bot image
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "deploy/rust/about.toml", "deploy/rust/about.hbs", ".github/actions/build-image/**", "apps/bot/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deploy/Dockerfile.rust", ".github/workflows/image-bot.yml"]
+    paths: ["LICENSE", "deploy/rust/**", ".github/actions/build-image/**", "apps/bot/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/image-bot.yml"]
   workflow_call:
     inputs:
       release_ref:
@@ -24,3 +24,7 @@ jobs:
           image: ghcr.io/anvilsaba/bot
           token: ${{ secrets.GITHUB_TOKEN }}
           release-ref: ${{ inputs.release_ref }}
+          build-args: |
+            PACKAGE=bot
+            BINARY=bot
+            SOURCE_DIR=apps/bot

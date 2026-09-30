@@ -53,9 +53,9 @@ RUN case "$TARGETARCH" in \
     echo "$rust_target" > /tmp/rust-target; \
     rustup target add "$rust_target"
 
-ARG PACKAGE=bot
-ARG BINARY=bot
-ARG SOURCE_DIR=apps/bot
+ARG PACKAGE
+ARG BINARY
+ARG SOURCE_DIR
 
 COPY --from=planner /recipe.json ./recipe.json
 COPY .sqlx ./.sqlx

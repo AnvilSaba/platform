@@ -12,7 +12,7 @@ inputs:
     default: ""
   dockerfile:
     description: 使用する Dockerfile
-    default: deploy/Dockerfile.rust
+    default: deploy/rust/Dockerfile
   build-args:
     description: Docker ビルド引数
     default: ""
