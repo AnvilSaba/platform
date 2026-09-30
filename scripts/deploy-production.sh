@@ -51,7 +51,7 @@ if ! helm status "$helm_release" --namespace "$namespace" >/dev/null 2>&1; then
   exit 1
 fi
 
-image_args=(--set migration.enabled=false)
+image_args=(--set dbMigrator.enabled=false)
 case "$target" in
   bot)
     image_args+=(--set-string "bot.image.tag=$release_version")
@@ -63,7 +63,7 @@ case "$target" in
     image_args+=(--set-string "publicApi.image.tag=$release_version")
     ;;
   db-migrator)
-    image_args+=(--set migration.enabled=true --set-string "migration.image.tag=$release_version")
+    image_args+=(--set dbMigrator.enabled=true --set-string "dbMigrator.image.tag=$release_version")
     ;;
 esac
 

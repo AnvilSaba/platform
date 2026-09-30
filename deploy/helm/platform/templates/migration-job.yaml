@@ -1,4 +1,4 @@
-{{- if .Values.migration.enabled }}
+{{- if .Values.dbMigrator.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -16,9 +16,9 @@ spec:
       {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: migrate
-          image: "{{ .Values.migration.image.repository }}:{{ required "migration.image.tag is required" .Values.migration.image.tag }}"
-          imagePullPolicy: {{ .Values.migration.image.pullPolicy }}
+          image: "{{ .Values.dbMigrator.image.repository }}:{{ required "dbMigrator.image.tag is required" .Values.dbMigrator.image.tag }}"
+          imagePullPolicy: {{ .Values.dbMigrator.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           env:
-            {{- include "platform.databaseEnv" (dict "service" .Values.migration "postgres" .Values.postgres) | nindent 12 }}
+            {{- include "platform.databaseEnv" (dict "service" .Values.dbMigrator "postgres" .Values.postgres) | nindent 12 }}
 {{- end }}

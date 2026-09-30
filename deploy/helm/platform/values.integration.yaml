@@ -15,7 +15,7 @@ publicApi:
   image:
     repository: localhost/anvilsaba/public-api
     tag: test
-migration:
+dbMigrator:
   image:
     repository: localhost/anvilsaba/db-migrator
     tag: test

@@ -19,8 +19,8 @@ sqlx-cli と統合テストも `DATABASE_URL` を使用する。
 DB を手動で作成する場合は、管理者として以下を実行する。
 
 ```sql
-CREATE ROLE platform_migrator LOGIN;
-CREATE DATABASE platform OWNER platform_migrator;
+CREATE ROLE platform_admin LOGIN;
+CREATE DATABASE platform OWNER platform_admin;
 ```
 
 ログインユーザーのパスワードは運用環境の Secret 管理を通じて設定する。

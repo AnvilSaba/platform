@@ -32,7 +32,7 @@ publicApi:
   # Service 側のポート。コンテナ内は8080固定。
   port: 8080
 
-migration:
+dbMigrator:
   enabled: false
   image:
     repository: ghcr.io/anvilsaba/db-migrator
@@ -50,7 +50,7 @@ postgres:
     tag: "18.6-trixie"
     pullPolicy: IfNotPresent
   database: platform
-  username: platform_migrator
+  username: platform_admin
   storageSize: 10Gi
   storageClassName: ""
   secretName: postgres-db-credentials

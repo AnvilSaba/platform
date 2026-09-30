@@ -9,7 +9,7 @@
 | bot | ghcr.io/anvilsaba/bot | bot | platform_bot |
 | mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mc_link_server |
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
-| db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_db_migrator |
+| db-migrator | ghcr.io/anvilsaba/db-migrator | dbMigrator | platform_db_migrator |
 
 GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
 Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。
@@ -56,13 +56,13 @@ Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.t
 初回はアプリと Job を無効にして PostgreSQL を先に配置し、Ready 後に DB ロールと Secret を準備する。続いて Job を完了させ、その後でアプリを起動する。post-install/post-upgrade hook は PostgreSQL の配置後に実行され、Helm は Job の完了を待つ。準備中のアプリは replicas=0 とし、各リソースの Ready を個別に確認する。
 
 ```powershell
-helm upgrade --install platform deploy/helm/platform -n anvilsaba --create-namespace -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set migration.enabled=false --timeout 10m
+helm upgrade --install platform deploy/helm/platform -n anvilsaba --create-namespace -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set dbMigrator.enabled=false --timeout 10m
 kubectl rollout status statefulset/postgres -n anvilsaba
-Get-Content deploy/postgres/bootstrap.sql -Raw | kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_migrator -d platform -v ON_ERROR_STOP=1
+Get-Content deploy/postgres/bootstrap.sql -Raw | kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
 # ここで「DB と Secret の準備」に従い、各ロールのパスワードと Secret を設定する。
-helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set migration.enabled=true --timeout 10m
+helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set dbMigrator.enabled=true --timeout 10m
 kubectl logs -n anvilsaba job/db-migrator
-helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set migration.enabled=false --timeout 10m
+helm upgrade platform deploy/helm/platform -n anvilsaba -f deploy/helm/platform/values.integration.yaml --set dbMigrator.enabled=false --timeout 10m
 kubectl rollout status deployment/mc-link-server -n anvilsaba
 kubectl rollout status deployment/public-api -n anvilsaba
 kubectl run curl-test -n anvilsaba --rm --restart=Never -i --image=curlimages/curl:8.15.0 -- http://public-api:8080/whitelist.json

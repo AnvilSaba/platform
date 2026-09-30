@@ -51,7 +51,7 @@ $customPorts = (& helm template platform $chart -f "$chart/values.integration.ya
 if ($LASTEXITCODE -ne 0 -or $customPorts -notmatch 'containerPort: 25565' -or $customPorts -notmatch 'containerPort: 8080' -or $customPorts -notmatch 'port: 25601, targetPort: tcp' -or $customPorts -notmatch 'port: 8081, targetPort: http' -or $customPorts -match 'MC_LINK_SERVER_LISTEN|PUBLIC_API_LISTEN') {
     throw 'Service の公開ポート変更でコンテナの待受設定が変更された'
 }
-$job = (& helm template platform $chart @tags --set migration.enabled=true --set-string migration.image.tag=ci) -join "`n"
+$job = (& helm template platform $chart @tags --set dbMigrator.enabled=true --set-string dbMigrator.image.tag=ci) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name: db-migrator') {
     throw 'マイグレーション Job を配置できない'
 }
@@ -59,7 +59,7 @@ foreach ($service in @('mcLinkServer', 'publicApi')) {
     & helm template platform $chart @tags --set "$service.replicas=0" --set-string "$service.image.tag=" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { throw "$service の必須タグ検証がない" }
 }
-& helm template platform $chart @tags --set migration.enabled=true 2>$null | Out-Null
+& helm template platform $chart @tags --set dbMigrator.enabled=true 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { throw 'Job の必須タグ検証がない' }
 # 必須タグ不足の想定した終了コードを CI 呼び出し元へ引き継がない。
 $global:LASTEXITCODE = 0
