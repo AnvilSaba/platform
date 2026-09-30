@@ -1,0 +1,41 @@
+{{- if .Values.mcLinkServer.image.tag }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-link-server
+spec:
+  replicas: {{ .Values.mcLinkServer.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: mc-link-server }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mc-link-server }
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mc-link-server
+          image: {{ printf "%s:%s" .Values.mcLinkServer.image.repository .Values.mcLinkServer.image.tag | quote }}
+          imagePullPolicy: {{ .Values.mcLinkServer.image.pullPolicy }}
+          securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
+          ports:
+            - { name: tcp, containerPort: {{ .Values.mcLinkServer.port }} }
+          env:
+            - name: DATABASE_URL
+              value: {{ printf "postgres://%s@%s:%v/%s" .Values.mcLinkServer.databaseUsername .Values.postgres.serviceName .Values.postgres.port .Values.postgres.database | quote }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.mcLinkServer.databaseSecretName }}, key: password }
+          readinessProbe:
+            tcpSocket: { port: tcp }
+          volumeMounts:
+            - { name: config, mountPath: /app/config.toml, subPath: config.toml, readOnly: true }
+      volumes:
+        - name: config
+          secret: { secretName: {{ .Values.mcLinkServer.configSecretName }} }
+{{- else if gt (int .Values.mcLinkServer.replicas) 0 }}
+{{- fail "mcLinkServer.image.tag is required when replicas > 0" }}
+{{- end }}
