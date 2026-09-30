@@ -11,11 +11,7 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: public-api }
     spec:
-      automountServiceAccountToken: false
-      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile: { type: RuntimeDefault }
+      {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: public-api
           image: {{ printf "%s:%s" .Values.publicApi.image.repository .Values.publicApi.image.tag | quote }}
@@ -24,11 +20,7 @@ spec:
           ports:
             - { name: http, containerPort: {{ .Values.publicApi.port }} }
           env:
-            - name: DATABASE_URL
-              value: {{ printf "postgres://%s@%s:%v/%s" .Values.publicApi.databaseUsername .Values.postgres.serviceName .Values.postgres.port .Values.postgres.database | quote }}
-            - name: DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.publicApi.databaseSecretName }}, key: password }
+            {{- include "platform.databaseEnv" (dict "service" .Values.publicApi "postgres" .Values.postgres) | nindent 12 }}
             - name: PUBLIC_API_LISTEN
               value: {{ printf "0.0.0.0:%v" .Values.publicApi.port | quote }}
           readinessProbe:

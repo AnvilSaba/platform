@@ -11,13 +11,7 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: bot }
     spec:
-      automountServiceAccountToken: false
-      imagePullSecrets:
-        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+      {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: bot
           image: "{{ .Values.bot.image.repository }}:{{ required "bot.image.tag is required" .Values.bot.image.tag }}"
@@ -26,13 +20,7 @@ spec:
           tty: true
           workingDir: /app
           env:
-            - name: DATABASE_URL
-              value: {{ printf "postgres://%s@%s:%v/%s" .Values.bot.databaseUsername .Values.postgres.serviceName .Values.postgres.port .Values.postgres.database | quote }}
-            - name: DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.bot.databaseSecretName }}
-                  key: password
+            {{- include "platform.databaseEnv" (dict "service" .Values.bot "postgres" .Values.postgres) | nindent 12 }}
           securityContext:
             {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           volumeMounts:
