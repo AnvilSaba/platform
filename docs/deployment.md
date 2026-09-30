@@ -152,6 +152,8 @@ Cloudflare側のPublished applicationのserviceを次に設定します。
 http://mcguildlink-http:8080
 ```
 
+これは旧 Kotlin 版の本番経路です。分離した公開 API の開発用 Tunnel と将来の切替先は[独立デプロイ手順](independent-deployment.md#公開-api-の-cloudflare-tunnel-経路)を参照してください。Helm のリリースだけでは Cloudflare 側の転送先は変更されません。
+
 ### 2.6 GitHub Actionsの本番環境
 
 GitHubのSettingsから`production` Environmentを作成し、次のEnvironment secretsを登録します。

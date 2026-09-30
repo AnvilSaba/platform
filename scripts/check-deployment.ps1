@@ -11,6 +11,15 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
             if ($manifest -notmatch "name: $name") { throw "サービスがない: $name" }
         }
         if ($manifest -notmatch 'name: DATABASE_PASSWORD') { throw 'DB Secret 設定がない' }
+        foreach ($reference in @(
+            'secretName: mc-link-server-config',
+            'subPath: config.toml',
+            'name: mc-link-server-database, key: password',
+            'name: public-api-database, key: password',
+            'name: cloudflare-tunnel, key: token'
+        )) {
+            if (-not $manifest.Contains($reference)) { throw "Secret 参照がない: $reference" }
+        }
     } elseif ($manifest -match 'name: mc-link-server\r?\n|name: public-api|name: db-migrator') {
         throw '既定構成で Rust サービスまたは Job が有効になっている'
     }

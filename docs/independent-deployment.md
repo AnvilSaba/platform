@@ -51,6 +51,8 @@ psql の `\password <ロール名>` で各 LOGIN ロールに別パスワード�
 listen = "0.0.0.0:25565"
 ```
 
+Secret はアプリと同じ namespace に作成する。`mcLinkServer.configSecretName` と `mcLinkServer.databaseSecretName` で名前を変更できるが、キーはそれぞれ `config.toml` と `password` を使用する。旧 Kotlin 用の `mcguildlink-config`（`app.toml`）は流用しない。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
+
 Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.toml キーへ登録する。
 実 Discord 確認を行う場合だけ開発専用 token・guild・監査チャンネルを使い、Bot replicas=1 を指定する。
 通常の統合環境は Bot replicas=0 とし、Discord 配送は Rust テストの送信境界で検証する。
@@ -103,3 +105,13 @@ Kotlin 版は PostgreSQL 共存の対象外で、旧 SQLite と PVC・設定・�
 障害確認はテスト環境で PostgreSQL を一時停止し、API の /whitelist.json が503になることと、復旧後に200へ戻ることを確認する。
 実 Discord の配送と Minecraft Java 26.3 の本人認証→ダイアログ→結果表示→切断は手動確認とする。
 Minecraft の確認は `kubectl port-forward -n anvilsaba service/mc-link-server 25565:25565` を使用し、本番ポートへ接続しない。
+
+## 公開 API の Cloudflare Tunnel 経路
+
+cloudflared は `cloudflare-tunnel` Secret の `token` を使う remotely-managed Tunnel。公開 hostname と転送先は Cloudflare 側で管理し、Helm の配置・リリースでは変更しない。[Cloudflare の Kubernetes 手順](https://developers.cloudflare.com/tunnel/guides/kubernetes/)を参照する。
+
+開発専用 Tunnel と hostname で確認する場合は、Cloudflare の Published application の Service URL を `http://public-api:8080` に設定する。これは cloudflared と public-api が同じ namespace にある場合の宛先。別 namespace からは `http://public-api.<配置namespace>.svc.cluster.local:8080` を使う。`publicApi.port` を変更した場合は転送先ポートも合わせる。
+
+開発専用 token を同じ namespace の `cloudflare-tunnel` Secret の `token` キーに登録し、統合構成を `--set cloudflared.replicas=1` で更新する。先に public-api の Ready とクラスタ内の `http://public-api:8080/whitelist.json` を確認し、その後 `https://<DEV_WHITELIST_HOSTNAME>/whitelist.json` の200と既存JSON形式を確認する。DB 停止時の503も外部経路で確認する。Tunnel 経由の実確認は手動で、通常の自動テストには要求しない。
+
+public-api は ClusterIP のまま公開し、NodePort・LoadBalancer は不要。本番 Tunnel の現在の `http://mcguildlink-http:8080` と hostname は維持する。本番切替時には別途、同じ hostname の転送先を public-api へ変更する必要があり、切り戻しでは旧転送先に戻す。この作業では本番経路を変更しない。
