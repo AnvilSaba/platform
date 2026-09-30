@@ -29,8 +29,20 @@ async fn main() -> AppResult<()> {
     let address: std::net::SocketAddr = std::env::var("MC_LINK_SERVER_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:25565".into())
         .parse()?;
+    let timeout = match std::env::var("MC_LINK_SERVER_INPUT_TIMEOUT_SECONDS") {
+        Ok(value) => {
+            let seconds: f64 = value.parse()?;
+            let duration = std::time::Duration::try_from_secs_f64(seconds)?;
+            if duration.is_zero() {
+                return Err(invalid("input timeout must be positive"));
+            }
+            duration
+        }
+        Err(std::env::VarError::NotPresent) => link_flow::INPUT_TIMEOUT,
+        Err(error) => return Err(error.into()),
+    };
     let linker = LinkStore::connect().await?;
-    let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
+    let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker, timeout));
     let listener = TcpListener::bind(address).await?;
     eprintln!("MC Link Server 26.3 listening on {}", address);
     loop {

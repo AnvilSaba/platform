@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AppResult, VERSION, invalid,
-    link_flow::{INPUT_TIMEOUT, configuration},
+    link_flow::configuration,
     link_store::CodeLinker,
     protocol::{Connection, packets::*},
     session::SessionVerifier,
@@ -22,11 +22,16 @@ static SESSION_ID: OnceLock<Uuid> = OnceLock::new();
 pub(crate) struct LinkServer<V, L> {
     verifier: V,
     linker: L,
+    input_timeout: std::time::Duration,
 }
 
 impl<V: SessionVerifier, L: CodeLinker> LinkServer<V, L> {
-    pub(crate) fn new(verifier: V, linker: L) -> Self {
-        Self { verifier, linker }
+    pub(crate) fn new(verifier: V, linker: L, input_timeout: std::time::Duration) -> Self {
+        Self {
+            verifier,
+            linker,
+            input_timeout,
+        }
     }
 
     pub(crate) async fn serve(&self, stream: TcpStream) -> AppResult<()> {
@@ -113,7 +118,7 @@ impl<V: SessionVerifier, L: CodeLinker> LinkServer<V, L> {
             profile.name.as_ref(),
             profile.id
         );
-        configuration(connection, &profile, INPUT_TIMEOUT, &self.linker).await
+        configuration(connection, &profile, self.input_timeout, &self.linker).await
     }
 }
 

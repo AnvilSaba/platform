@@ -292,5 +292,5 @@ impl SessionVerifier for TestVerifier {
 }
 
 fn test_server() -> LinkServer<TestVerifier, TestLinker> {
-    LinkServer::new(TestVerifier, TestLinker)
+    LinkServer::new(TestVerifier, TestLinker, crate::link_flow::INPUT_TIMEOUT)
 }

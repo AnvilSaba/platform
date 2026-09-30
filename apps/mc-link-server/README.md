@@ -16,6 +16,8 @@ cargo run -p mc-link-server
 | どちらかのアカウントがブロック済み | ブロック済みダイアログ。コードは保持 |
 | 無効・空欄 | エラーを表示して再入力 |
 
+コード入力タイムアウトは `MC_LINK_SERVER_INPUT_TIMEOUT_SECONDS` で正の秒数を指定できます（小数可、既定300秒）。Helm では `mcLinkServer.inputTimeoutSeconds` に設定します。旧版の設定とデータの引き継ぎは[移行手順](../../docs/mcguildlink-migration.md)を参照してください。
+
 実クライアントでの確認は、正規アカウントで Java 26.3 を起動し、Discord でコードを発行してから上記の接続先に入り、コード入力・結果・切断を画面上で確認する。別バージョン（例: 26.2）が Login に進めないことも確認する。確認結果は次の表へ記録する。
 
 | 確認項目 | 結果 |

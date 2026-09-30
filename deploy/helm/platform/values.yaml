@@ -12,6 +12,7 @@ bot:
 
 mcLinkServer:
   replicas: 1
+  inputTimeoutSeconds: 300
   image:
     repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""

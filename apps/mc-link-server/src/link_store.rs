@@ -115,6 +115,61 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    async fn migrated_codes_and_blocks_work_through_rust_linking(pool: PgPool) {
+        let script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test-mcguildlink-migration.py");
+        let output = std::process::Command::new("python")
+            .arg(script)
+            .arg("--fixture-sql")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        sqlx::raw_sql(std::str::from_utf8(&output.stdout).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = LinkStore {
+            pool: restricted_pool(&pool).await,
+        };
+        let blocked = SessionProfile {
+            id: Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap(),
+            name: Name::try_new("Blocked").unwrap(),
+        };
+        assert_eq!(store.consume("AC234679", &blocked).await.unwrap(), LinkResult::Blocked);
+        let existing = SessionProfile {
+            id: Uuid::parse_str("12345678-1234-5678-9abc-123456789abc").unwrap(),
+            name: Name::try_new("Player").unwrap(),
+        };
+        assert_eq!(
+            store.consume("AC234679", &existing).await.unwrap(),
+            LinkResult::AlreadyLinked
+        );
+        assert_eq!(
+            store.consume("AC234679", &player()).await.unwrap(),
+            LinkResult::Success("利用者".into())
+        );
+        assert_eq!(
+            store.consume("AC234679", &player()).await.unwrap(),
+            LinkResult::InvalidCode
+        );
+        assert_eq!(store.consume("BD345689", &blocked).await.unwrap(), LinkResult::Blocked);
+        assert_eq!(
+            store.consume("BD345689", &player()).await.unwrap(),
+            LinkResult::Success("別アカウント".into())
+        );
+        let counts: (i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM mcguildlink.account_links),
+                    (SELECT count(*) FROM mcguildlink.link_requests),
+                    (SELECT count(*) FROM mcguildlink.audit_logs),
+                    (SELECT count(*) FROM mcguildlink.audit_outbox)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (4, 0, 2, 2));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
     async fn success_consumes_code_and_keeps_audit_and_outbox_together(pool: PgPool) {
         issue(&pool, 10, "CODE0001").await;
         issue(&pool, 20, "CODE0002").await;
