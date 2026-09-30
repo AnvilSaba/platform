@@ -22,10 +22,11 @@ $settings = $releaseConfig[$App]
 if (-not $settings) { throw "未対応のリリース対象です: $App" }
 
 $versionText = Get-Content -Raw $settings.VersionFile
-$versionPattern = switch ($App) {
-    { $_ -in @("bot", "mc-link-server", "public-api", "db-migrator") } { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
-    "chart" { '(?m)^version: (?<version>\d+\.\d+\.\d+)$' }
-    default { throw "未対応のリリース対象です: $App" }
+$versionFileName = Split-Path $settings.VersionFile -Leaf
+$versionPattern = switch ($versionFileName) {
+    "Cargo.toml" { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
+    "Chart.yaml" { '(?m)^version: (?<version>\d+\.\d+\.\d+)$' }
+    default { throw "未対応のバージョンファイルです: $($settings.VersionFile)" }
 }
 $versionMatch = [regex]::Match($versionText, $versionPattern)
 if (-not $versionMatch.Success) {
@@ -80,7 +81,7 @@ if ($DryRun) {
     } finally {
         if (Test-Path $previewPath) { Remove-Item -LiteralPath $previewPath -Force }
     }
-} elseif ($App -in @("bot", "mc-link-server", "public-api", "db-migrator")) {
+} elseif ($versionFileName -eq "Cargo.toml") {
     $updated = [regex]::Replace($versionText, $versionPattern, "version = `"$nextVersion`"", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 

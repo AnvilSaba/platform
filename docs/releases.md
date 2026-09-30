@@ -51,3 +51,4 @@ Workflow は次を自動実行します。
 ```
 
 リリース対象ごとのバージョンファイル、変更ログ出力先、対象パス、基準タグは`scripts/release-config.psd1`で一元管理します。
+バージョンの解析・更新形式は `VersionFile` のファイル名で判定します。`Cargo.toml` は Cargo.lock の対象パッケージも更新し、`Chart.yaml` は Chart のバージョンを更新します。
