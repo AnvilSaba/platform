@@ -1,7 +1,6 @@
 # 分離サービスの統合環境と独立リリース
 
-Issue #64、親仕様 #55 と ADR 0001・0005 に従う。ここでの手順は統合環境向けで、本番切替は行わない。
-新構成の Chart はメジャーリリースとして公開する。旧構成の値だけでは配置できず、停止中でも新サービスの公開済みイメージタグを指定する。旧 Kotlin 版の既存本番は旧 Chart を維持し、新 Chart の初期セットアップを済ませてから独立デプロイ Action を使用する。
+分離サービスの設定、統合環境の構築、独立リリースと更新順序を説明する。旧 Kotlin 版からの切替は[移行手順](mcguildlink-migration.md)を参照する。
 
 ## 配布単位
 
@@ -12,14 +11,12 @@ Issue #64、親仕様 #55 と ADR 0001・0005 に従う。ここでの手順は�
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
 | db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_migrator_job |
 
-旧 Kotlin のソース・公開済みイメージと旧 Chart は移行検証用に保持する。新 Chart は旧 Kotlin の Deployment・Service・PVC・設定を含めない。
-
 GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
-Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。旧 Kotlin 版の更新処理は持たず、既存イメージを保持する。
-MC・API のタグは replicas=0 でも必須。起動するかどうかは replicas で制御する。MC・API の既定 replicas は1。初回の DB 準備・マイグレーション中は明示的に0へ上書きし、完了後に1へ戻す。本番切替の実行は別作業とする。
+Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。
+MC・API のタグは replicas=0 でも必須。起動するかどうかは replicas で制御する。MC・API の既定 replicas は1。初回の DB 準備・マイグレーション中は明示的に0へ上書きし、完了後に1へ戻す。
 Bot の監査送信役は1つなので replicas=1 を維持する。公開 API の HTTP Service は ClusterIP のままにする。
 
-Rust の4イメージは deploy/rust/Dockerfile の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。イメージ公開処理は .github/actions/build-image に集約する。旧 Kotlin 版の Dockerfile はローカルの移行検証用に保持する。
+Rust の4イメージは deploy/rust/Dockerfile の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。イメージ公開処理は .github/actions/build-image に集約する。
 
 ```powershell
 podman build -f deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 --build-arg PACKAGE=mc-link-server --build-arg BINARY=mc-link-server --build-arg SOURCE_DIR=apps/mc-link-server -t localhost/anvilsaba/mc-link-server:test .
@@ -52,12 +49,6 @@ DB Secret はアプリと同じ namespace に作成し、`password` キーを使
 Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.toml キーへ登録する。
 実 Discord 確認を行う場合だけ開発専用 token・guild・監査チャンネルを使い、Bot replicas=1 を指定する。
 通常の統合環境は Bot replicas=0 とし、Discord 配送は Rust テストの送信境界で検証する。
-
-## 旧 Chart からの更新前の SQLite 保護
-
-新 Chart から削除されたリソースは、旧 Helm release の更新時に削除対象になる。旧版を停止し、SQLite のバックアップと旧 Chart・values を保存する。切り戻しに必要な `mcguildlink-data` PVC は、更新前に旧 Chart の PVC テンプレートへ `metadata.annotations.helm.sh/resource-policy: keep` を追加したローカルの旧 Chart で一度更新し、`helm get manifest platform -n anvilsaba` の PVC に注釈が保存されたことを確認する。旧 Chart で更新するときも旧版の replicas=0 を維持する。
-
-PVC へ直接 annotate するだけでは、旧 release の保存済み manifest に反映されないため、更新時の保持を保証できない。保護とバックアップを確認してから新 Chart の初期配置へ進む。保護した PVC は新 Chart に管理させず、移行・切り戻し検証を終えるまで保持する。[Helm の保持指定](https://helm.sh/docs/howto/charts_tips_and_tricks/#tell-helm-not-to-uninstall-a-resource)と[保存済み manifest の制約](https://github.com/helm/helm/issues/8132)を参照する。
 
 ## 配置順序
 
@@ -93,8 +84,6 @@ Job を無効化した通常のリリースではマイグレーションは実�
 
 アプリの切り戻しはタグだけを旧版へ戻す。追加的マイグレーションは残す。
 Helm のロールバックでは DB を戻せない。down SQL はデータ削除を含むため運用の切り戻しに使わない。
-Kotlin 版は PostgreSQL 共存の対象外。旧 SQLite の PVC・設定・イメージは新 Chart の管理対象から外し、移行検証・切り戻し用に保持する。
-旧版と Rust 版の業務書き込みを同時に解禁しない。実データの移行・切り戻し検証は後続の移行作業で実施する。
 
 ## 自動検証と手動確認
 
@@ -116,4 +105,4 @@ cloudflared は `cloudflare-tunnel` Secret の `token` を使う remotely-manage
 
 開発専用 token を同じ namespace の `cloudflare-tunnel` Secret の `token` キーに登録し、統合構成を `--set cloudflared.replicas=1` で更新する。先に public-api の Ready とクラスタ内の `http://public-api:8080/whitelist.json` を確認し、その後 `https://<DEV_WHITELIST_HOSTNAME>/whitelist.json` の200と既存JSON形式を確認する。DB 停止時の503も外部経路で確認する。Tunnel 経由の実確認は手動で、通常の自動テストには要求しない。
 
-public-api は ClusterIP のまま公開し、NodePort・LoadBalancer は不要。本番 Tunnel の現在の `http://mcguildlink-http:8080` と hostname は維持する。本番切替時には別途、同じ hostname の転送先を public-api へ変更する必要があり、切り戻しでは旧転送先に戻す。この作業では本番経路を変更しない。
+public-api は ClusterIP のまま公開し、NodePort・LoadBalancer は不要。
