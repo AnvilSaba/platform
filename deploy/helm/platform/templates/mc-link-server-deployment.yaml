@@ -18,16 +18,11 @@ spec:
           imagePullPolicy: {{ .Values.mcLinkServer.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
-            - { name: tcp, containerPort: {{ .Values.mcLinkServer.port }} }
+            - { name: tcp, containerPort: 25565 }
           env:
             {{- include "platform.databaseEnv" (dict "service" .Values.mcLinkServer "postgres" .Values.postgres) | nindent 12 }}
           readinessProbe:
             tcpSocket: { port: tcp }
-          volumeMounts:
-            - { name: config, mountPath: /app/config.toml, subPath: config.toml, readOnly: true }
-      volumes:
-        - name: config
-          secret: { secretName: {{ .Values.mcLinkServer.configSecretName }} }
 {{- else if gt (int .Values.mcLinkServer.replicas) 0 }}
 {{- fail "mcLinkServer.image.tag is required when replicas > 0" }}
 {{- end }}

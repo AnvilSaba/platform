@@ -1,4 +1,3 @@
-mod config;
 mod identity;
 mod link_flow;
 mod link_store;
@@ -13,7 +12,7 @@ use std::{
 };
 use tokio::net::TcpListener;
 
-use crate::{config::AppConfig, link_store::LinkStore, server::LinkServer, session::MojangVerifier};
+use crate::{link_store::LinkStore, server::LinkServer, session::MojangVerifier};
 
 const VERSION: i32 = 777;
 type AppResult<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -27,11 +26,13 @@ mod tests;
 
 #[tokio::main]
 async fn main() -> AppResult<()> {
-    let config = AppConfig::from_file("config.toml").await?;
+    let address: std::net::SocketAddr = std::env::var("MC_LINK_SERVER_LISTEN")
+        .unwrap_or_else(|_| "0.0.0.0:25565".into())
+        .parse()?;
     let linker = LinkStore::connect().await?;
     let server = Arc::new(LinkServer::new(MojangVerifier::new()?, linker));
-    let listener = TcpListener::bind(config.server.listen).await?;
-    eprintln!("MC Link Server 26.3 listening on {}", config.server.listen);
+    let listener = TcpListener::bind(address).await?;
+    eprintln!("MC Link Server 26.3 listening on {}", address);
     loop {
         let (stream, _) = listener.accept().await?;
         let server = Arc::clone(&server);

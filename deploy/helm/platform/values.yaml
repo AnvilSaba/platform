@@ -32,9 +32,9 @@ mcLinkServer:
     repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""
     pullPolicy: IfNotPresent
-  configSecretName: mc-link-server-config
   databaseUsername: platform_mcguildlink
   databaseSecretName: mc-link-server-database
+  # Service 側のポート。コンテナ内は25565固定。
   port: 25565
   serviceType: ClusterIP
 
@@ -46,6 +46,7 @@ publicApi:
     pullPolicy: IfNotPresent
   databaseUsername: platform_public_api
   databaseSecretName: public-api-database
+  # Service 側のポート。コンテナ内は8080固定。
   port: 8080
 
 migration:

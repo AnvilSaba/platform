@@ -44,16 +44,9 @@ psql の `\password <ロール名>` で各 LOGIN ロールに別パスワード�
 | public-api-database | platform_public_api |
 | migration-database | platform_migrator_job |
 
-`mc-link-server-config` Secret の config.toml キーには次を入れる。コンテナではループバックに bind しない。
+MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。
 
-```toml
-[server]
-listen = "0.0.0.0:25565"
-```
-
-Secret はアプリと同じ namespace に作成する。`mcLinkServer.configSecretName` と `mcLinkServer.databaseSecretName` で名前を変更できるが、キーはそれぞれ `config.toml` と `password` を使用する。旧 Kotlin 用の `mcguildlink-config`（`app.toml`）は流用しない。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
-
-開発・統合環境の MC ポートは 25565。本番は `values.prod.yaml` の `mcLinkServer.port` で 25600 に上書きするため、本番用 `mc-link-server-config` の `server.listen` も `0.0.0.0:25600` に設定する。Helm のポート変更では Secret 内の待受設定は更新されない。
+DB Secret はアプリと同じ namespace に作成し、`password` キーを使用する。名前は `mcLinkServer.databaseSecretName` で変更できる。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
 
 Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.toml キーへ登録する。
 実 Discord 確認を行う場合だけ開発専用 token・guild・監査チャンネルを使い、Bot replicas=1 を指定する。
@@ -112,7 +105,7 @@ Minecraft の確認は `kubectl port-forward -n anvilsaba service/mc-link-server
 
 cloudflared は `cloudflare-tunnel` Secret の `token` を使う remotely-managed Tunnel。公開 hostname と転送先は Cloudflare 側で管理し、Helm の配置・リリースでは変更しない。[Cloudflare の Kubernetes 手順](https://developers.cloudflare.com/tunnel/guides/kubernetes/)を参照する。
 
-開発専用 Tunnel と hostname で確認する場合は、Cloudflare の Published application の Service URL を `http://public-api:8080` に設定する。これは cloudflared と public-api が同じ namespace にある場合の宛先。別 namespace からは `http://public-api.<配置namespace>.svc.cluster.local:8080` を使う。`publicApi.port` を変更した場合は転送先ポートも合わせる。
+開発専用 Tunnel と hostname で確認する場合は、Cloudflare の Published application の Service URL を `http://public-api:8080` に設定する。これは cloudflared と public-api が同じ namespace にある場合の宛先。別 namespace からは `http://public-api.<配置namespace>.svc.cluster.local:8080` を使う。API のコンテナ内は既定の `0.0.0.0:8080` で待ち受け、Helm から `PUBLIC_API_LISTEN` は渡さない。`publicApi.port` は Service 側だけを変更し、コンテナの8080へ転送する。Service ポートを変更した場合は Tunnel の転送先ポートも合わせる。
 
 開発専用 token を同じ namespace の `cloudflare-tunnel` Secret の `token` キーに登録し、統合構成を `--set cloudflared.replicas=1` で更新する。先に public-api の Ready とクラスタ内の `http://public-api:8080/whitelist.json` を確認し、その後 `https://<DEV_WHITELIST_HOSTNAME>/whitelist.json` の200と既存JSON形式を確認する。DB 停止時の503も外部経路で確認する。Tunnel 経由の実確認は手動で、通常の自動テストには要求しない。
 

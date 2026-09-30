@@ -12,8 +12,6 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
         }
         if ($manifest -notmatch 'name: DATABASE_PASSWORD') { throw 'DB Secret 設定がない' }
         foreach ($reference in @(
-            'secretName: mc-link-server-config',
-            'subPath: config.toml',
             'name: mc-link-server-database, key: password',
             'name: public-api-database, key: password',
             'name: cloudflare-tunnel, key: token'
@@ -23,10 +21,10 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
         $documents = $manifest -split '(?m)^---\s*$'
         $mc = ($documents | Where-Object { $_ -match 'kind: Deployment\nmetadata:\n  name: mc-link-server\n' }) -join "`n"
         $api = ($documents | Where-Object { $_ -match 'kind: Deployment\nmetadata:\n  name: public-api\n' }) -join "`n"
-        if ($mc -notmatch 'tcpSocket: \{ port: tcp \}' -or $mc -match 'PUBLIC_API_LISTEN|httpGet:|public-api-database') {
+        if ($mc -notmatch 'tcpSocket: \{ port: tcp \}' -or $mc -match 'PUBLIC_API_LISTEN|httpGet:|public-api-database|volumeMounts:|volumes:') {
             throw 'MC Link Server に API 用の設定が混在している'
         }
-        if ($api -notmatch 'httpGet: \{ path: /whitelist.json, port: http \}' -or $api -match 'volumeMounts:|volumes:|tcpSocket:|mc-link-server-config|mc-link-server-database') {
+        if ($api -notmatch 'httpGet: \{ path: /whitelist.json, port: http \}' -or $api -match 'PUBLIC_API_LISTEN|volumeMounts:|volumes:|tcpSocket:|mc-link-server-database') {
             throw '公開 API に MC 用の設定が混在している'
         }
     } elseif ($manifest -match 'name: mc-link-server\r?\n|name: public-api|name: db-migrator') {
@@ -34,8 +32,12 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
     }
 }
 $productionMc = (& helm template platform $chart -f "$chart/values.prod.yaml" @tags --set-string mcLinkServer.image.tag=ci) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $productionMc -notmatch 'containerPort: 25600' -or $productionMc -notmatch 'port: 25600, targetPort: tcp') {
-    throw '本番 MC Link Server のポートが 25600 ではない'
+if ($LASTEXITCODE -ne 0 -or $productionMc -notmatch 'containerPort: 25565' -or $productionMc -notmatch 'port: 25600, targetPort: tcp') {
+    throw '本番 MC Link Server の Service:25600 → コンテナ:25565 が不正'
+}
+$customPorts = (& helm template platform $chart -f "$chart/values.integration.yaml" --set mcLinkServer.port=25601 --set publicApi.port=8081) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $customPorts -notmatch 'containerPort: 25565' -or $customPorts -notmatch 'containerPort: 8080' -or $customPorts -notmatch 'port: 25601, targetPort: tcp' -or $customPorts -notmatch 'port: 8081, targetPort: http' -or $customPorts -match 'MC_LINK_SERVER_LISTEN|PUBLIC_API_LISTEN') {
+    throw 'Service の公開ポート変更でコンテナの待受設定が変更された'
 }
 $job = (& helm template platform $chart @tags --set migration.enabled=true --set-string migration.image.tag=ci) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name: db-migrator') {

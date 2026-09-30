@@ -18,11 +18,9 @@ spec:
           imagePullPolicy: {{ .Values.publicApi.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
-            - { name: http, containerPort: {{ .Values.publicApi.port }} }
+            - { name: http, containerPort: 8080 }
           env:
             {{- include "platform.databaseEnv" (dict "service" .Values.publicApi "postgres" .Values.postgres) | nindent 12 }}
-            - name: PUBLIC_API_LISTEN
-              value: {{ printf "0.0.0.0:%v" .Values.publicApi.port | quote }}
           readinessProbe:
             httpGet: { path: /whitelist.json, port: http }
 {{- else if gt (int .Values.publicApi.replicas) 0 }}
