@@ -53,6 +53,8 @@ listen = "0.0.0.0:25565"
 
 Secret はアプリと同じ namespace に作成する。`mcLinkServer.configSecretName` と `mcLinkServer.databaseSecretName` で名前を変更できるが、キーはそれぞれ `config.toml` と `password` を使用する。旧 Kotlin 用の `mcguildlink-config`（`app.toml`）は流用しない。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
 
+開発・統合環境の MC ポートは 25565。本番は `values.prod.yaml` の `mcLinkServer.port` で 25600 に上書きするため、本番用 `mc-link-server-config` の `server.listen` も `0.0.0.0:25600` に設定する。Helm のポート変更では Secret 内の待受設定は更新されない。
+
 Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.toml キーへ登録する。
 実 Discord 確認を行う場合だけ開発専用 token・guild・監査チャンネルを使い、Bot replicas=1 を指定する。
 通常の統合環境は Bot replicas=0 とし、Discord 配送は Rust テストの送信境界で検証する。

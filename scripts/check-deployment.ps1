@@ -33,6 +33,10 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
         throw '既定構成で Rust サービスまたは Job が有効になっている'
     }
 }
+$productionMc = (& helm template platform $chart -f "$chart/values.prod.yaml" @tags --set-string mcLinkServer.image.tag=ci) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $productionMc -notmatch 'containerPort: 25600' -or $productionMc -notmatch 'port: 25600, targetPort: tcp') {
+    throw '本番 MC Link Server のポートが 25600 ではない'
+}
 $job = (& helm template platform $chart @tags --set migration.enabled=true --set-string migration.image.tag=ci) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $job -notmatch 'kind: Job' -or $job -notmatch 'name: db-migrator') {
     throw 'マイグレーション Job を配置できない'

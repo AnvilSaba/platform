@@ -4,3 +4,6 @@ imagePullSecrets:
 mcguildlink:
   minecraft:
     port: 25600
+
+mcLinkServer:
+  port: 25600
