@@ -7,6 +7,7 @@ cloudflared:
   replicas: 0
 
 mcLinkServer:
+  serviceType: ClusterIP
   image:
     repository: localhost/anvilsaba/mc-link-server
     tag: test

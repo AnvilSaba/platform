@@ -7,6 +7,9 @@ foreach ($values in @('values.dev.yaml', 'values.prod.yaml', 'values.integration
     $manifest = (& helm template platform $chart -f "$chart/$values" @tags) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "Helm render 失敗: $values" }
     if ($manifest -match '(?m)^  name: mcguildlink(?:-http|-minecraft|-data)?$') { throw '新 Chart に旧 Kotlin リソースが含まれている' }
+    $expectedMcType = if ($values -eq 'values.prod.yaml') { 'LoadBalancer' } else { 'ClusterIP' }
+    $mcService = ($manifest -split '(?m)^---\s*$' | Where-Object { $_ -match 'kind: Service\nmetadata:\n  name: mc-link-server\n' }) -join "`n"
+    if ($mcService -notmatch "type: $expectedMcType\b") { throw "MC Service type が不正: $values" }
     if ($values -eq 'values.integration.yaml') {
         foreach ($name in @('mc-link-server', 'public-api')) {
             if ($manifest -notmatch "name: $name") { throw "サービスがない: $name" }
