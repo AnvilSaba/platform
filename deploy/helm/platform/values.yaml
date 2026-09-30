@@ -13,7 +13,7 @@ bot:
 mcguildlink:
   replicas: 1
   image:
-    repository: ghcr.io/anvilsaba/mcguildlink-old
+    repository: ghcr.io/anvilsaba/mcguildlink
     tag: ""
     pullPolicy: IfNotPresent
   configSecretName: mcguildlink-config

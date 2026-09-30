@@ -21,13 +21,6 @@
         BaselineTag   = "bot/v3.5.0"
         DisplayName   = "Bot"
     }
-    'mcguildlink-old' = @{
-        VersionFile   = "apps/mcguildlink/gradle.properties"
-        Changelog     = "apps/mcguildlink/CHANGELOG.md"
-        Paths         = @("apps/mcguildlink/**")
-        FullHistory   = $true
-        DisplayName   = "MCGuildLink"
-    }
     'mc-link-server' = @{
         VersionFile = 'apps/mc-link-server/Cargo.toml'
         Changelog = 'apps/mc-link-server/CHANGELOG.md'

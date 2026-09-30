@@ -19,11 +19,11 @@ if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
 
 $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-config.psd1")
 $settings = $releaseConfig[$App]
+if (-not $settings) { throw "未対応のリリース対象です: $App" }
 
 $versionText = Get-Content -Raw $settings.VersionFile
 $versionPattern = switch ($App) {
     { $_ -in @("bot", "mc-link-server", "public-api", "db-migrator") } { '(?m)^version = "(?<version>\d+\.\d+\.\d+)"$' }
-    "mcguildlink-old" { '(?m)^version=(?<version>\d+\.\d+\.\d+)$' }
     "chart" { '(?m)^version: (?<version>\d+\.\d+\.\d+)$' }
     default { throw "未対応のリリース対象です: $App" }
 }
@@ -89,9 +89,6 @@ if ($DryRun) {
     $lockPattern = '(?ms)(\[\[package\]\]\r?\nname = "' + [regex]::Escape($packageName) + '"\r?\nversion = ")\d+\.\d+\.\d+("\r?\n)'
     $lockUpdated = [regex]::Replace($lockText, $lockPattern, "`${1}$nextVersion`${2}", 1)
     Set-Content -Path "Cargo.lock" -Value $lockUpdated -NoNewline
-} elseif ($App -eq "mcguildlink-old") {
-    $updated = [regex]::Replace($versionText, $versionPattern, "version=$nextVersion", 1)
-    Set-Content -Path $settings.VersionFile -Value $updated -NoNewline
 } else {
     $updated = [regex]::Replace($versionText, $versionPattern, "version: $nextVersion", 1)
     Set-Content -Path $settings.VersionFile -Value $updated -NoNewline

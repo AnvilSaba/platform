@@ -6,7 +6,7 @@ target="${1:-}"
 release_ref="${2:-}"
 chart_version="${3:-}"
 
-if [[ ! "$target" =~ ^(bot|mcguildlink-old|mc-link-server|public-api|db-migrator|chart)$ ]]; then
+if [[ ! "$target" =~ ^(bot|mc-link-server|public-api|db-migrator|chart)$ ]]; then
   echo "デプロイ対象が不正です: $target" >&2
   exit 2
 fi
@@ -55,9 +55,6 @@ image_args=(--set migration.enabled=false)
 case "$target" in
   bot)
     image_args+=(--set-string "bot.image.tag=$release_version")
-    ;;
-  mcguildlink-old)
-    image_args+=(--set-string "mcguildlink.image.tag=$release_version" --set-string "mcguildlink.image.repository=ghcr.io/anvilsaba/mcguildlink-old")
     ;;
   mc-link-server)
     image_args+=(--set-string "mcLinkServer.image.tag=$release_version")

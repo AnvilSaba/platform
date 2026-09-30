@@ -11,14 +11,14 @@ Issue #64、親仕様 #55 と ADR 0001・0005 に従う。ここでの手順は�
 | mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mcguildlink |
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
 | db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_migrator_job |
-| mcguildlink-old（旧 Kotlin） | ghcr.io/anvilsaba/mcguildlink-old | mcguildlink | SQLite |
+| 旧 Kotlin（移行検証のみ・リリース対象外） | 既存の ghcr.io/anvilsaba/mcguildlink | mcguildlink | SQLite |
 
 GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
-Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。旧 Kotlin 版の更新時は配布名変更に合わせ、その repository も mcguildlink-old に更新する。
+Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。旧 Kotlin 版の更新処理は持たず、既存イメージを保持する。
 Rust 版の既定 replicas は 0。イメージのリリースだけでは本番の Minecraft 接続先を切り替えない。
 Bot の監査送信役は1つなので replicas=1 を維持する。公開 API の HTTP Service は ClusterIP のままにする。
 
-Rust の4イメージは deploy/Dockerfile.rust の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。旧 Kotlin 版は従来の Dockerfile を ARM64 ランナーでビルドする。イメージ公開処理は .github/actions/build-image に集約する。
+Rust の4イメージは deploy/Dockerfile.rust の cargo-chef・cargo-zigbuild を共用する。QEMU は使用しない。イメージ公開処理は .github/actions/build-image に集約する。旧 Kotlin 版の Dockerfile はローカルの移行検証用に保持する。
 
 ```powershell
 podman build -f deploy/Dockerfile.rust --build-arg TARGETARCH=amd64 --build-arg PACKAGE=mc-link-server --build-arg BINARY=mc-link-server --build-arg SOURCE_DIR=apps/mc-link-server -t localhost/anvilsaba/mc-link-server:test .

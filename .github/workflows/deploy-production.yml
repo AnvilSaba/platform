@@ -11,7 +11,6 @@ on:
         type: choice
         options:
           - bot
-          - mcguildlink-old
           - mc-link-server
           - public-api
           - db-migrator
