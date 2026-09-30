@@ -8,7 +8,7 @@ bot:
     pullPolicy: IfNotPresent
   configSecretName: bot-config
   databaseUsername: platform_bot
-  databaseSecretName: bot-credentials
+  databaseSecretName: bot-db-credentials
 
 mcLinkServer:
   replicas: 1
@@ -17,7 +17,7 @@ mcLinkServer:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_mc_link_server
-  databaseSecretName: mc-link-server-credentials
+  databaseSecretName: mc-link-server-db-credentials
   # Service 側のポート。コンテナ内は25565固定。
   port: 25565
   serviceType: LoadBalancer
@@ -29,7 +29,7 @@ publicApi:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_public_api
-  databaseSecretName: public-api-credentials
+  databaseSecretName: public-api-db-credentials
   # Service 側のポート。コンテナ内は8080固定。
   port: 8080
 
@@ -40,7 +40,7 @@ migration:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_db_migrator
-  databaseSecretName: db-migrator-credentials
+  databaseSecretName: db-migrator-db-credentials
 
 postgres:
   replicas: 1
@@ -54,7 +54,7 @@ postgres:
   username: platform_migrator
   storageSize: 10Gi
   storageClassName: ""
-  secretName: postgres-credentials
+  secretName: postgres-db-credentials
 
 cloudflared:
   replicas: 1

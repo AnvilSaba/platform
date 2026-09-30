@@ -33,14 +33,14 @@ k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/pub
 アプリへ DB・スキーマ所有権、CREATEROLE、スーパーユーザー権限を渡さない。
 
 psql の `\password <ロール名>` で各 LOGIN ロールに別パスワードを設定し、同じ値を次の Secret の password キーへ登録する。
-実値はコミットしない。PostgreSQL 初期化ユーザーの Secret `postgres-credentials` はアプリ用と別に保持する。
+実値はコミットしない。PostgreSQL 初期化ユーザーの Secret `postgres-db-credentials` はアプリ用と別に保持する。
 
 | Secret | DB ロール |
 |---|---|
-| bot-credentials | platform_bot |
-| mc-link-server-credentials | platform_mc_link_server |
-| public-api-credentials | platform_public_api |
-| db-migrator-credentials | platform_db_migrator |
+| bot-db-credentials | platform_bot |
+| mc-link-server-db-credentials | platform_mc_link_server |
+| public-api-db-credentials | platform_public_api |
+| db-migrator-db-credentials | platform_db_migrator |
 
 MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。`mcLinkServer.serviceType` の既定値は `LoadBalancer` とし、k3s の ServiceLB で外部の Minecraft クライアントへ公開する。開発・統合環境でも同じ公開方式を使う。
 
@@ -52,7 +52,7 @@ Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.t
 
 ## 配置順序
 
-まず開発手順で k3d と namespace を準備し、PostgreSQL 初期化ユーザーのパスワードを `postgres-credentials` Secret の `password` キーへ登録する。
+まず開発手順で k3d と namespace を準備し、PostgreSQL 初期化ユーザーのパスワードを `postgres-db-credentials` Secret の `password` キーへ登録する。
 初回はアプリと Job を無効にして PostgreSQL を先に配置し、Ready 後に DB ロールと Secret を準備する。続いて Job を完了させ、その後でアプリを起動する。post-install/post-upgrade hook は PostgreSQL の配置後に実行され、Helm は Job の完了を待つ。準備中のアプリは replicas=0 とし、各リソースの Ready を個別に確認する。
 
 ```powershell
