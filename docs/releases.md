@@ -49,4 +49,5 @@ Workflow は次を自動実行します。
 ```
 
 リリース対象ごとのバージョンファイル、変更ログ出力先、対象パス、基準タグは`scripts/release-config.psd1`で一元管理します。
+ルートの `Cargo.toml`・`Cargo.lock` は変更履歴と自動 bump の対象パスから除外します。共通依存だけの更新をリリースする場合は bump を明示してください。全差分は各バージョン見出しの GitHub リンクから確認できます。
 バージョンの解析・更新形式は `VersionFile` のファイル名で判定します。`Cargo.toml` は Cargo.lock の対象パッケージも更新し、`Chart.yaml` は Chart のバージョンを更新します。
