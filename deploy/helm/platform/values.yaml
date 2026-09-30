@@ -16,7 +16,7 @@ mcLinkServer:
     repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""
     pullPolicy: IfNotPresent
-  databaseUsername: platform_mcguildlink
+  databaseUsername: platform_mc_link_server
   databaseSecretName: mc-link-server-database
   # Service 側のポート。コンテナ内は25565固定。
   port: 25565
@@ -39,8 +39,8 @@ migration:
     repository: ghcr.io/anvilsaba/db-migrator
     tag: ""
     pullPolicy: IfNotPresent
-  databaseUsername: platform_migrator_job
-  databaseSecretName: migration-database
+  databaseUsername: platform_db_migrator
+  databaseSecretName: db-migrator-database
 
 postgres:
   replicas: 1

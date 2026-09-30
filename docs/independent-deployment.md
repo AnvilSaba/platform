@@ -7,9 +7,9 @@
 | 対象 / タグ接頭辞 | イメージ | Helm 設定 | 接続ロール |
 |---|---|---|---|
 | bot | ghcr.io/anvilsaba/bot | bot | platform_bot |
-| mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mcguildlink |
+| mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mc_link_server |
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
-| db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_migrator_job |
+| db-migrator | ghcr.io/anvilsaba/db-migrator | migration | platform_db_migrator |
 
 GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
 Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。
@@ -38,13 +38,13 @@ psql の `\password <ロール名>` で各 LOGIN ロールに別パスワード�
 | Secret | DB ロール |
 |---|---|
 | bot-database | platform_bot |
-| mc-link-server-database | platform_mcguildlink |
+| mc-link-server-database | platform_mc_link_server |
 | public-api-database | platform_public_api |
-| migration-database | platform_migrator_job |
+| db-migrator-database | platform_db_migrator |
 
 MC Link Server は設定ファイル・設定 Secret を使用しない。既定の待受は `0.0.0.0:25565` で、必要な場合だけ環境変数 `MC_LINK_SERVER_LISTEN` で上書きする。Helm ではコンテナ内ポートを25565に固定し、`mcLinkServer.port` は Service 側のポートとして使う。開発・統合環境は25565、本番は `values.prod.yaml` で25600に上書きし、Service からコンテナの25565へ転送する。`mcLinkServer.serviceType` の既定値は `LoadBalancer` とし、k3s の ServiceLB で外部の Minecraft クライアントへ公開する。開発・統合環境でも同じ公開方式を使う。
 
-DB Secret はアプリと同じ namespace に作成し、`password` キーを使用する。名前は `mcLinkServer.databaseSecretName` で変更できる。DB ロール名 `platform_mcguildlink` は既存の PostgreSQL 権限に合わせて維持する。
+DB Secret はアプリと同じ namespace に作成し、`password` キーを使用する。名前は `mcLinkServer.databaseSecretName` で変更できる。DB ロール名は `platform_mc_link_server`、権限ロール名は `platform_mc_link_server_runtime` とする。
 
 Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.toml キーへ登録する。
 実 Discord 確認を行う場合だけ開発専用 token・guild・監査チャンネルを使い、Bot replicas=1 を指定する。

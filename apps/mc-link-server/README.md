@@ -3,7 +3,7 @@
 Minecraft Java 26.3（プロトコル 777）の online-mode 本人認証後、Play に進めず Configuration ダイアログでコードを受け付ける。コードは PostgreSQL で照合し、成功時は紐付け、コード消費、監査ログ、配送予定を同一トランザクションで保存する。本番環境へはまだ配置しない。
 
 ```powershell
-$env:DATABASE_URL = 'postgres://platform_mcguildlink:<パスワード>@localhost:5432/platform'
+$env:DATABASE_URL = 'postgres://platform_mc_link_server:<パスワード>@localhost:5432/platform'
 cargo run -p mc-link-server
 ```
 

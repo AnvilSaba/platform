@@ -84,7 +84,7 @@ mod tests {
         sqlx::postgres::PgPoolOptions::new()
             .after_connect(|connection, _| {
                 Box::pin(async move {
-                    sqlx::query("SET ROLE platform_mcguildlink_runtime")
+                    sqlx::query("SET ROLE platform_mc_link_server_runtime")
                         .execute(connection)
                         .await?;
                     Ok(())
