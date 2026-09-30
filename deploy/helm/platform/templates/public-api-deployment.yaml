@@ -1,4 +1,3 @@
-{{- if .Values.publicApi.image.tag }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +13,7 @@ spec:
       {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: public-api
-          image: {{ printf "%s:%s" .Values.publicApi.image.repository .Values.publicApi.image.tag | quote }}
+          image: {{ printf "%s:%s" .Values.publicApi.image.repository (required "publicApi.image.tag is required" .Values.publicApi.image.tag) | quote }}
           imagePullPolicy: {{ .Values.publicApi.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
@@ -23,6 +22,3 @@ spec:
             {{- include "platform.databaseEnv" (dict "service" .Values.publicApi "postgres" .Values.postgres) | nindent 12 }}
           readinessProbe:
             httpGet: { path: /whitelist.json, port: http }
-{{- else if gt (int .Values.publicApi.replicas) 0 }}
-{{- fail "publicApi.image.tag is required when replicas > 0" }}
-{{- end }}

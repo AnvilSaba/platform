@@ -1,6 +1,6 @@
 # 開発・個別テスト・統合テスト手順
 
-分離した Rust 版・公開 API・専用マイグレーション Job は [独立リリース手順](independent-deployment.md) を参照する。以下の MCGuildLink 配置は旧 Kotlin 版の検証用として保持する。
+分離した Rust 版・公開 API・専用マイグレーション Job は [独立リリース手順](independent-deployment.md) を参照する。以下の MCGuildLink 配置は旧 Kotlin 版と旧 Chart 0.x の検証用として保持する。現行 Chart は旧 Kotlin を含まない。
 
 ## 1. 開発環境に必要なもの
 
@@ -48,12 +48,14 @@ Pop-Location
 ```powershell
 helm lint deploy/helm/platform `
   --set bot.image.tag=test `
-  --set mcguildlink.image.tag=test
+  --set mcLinkServer.image.tag=test `
+  --set publicApi.image.tag=test
 
 helm template platform deploy/helm/platform `
   --namespace anvilsaba `
   --set bot.image.tag=test `
-  --set mcguildlink.image.tag=test | Out-Null
+  --set mcLinkServer.image.tag=test `
+  --set publicApi.image.tag=test | Out-Null
 ```
 
 ### 2.4 コンテナイメージ
@@ -142,10 +144,13 @@ kubectl -n anvilsaba create secret generic cloudflare-tunnel `
 開発時の標準構成ではCloudflare Tunnelを使用しません。クラスタ内部のServiceへ直接アクセスして、アプリケーション間の連携を確認します。`cloudflared`を含めた構成を検証する場合だけ、開発専用のTunnel tokenを使用してください。
 
 ```powershell
-helm upgrade --install platform deploy/helm/platform `
+helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform `
+  --version 0.2.1 `
   --namespace anvilsaba `
   --create-namespace `
-  -f deploy/helm/platform/values.dev.yaml
+  -f deploy/helm/platform/values.dev.yaml `
+  --set mcguildlink.image.repository=localhost/anvilsaba/mcguildlink-old `
+  --set mcguildlink.image.tag=test
 ```
 
 ## 4. 統合テスト手順

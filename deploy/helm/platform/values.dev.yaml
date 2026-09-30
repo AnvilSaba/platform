@@ -3,10 +3,15 @@ bot:
     repository: localhost/anvilsaba/bot
     tag: test
 
-mcguildlink:
-  image:
-    repository: localhost/anvilsaba/mcguildlink-old
-    tag: test
-
 cloudflared:
   replicas: 0
+
+mcLinkServer:
+  image:
+    repository: localhost/anvilsaba/mc-link-server
+    tag: test
+
+publicApi:
+  image:
+    repository: localhost/anvilsaba/public-api
+    tag: test

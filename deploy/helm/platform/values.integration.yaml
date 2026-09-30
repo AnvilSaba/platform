@@ -1,9 +1,5 @@
-# 実 Discord と旧 Kotlin 版を起動しない統合環境。
+# 実 Discord を起動しない統合環境。
 bot:
-  replicas: 0
-  image:
-    tag: test
-mcguildlink:
   replicas: 0
   image:
     tag: test

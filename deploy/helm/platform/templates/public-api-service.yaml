@@ -1,4 +1,3 @@
-{{- if .Values.publicApi.image.tag }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -8,4 +7,3 @@ spec:
   selector: { app.kubernetes.io/name: public-api }
   ports:
     - { name: http, port: {{ .Values.publicApi.port }}, targetPort: http }
-{{- end }}

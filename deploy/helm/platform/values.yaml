@@ -10,24 +10,8 @@ bot:
   databaseUsername: platform_bot
   databaseSecretName: bot-database
 
-mcguildlink:
-  replicas: 1
-  image:
-    repository: ghcr.io/anvilsaba/mcguildlink
-    tag: ""
-    pullPolicy: IfNotPresent
-  configSecretName: mcguildlink-config
-  sqlite:
-    storageSize: 1Gi
-    storageClassName: ""
-  http:
-    port: 8080
-  minecraft:
-    port: 25565
-
-# 旧 Kotlin 版は既存の mcguildlink 設定で保持する。本番切替は別作業。
 mcLinkServer:
-  replicas: 0
+  replicas: 1
   image:
     repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""
@@ -39,7 +23,7 @@ mcLinkServer:
   serviceType: ClusterIP
 
 publicApi:
-  replicas: 0
+  replicas: 1
   image:
     repository: ghcr.io/anvilsaba/public-api
     tag: ""

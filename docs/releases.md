@@ -2,7 +2,7 @@
 
 Bot、MC Link Server、公開 API、DB マイグレーション、Platform Helm Chart は独立してバージョン管理します。タグ接頭辞はそれぞれ `bot`、`mc-link-server`、`public-api`、`db-migrator`、`chart` で、形式は `<対象>/vX.Y.Z` です。変更履歴は各リリース対象の `CHANGELOG.md` に生成されます。
 
-旧 Kotlin 版は移行検証用に保持し、今後のリリース・変更履歴生成の対象から外します。既存の `mcguildlink/v*` と CHANGELOG は過去の履歴として残します。旧版の Helm 設定キー・Workload・PVC 名は `mcguildlink` を維持し、既存の公開イメージの repository と tag を引き継ぎます。
+旧 Kotlin 版は移行検証用に保持し、今後のリリース・変更履歴生成の対象から外します。既存の `mcguildlink/v*` と CHANGELOG は過去の履歴として残します。旧版の配置・SQLite PVC は旧 Chart で扱い、新 Chart には含めません。既存 PVC の保持とバックアップを済ませてからメジャー更新してください。
 
 ## コミット規約
 
@@ -11,6 +11,8 @@ Bot、MC Link Server、公開 API、DB マイグレーション、Platform Helm 
 ## GitHub Actions からリリースする
 
 GitHub の Actions 画面で **Release** を選び、**Run workflow** からリリース対象と bump 種別を指定します。通常は `auto` を使用してください。`dry_run` はデフォルトで有効です。実際にリリースする場合だけ無効にしてください。
+
+分離構成を含む Chart の初回公開は、**chart / bump=major / deploy=false** を手動指定します。MC・API のタグを常に必須にするため、旧構成だけの値とは互換性がありません。Chart.yaml のバージョンは、このリリース操作でメジャー更新します。自動の bump 判定には任せません。
 
 Workflow は次を自動実行します。
 

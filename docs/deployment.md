@@ -1,6 +1,6 @@
 # 本番デプロイ手順
 
-この手順の MCGuildLink は旧 Kotlin 版。分離した Rust サービスの統合環境は [独立リリース手順](independent-deployment.md) を参照する。本番切替は別段階で行う。
+この手順の MCGuildLink 配置は旧 Kotlin 版・Chart 0.x 向け。新 Chart から旧 Kotlin のリソースを削除したため、旧構成を新 Chart へそのまま適用しない。分離した Rust サービスの統合環境は [独立リリース手順](independent-deployment.md) を参照する。本番切替は別段階で行う。
 
 ## 1. デプロイ構成
 
@@ -176,6 +176,8 @@ SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も�
 必要に応じて`production` EnvironmentへRequired reviewersを設定すると、本番デプロイ前に承認を挟めます。
 
 ## 3. GitHub Actions からデプロイ
+新しい分離構成の Chart は、全サービスを `deploy=false` で先行リリースし、旧版を停止して DB・Secret・各イメージタグを設定した初期セットアップを完了してから使用します。旧構成の Helm 値だけで新 Chart に更新することはできません。初期配置の DB→専用 Job→アプリの順序は[独立デプロイ手順](independent-deployment.md)を参照してください。Action はセットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。
+
 GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
 
 ## 4. デプロイ後の確認

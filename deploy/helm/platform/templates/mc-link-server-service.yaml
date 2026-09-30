@@ -1,4 +1,3 @@
-{{- if .Values.mcLinkServer.image.tag }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -8,4 +7,3 @@ spec:
   selector: { app.kubernetes.io/name: mc-link-server }
   ports:
     - { name: tcp, port: {{ .Values.mcLinkServer.port }}, targetPort: tcp }
-{{- end }}
