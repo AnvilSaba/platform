@@ -1,107 +1,155 @@
-# k3dでのSQLite移行リハーサル
+# 最新の旧リリースからのk3d移行リハーサル
 
-専用クラスタで、移行・Rust版の起動確認・書き込み解禁前の切り戻しを確認します。移行スクリプトとこの手順は、移行完了後の旧 `apps/mcguildlink` 削除時にまとめて削除します。
+新構成だけの起動確認ではなく、最新の旧リリースを起動した状態から、同じクラスタ・namespace・Helm releaseを更新し、書き込み解禁前に旧版へ戻します。移行完了後、旧 `apps/mcguildlink` を削除するときに移行スクリプトもまとめて削除します。
 
-必要なものはPython 3.11以降、k3d、kubectl、Helm、Docker DesktopまたはPodmanです。コマンドはリポジトリルートのPowerShellで実行します。以下のpasswordは使い捨てクラスタ専用です。
+## 再現する旧環境
 
-## クラスタとイメージ
+2026-10-01にGitHubの公開タグを確認した基準は次のとおりです。GitHub Release一覧は未登録で、リリースタグを基準にしています。実行時もタグと対応する公開イメージを確認し、使用したdigestを記録します。開発中のHEADから旧版をビルドして置き換えません。
 
-[独立デプロイ手順](independent-deployment.md#配布単位)のコマンドで `mc-link-server:test`・`public-api:test`・`db-migrator:test` のローカルイメージをビルドしておきます。
+| 対象 | 基準 |
+|---|---|
+| Chart | `chart/v0.2.1` / OCI Chart `0.2.1` |
+| Bot | `bot/v3.5.1` / `ghcr.io/anvilsaba/bot:v3.5.1` |
+| Kotlin MCGuildLink | `mcguildlink/v1.0.2` / `ghcr.io/anvilsaba/mcguildlink:v1.0.2` |
+| Kubernetes | 本番と同じk3sバージョンをk3dの `--image` に指定 |
+| namespace / release | `anvilsaba` / `platform` |
+| 旧MC公開経路 | LoadBalancer Service `mcguildlink-minecraft`、本番既定の25600/TCP |
+| 旧HTTP公開経路 | 開発専用Tunnel・hostname → `http://mcguildlink-http:8080` |
+| 保存先 | SQLite PVC `mcguildlink-data`、PostgreSQL PVC `postgres-data` |
+
+旧Chartの既定PostgreSQLは `anvilsaba` DB / `anvilsaba` ユーザー / Secret `postgres` です。新構成の `platform` / `platform_admin` / `postgres-db-credentials` に値を変えるだけでは、既存PVC内のDB・ロール・passwordは初期化し直されません。今回は、旧PostgreSQLの中途半端な設定を捨ててPVCから作り直す手順を検証します。最新の旧BotはPostgreSQLを使わず、MCGuildLinkの業務データはSQLiteにあるため、削除対象はPostgreSQLだけです。
+
+旧リリースのイメージ公開はarm64のみです。対応するノードで実行してください。amd64でタグのソースから再ビルドする場合は、公開イメージそのものの再現ではないことを記録し、本番と同じarm64環境での最終確認を別途行います。
+
+## 1. 旧リリースを起動する
+
+Python 3.11以降、k3d、kubectl、Helm、Docker DesktopまたはPodmanを用意します。コマンドはリポジトリルートのPowerShellで実行します。作業ディレクトリはGitの外に作ります。
 
 ```powershell
-k3d cluster create mcguildlink-rehearsal --timeout 120s
+$rehearsalDir = Join-Path $env:TEMP 'mcguildlink-rehearsal'
+New-Item -ItemType Directory -Path $rehearsalDir -Force | Out-Null
 $rehearsalContext = 'k3d-mcguildlink-rehearsal'
-$rehearsalNamespace = 'mcguildlink-rehearsal'
+$rehearsalNamespace = 'anvilsaba'
+# 実際の本番k3sバージョンのイメージへ置換する。
+k3d cluster create mcguildlink-rehearsal --image '<本番と同じk3sイメージ>' --port '127.0.0.1:25600:25600@server:0' --timeout 120s
 kubectl --context $rehearsalContext create namespace $rehearsalNamespace
-k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c mcguildlink-rehearsal
-kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic postgres-db-credentials --from-literal=password=admin-rehearsal
-helm upgrade --install platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace -f deploy/helm/platform/values.integration.yaml --set bot.replicas=0 --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set dbMigrator.enabled=false
+helm pull oci://ghcr.io/anvilsaba/charts/platform --version 0.2.1 --untar --untardir $rehearsalDir
+$oldChart = Join-Path $rehearsalDir 'platform'
+```
+
+旧Chart自身の `values.prod.yaml` をコピーしてリハーサル用valuesを作り、Botタグ `v3.5.1`、MCGuildLinkタグ `v1.0.2` を設定します。変更してよい差分は開発専用の認証情報・Discordギルド/ロール/チャンネル・hostname・ストレージ容量/クラスです。旧 `app.toml` とBot設定を旧リリースの形式で用意し、`mcguildlink-config` / `bot-config` に登録します。Secret `postgres` には使い捨てpassword、`cloudflare-tunnel` には開発専用Tunnel tokenを登録します。privateイメージにはpull Secretも用意します。
+
+```powershell
+$oldValues = Join-Path $rehearsalDir 'old-values.yaml'
+helm upgrade --install platform $oldChart --kube-context $rehearsalContext -n $rehearsalNamespace -f $oldValues --timeout 10m
+kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status deployment/mcguildlink --timeout=5m
+kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status deployment/bot --timeout=5m
 kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status statefulset/postgres --timeout=5m
+```
+
+旧版で実際にコード発行・紐付け・ブロックを操作し、多対多・未使用コード・ブロックグループを作ります。Javaクライアントは旧リリースが対応するバージョンを使用し、新Rust版の確認時はJava 26.3へ切り替えます。旧版のDBへ後からfixtureだけを直接INSERTする方法は移行元再現の代わりにしません。
+
+`localhost:25600` のMC接続と開発専用hostnameの `/whitelist.json` を確認し、コード・UUID・ホワイトリスト・設定値・各replicasを記録します。HTTPのport-forwardは診断の補助で、Tunnelを含む公開経路の再現完了とは扱いません。
+
+## 2. 停止・SQLite保護・保存済みmanifestへのkeep指定
+
+```powershell
+helm get values platform --all --kube-context $rehearsalContext -n $rehearsalNamespace | Set-Content (Join-Path $rehearsalDir 'old-effective-values.yaml')
+helm get manifest platform --kube-context $rehearsalContext -n $rehearsalNamespace | Set-Content (Join-Path $rehearsalDir 'old-manifest.yaml')
+kubectl --context $rehearsalContext -n $rehearsalNamespace scale deployment/mcguildlink deployment/bot --replicas=0
+kubectl --context $rehearsalContext -n $rehearsalNamespace wait --for=delete pod -l app.kubernetes.io/name=mcguildlink --timeout=5m
+kubectl --context $rehearsalContext -n $rehearsalNamespace wait --for=delete pod -l app.kubernetes.io/name=bot --timeout=5m
+```
+
+停止後に `mcguildlink-data` を読み取り専用でマウントする作業Podから `app.db` と存在するWAL/SHMを取り出します。[SQLite保護手順](mcguildlink-migration.md#旧版停止とデータ保護)に従いスナップショットを作り、元ファイルのハッシュを保存します。作業Podも停止します。
+
+取得したローカル旧ChartのSQLite PVCテンプレートに `metadata.annotations.helm.sh/resource-policy: keep` を追加し、旧版を0のまま旧Chartで更新します。live PVCへのannotateだけで済ませません。
+
+```powershell
+helm upgrade platform $oldChart --kube-context $rehearsalContext -n $rehearsalNamespace -f $oldValues --set mcguildlink.replicas=0 --set bot.replicas=0 --timeout 10m
+helm get manifest platform --kube-context $rehearsalContext -n $rehearsalNamespace
+```
+
+保存済みmanifestの `mcguildlink-data` にkeep指定があることを確認します。旧設定Secret・イメージ・旧values・開発Tunnelの旧宛先も保持します。
+
+## 3. PostgreSQLを削除して作り直す
+
+以下は専用リハーサルクラスタだけで実行します。旧PostgreSQLのロールpasswordをSecretと異なる値に変えておくと、「中途半端な設定を引き継がない」ことも再現できます。削除前のDB名・ロールを記録します。
+
+```powershell
+# 旧PGのみ停止。SQLiteのPVCは削除しない。
+kubectl --context $rehearsalContext -n $rehearsalNamespace scale statefulset/postgres --replicas=0
+kubectl --context $rehearsalContext -n $rehearsalNamespace wait --for=delete pod/postgres-0 --timeout=5m
+kubectl --context $rehearsalContext -n $rehearsalNamespace delete pvc postgres-data
+kubectl --context $rehearsalContext -n $rehearsalNamespace wait --for=delete pvc/postgres-data --timeout=5m
+kubectl --context $rehearsalContext -n $rehearsalNamespace delete secret postgres
+kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic postgres-db-credentials --from-literal=password=admin-rehearsal
+```
+
+新構成のMC・API・Migratorイメージは[独立デプロイ手順](independent-deployment.md#配布単位)でビルドします。新Rust Botもこのブランチの `deploy/rust/Dockerfile` でPACKAGE/BINARYを `bot`、SOURCE_DIRを `apps/bot` としてビルドし、`localhost/anvilsaba/bot:test` としてimportします。新Chartのvaluesは旧値を継承せず、同じreleaseを更新します。旧版と別namespaceに新環境を作る方法では、Helmによる旧リソース削除やPVC保持を検証できません。
+
+```powershell
+k3d image import localhost/anvilsaba/bot:test localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c mcguildlink-rehearsal
+helm upgrade platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace --reset-values -f deploy/helm/platform/values.integration.yaml --set bot.image.repository=localhost/anvilsaba/bot --set bot.replicas=0 --set mcLinkServer.replicas=0 --set mcLinkServer.port=25600 --set publicApi.replicas=0 --set dbMigrator.enabled=false
+kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status statefulset/postgres --timeout=5m
+kubectl --context $rehearsalContext -n $rehearsalNamespace get pvc mcguildlink-data postgres-data
 Get-Content deploy/postgres/bootstrap.sql -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
 ```
 
-DBロールのpasswordとSecretを揃えます。Botは通常のリハーサルでは起動しません。
+`postgres-data` のUIDが変わり、旧DB/旧ロールが残っていないことを確認します。`mcguildlink-data` のUIDと元ファイルのハッシュは変わらないことを確認します。
+
+[DBとSecretの準備](independent-deployment.md#db-と-secret-の準備)に従い4つのLOGINへ別々の使い捨てpasswordを設定し、各DB Secretと一致させます。Botの設定は旧設定から変換して同じ `bot-config` に登録します。旧設定ファイルのコピーは手元に保持します。
 
 ```powershell
-@'
-ALTER ROLE platform_db_migrator PASSWORD 'migrator-rehearsal';
-ALTER ROLE platform_mc_link_server PASSWORD 'mc-rehearsal';
-ALTER ROLE platform_public_api PASSWORD 'api-rehearsal';
-ALTER ROLE platform_bot PASSWORD 'bot-rehearsal';
-'@ | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
-kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic db-migrator-db-credentials --from-literal=password=migrator-rehearsal
-kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic mc-link-server-db-credentials --from-literal=password=mc-rehearsal
-kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic public-api-db-credentials --from-literal=password=api-rehearsal
-kubectl --context $rehearsalContext -n $rehearsalNamespace create secret generic bot-db-credentials --from-literal=password=bot-rehearsal
 helm upgrade platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace --reuse-values --set dbMigrator.enabled=true --timeout 10m
 kubectl --context $rehearsalContext -n $rehearsalNamespace logs job/db-migrator
 helm upgrade platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace --reuse-values --set dbMigrator.enabled=false
-```
-
-## 移行スクリプトの自動確認
-
-まず空の `platform` DBで実行します。このテストは代表SQLiteを一時作成し、移行・照合・制約・凍結/解除・途中失敗のrollback・元SQLiteの不変を検証します。DBに代表データが残ります。アプリはまだ起動しません。
-
-```powershell
-python scripts/test-mcguildlink-migration.py --psql kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform
-```
-
-「成功」を確認します。途中で失敗した場合はクラスタを作り直します。非空DBへ再実行して上書きする処理はありません。
-
-## 移行後の公開APIとMC
-
-起動確認前に業務書き込みを止めます。
-
-```powershell
 Get-Content scripts/mcguildlink-cutover-freeze.sql -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
-helm upgrade platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace --reuse-values --set mcLinkServer.replicas=1 --set publicApi.replicas=1
-kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status deployment/mc-link-server --timeout=5m
-kubectl --context $rehearsalContext -n $rehearsalNamespace rollout status deployment/public-api --timeout=5m
-kubectl --context $rehearsalContext -n $rehearsalNamespace port-forward service/public-api 18080:8080
 ```
 
-別のPowerShellから `curl.exe http://127.0.0.1:18080/whitelist.json` を実行します。期待結果は次の1件です。多対多の紐付けでも重複せず、ブロック済みMinecraftアカウントを含みません。
-
-```json
-[{"uuid":"12345678-1234-5678-9abc-123456789abc","name":"Player"}]
-```
-
-MC確認は別のPowerShellで同じcontext/namespaceを指定し、`kubectl ... port-forward service/mc-link-server 25566:25565` を実行します。Java 26.3から `localhost:25566` に接続し、本人認証とコード入力画面を確認します。凍結中は有効コードでも業務書き込みが拒否され、紐付けとコード消費が発生しないことをDBで確認します。入力待ちは既存の固定5分です。
-
-## 旧版への切り戻しリハーサル
-
-旧版再起動まで確認する回は、上の代表データテストとは別の新規クラスタで行います。[旧Kotlin版の配置手順](development-and-integration-testing.md)に従い、保存した旧Chart 0.x・開発専用Discord設定で起動してください。旧版のnamespaceを新Rust版と分けておくと、旧SQLite PVCを保持したまま停止・再開できます。
-
-1. 旧版で未使用コード・紐付け・ブロックを用意し、旧ホワイトリスト、設定、replicasを保存します。
-2. 旧版を停止し、Pod終了後にSQLite一式を取り出します。[移行手順](mcguildlink-migration.md#旧版停止とデータ保護)に従い、WALを含む検証用スナップショットを作ります。元ファイルのハッシュを保存します。
-3. 上のセットアップで空の新DBを用意し、凍結SQLを適用します。旧スナップショットから移行・照合SQLを生成します。
+## 4. 旧SQLiteを移行し、新版へ経路を切り替える
 
 ```powershell
-python scripts/migrate-mcguildlink.py .rehearsal/app.db .rehearsal/import.sql --source-utc-offset=+00:00
-Get-Content .rehearsal/import.sql -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
-python scripts/migrate-mcguildlink.py .rehearsal/app.db .rehearsal/verify.sql --source-utc-offset=+00:00 --verify-only
-Get-Content .rehearsal/verify.sql -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
+python scripts/migrate-mcguildlink.py (Join-Path $rehearsalDir 'app.db') (Join-Path $rehearsalDir 'import.sql') --source-utc-offset=+00:00
+Get-Content (Join-Path $rehearsalDir 'import.sql') -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
+python scripts/migrate-mcguildlink.py (Join-Path $rehearsalDir 'app.db') (Join-Path $rehearsalDir 'verify.sql') --source-utc-offset=+00:00 --verify-only
+Get-Content (Join-Path $rehearsalDir 'verify.sql') -Raw | kubectl --context $rehearsalContext -n $rehearsalNamespace exec -i postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
+helm upgrade platform deploy/helm/platform --kube-context $rehearsalContext -n $rehearsalNamespace --reuse-values --set bot.replicas=1 --set mcLinkServer.replicas=1 --set publicApi.replicas=1 --set cloudflared.replicas=1
 ```
 
-`.rehearsal` は事前に作成し、出力ファイルは未作成のパスにします。UTCオフセットは旧JVMの設定に合わせます。SQLite・生成SQL・設定Secretはコミットしません。
+UTCオフセットは旧JVMの設定に合わせます。新Chartでprivateイメージを使う場合はpull Secretの指定も設定します。各Podの起動、スキーマ互換性、凍結中の書き込み拒否を確認します。凍結中の業務書き込みエラーは想定内です。
 
-4. Rust版を凍結状態で起動し、旧版とホワイトリストを比較します。再度照合SQLを実行し、監査ログ・outboxが空であることを確認します。
-5. Rust版を停止し、元SQLiteのハッシュが変わっていないことを確認して旧版を保存したreplicasで再開します。旧公開先に接続し、コード再表示・一覧・ブロックを確認します。この回は解禁SQLを実行しません。
+同じ開発専用hostnameのTunnel宛先を `http://public-api:8080` へ変更し、旧版とホワイトリストのUUID・名前・ブロック除外を比較します。MCは同じ `localhost:25600` から新版へ接続します。port-forwardで新Serviceへ直接つなぎ直すだけで切替成功と扱いません。再照合し、未使用コードが消費されず監査ログ・outboxが空であることを確認します。
 
-## コードの実消費を確認する回
+## 5. 解禁せず旧版へ切り戻す
 
-切り戻し確認とは別の、新規クラスタとコピーした旧DBで行います。実クライアントのUUIDを含むデータ、または旧版で取得した未使用コードを使います。
+新版Bot・MC・APIを停止し、Pod終了を確認します。PostgreSQLの凍結は維持します。旧Bot設定を `bot-config` に戻し、同じreleaseを保存した旧Chartへ戻します。
 
-アプリを停止して `scripts/mcguildlink-cutover-unfreeze.sql` を適用し、再起動します。未使用コードで紐付けが成功し、同じコードの再利用が拒否され、ホワイトリストと新しい監査が更新されることを確認します。ブロック済みMinecraftアカウントではブロック応答になり、未使用コードが保持されることも確認します。実Discordの配送まで見る場合だけ、開発専用Bot設定Secretを登録し、Botを1個起動します。
+```powershell
+# 新PGは作り直した設定を維持する。旧anvilsabaのDB/ロールを復元する操作ではない。
+helm upgrade platform $oldChart --kube-context $rehearsalContext -n $rehearsalNamespace --reset-values -f $oldValues --set bot.replicas=0 --set mcguildlink.replicas=0 --set postgres.username=platform_admin --set postgres.database=platform --set postgres.secretName=postgres-db-credentials --timeout 10m
+```
 
-## 記録と後片付け
+旧Chartへ戻る際に新しいDB Secret/DB名を上書きしないことを確認します。旧Bot/MCGuildLinkは新PostgreSQLへ書き込まず、旧MCGuildLinkは保持した同じSQLite PVCを使用します。元SQLiteのハッシュを確認して旧replicasを復元し、Tunnel宛先を `http://mcguildlink-http:8080` に戻します。
+
+旧版の起動、同じhostname/25600ポート、未使用コード再表示、紐付け一覧、ブロック拒否を確認します。これが成功して初めて切り戻しリハーサル完了です。
+
+## 6. 書き込み解禁を確認する回と補助テスト
+
+切り戻しを確認した後、別の新規クラスタで手順1から繰り返します。今回は切り戻さず、新アプリ停止中に `scripts/mcguildlink-cutover-unfreeze.sql` を適用して再開し、実際の旧未使用コードの消費・再利用拒否・ブロック応答・コード保持・新しい監査配送を確認します。
+
+`test-mcguildlink-migration.py --psql ...` は、スクリプトの異常系を確認する補助テストです。代表fixtureを空DBへ移すだけのこのテストを、旧環境からのリハーサル完了とは扱いません。実行する場合はさらに別の空テストDBを使います。
+
+## 結果と後片付け
 
 | 確認項目 | 結果 |
 |---|---|
-| 移行スクリプトの自動確認 | 未実施 |
-| 移行後のAPI出力 | 未実施 |
-| 凍結中の業務書き込み拒否 | 未実施 |
-| 旧版再起動と未使用コード・ブロック維持 | 未実施 |
-| 別クラスタでのコード消費・再利用拒否・監査 | 未実施 |
+| 最新旧リリース・同じk3s・旧公開経路の起動 | 未実施 |
+| 旧版から作ったSQLite・未使用コード・ブロック | 未実施 |
+| PostgreSQL削除後のDB/ロール/password再初期化 | 未実施 |
+| 同じrelease更新後のSQLite PVC保持 | 未実施 |
+| 新版起動・経路切替・凍結中の全件一致 | 未実施 |
+| 同じreleaseでの旧版復帰・公開経路と旧データ維持 | 未実施 |
+| 別クラスタでの解禁後のコード消費・監査 | 未実施 |
 
-この文書のk3d手順はまだ実行していません。結果欄は実施後に更新します。確認を終えたら `k3d cluster delete mcguildlink-rehearsal` で専用クラスタを削除し、ローカルのDBコピーと生成SQLも削除します。
+k3dでの実行はまだ行っていません。実施時は旧新のイメージdigest、values差分、PVC UID、DB名/ロール、SQL照合結果、各公開経路の確認結果を記録します。終了後は `k3d cluster delete mcguildlink-rehearsal` で専用クラスタを削除し、作業ディレクトリのDBコピー・SQL・設定を片付けます。本番環境ではこの文書の削除コマンドを実行しません。

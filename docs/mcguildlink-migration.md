@@ -26,7 +26,9 @@ PVC へ直接 annotate するだけでは、旧 release の保存済み manifest
 
 旧 SQLite の PVC・設定・イメージは新 Chart の管理対象から外し、移行検証・切り戻し用に保持します。実データ・設定の変換と代表データによる検証は、分離構成へ切り替える前に完了させます。
 
-[DB と Secret の準備](independent-deployment.md#db-と-secret-の準備)と[配置順序](independent-deployment.md#配置順序)に従い、PostgreSQL→DB ロール・Secret→専用 Job の順に配置します。新 Chart には Bot・MC・API の公開済みイメージタグを設定し、`bot.replicas=0`、`mcLinkServer.replicas=0`、`publicApi.replicas=0` を明示します。移行専用の空 DB を用意し、既存の PostgreSQL データとのマージは行いません。
+既存PostgreSQLの中途半端なpassword・ロール設定は引き継がず、停止後にPostgreSQLのPVCを削除して新構成の設定で初期化する方針です。旧MCGuildLinkのSQLite PVCは保持します。現行の最新旧BotはPostgreSQLを使わず、移行対象の業務データはSQLiteにあります。[k3dリハーサル手順](mcguildlink-k3d-rehearsal.md)で、最新旧リリースの起動から同じreleaseの更新、PostgreSQL再初期化、SQLite保持、切り戻しまでを確認します。
+
+[DB と Secret の準備](independent-deployment.md#db-と-secret-の準備)と[配置順序](independent-deployment.md#配置順序)に従い、PostgreSQL→DB ロール・Secret→専用 Job の順に配置します。新 Chart には Bot・MC・API の公開済みイメージタグを設定し、`bot.replicas=0`、`mcLinkServer.replicas=0`、`publicApi.replicas=0` を明示します。空のPostgreSQLへ移行し、既存PostgreSQLデータとのマージは行いません。
 
 初期セットアップを完了してからデプロイ Action を使用します。Action はセットアップ済み Helm release の値を引き継ぎ、対象のイメージタグだけを更新します。
 
@@ -93,7 +95,7 @@ python scripts/test-mcguildlink-migration.py --psql psql <専用テストDBの�
 書き込み解禁前の切り戻しは次の順にリハーサルします。
 
 1. Rust Bot・MC・APIを停止し、全Pod終了を確認します。PostgreSQLの凍結は解除しません。
-2. 保存した旧Chart・values・Secret・イメージへ戻します。最初は旧版・Botのreplicas=0を維持し、保持した旧PVCが同じ名前・パスへマウントされることを確認します。
+2. 保存した旧Chart・アプリのvalues・Secret・イメージへ戻します。最初は旧版・Botのreplicas=0を維持し、保持した旧SQLite PVCが同じ名前・パスへマウントされることを確認します。PostgreSQLは再初期化後のDB名・管理ユーザー・Secret設定を維持し、削除した旧PostgreSQLの復元は行いません。
 3. Cloudflare の同じ hostname を旧 `http://mcguildlink-http:8080`（独自ポートなら旧値）へ戻し、MCの旧Service・公開ポートを復元します。
 4. 元の旧SQLiteに変更がないことをハッシュと件数で確認し、保存したreplicasへ戻して旧版・Botを起動します。旧 `/whitelist.json`、未使用コードの再表示、ブロック対象の拒否を確認します。
 5. 切り戻しの成功と保存した設定値・公開先の一致を記録します。再移行する場合は別の空PostgreSQL DBでやり直します。
