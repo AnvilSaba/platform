@@ -2,9 +2,9 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", "scripts/*mcguildlink*.py", "deploy/postgres/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", "scripts/*mcguildlink*.py", "deploy/postgres/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -31,8 +31,6 @@ jobs:
           docker exec '${{ job.services.postgres.id }}' createdb -U postgres platform
           docker exec -i '${{ job.services.postgres.id }}' psql -U postgres -d platform -v ON_ERROR_STOP=1 < deploy/postgres/bootstrap.sql
       - run: sqlx migrate run
-      - name: Verify SQLite cutover
-        run: python3 scripts/test-mcguildlink-migration.py --psql psql "$DATABASE_URL"
       - run: cargo sqlx prepare --check --workspace -- --all-targets --locked
       - run: cargo check --workspace --locked --all-targets
       - run: cargo test --workspace --locked

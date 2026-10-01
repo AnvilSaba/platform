@@ -19,8 +19,6 @@ spec:
           ports:
             - { name: tcp, containerPort: 25565 }
           env:
-            - name: MC_LINK_SERVER_INPUT_TIMEOUT_SECONDS
-              value: {{ .Values.mcLinkServer.inputTimeoutSeconds | quote }}
             {{- include "platform.databaseEnv" (dict "service" .Values.mcLinkServer "postgres" .Values.postgres) | nindent 12 }}
           readinessProbe:
             tcpSocket: { port: tcp }

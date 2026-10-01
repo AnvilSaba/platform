@@ -2,6 +2,8 @@
 
 この文書は、旧 Kotlin 版・SQLite・Chart 0.x から、MC Link Server・Bot・公開 API・PostgreSQL の分離構成へ移行するための手順です。通常のリリース・配置は[リリース手順](releases.md)と[独立デプロイ手順](independent-deployment.md)を参照してください。
 
+移行用スクリプトは移行と切り戻し確認が終わるまで保持し、旧 `apps/mcguildlink` の削除時にまとめて削除します。[k3dリハーサル手順](mcguildlink-k3d-rehearsal.md)に具体的なコマンドと確認項目を記載しています。
+
 ## リリースの準備
 
 Bot・mc-link-server・public-api・db-migrator を `deploy=false` で先行リリースし、公開済みイメージのタグを用意します。分離構成の Chart の初回公開は Release Action で **chart / bump=major / deploy=false** を手動指定します。旧構成の値だけとは互換性がないため、初回のメジャー更新を自動の bump 判定に任せません。
@@ -39,17 +41,17 @@ PVC へ直接 annotate するだけでは、旧 release の保存済み manifest
 | `bot.log_channel` | `mcguildlink.audit_channel_id = "旧ID"` |
 | `bot.display_server_address` | `mcguildlink.display_server_address` に同じ文字列 |
 | `minecraft_server.port` | Helm `mcLinkServer.port` に同じ公開ポート。コンテナ内は25565 |
-| `minecraft_server.timeout` | ISO 8601 duration を秒へ変換して Helm `mcLinkServer.inputTimeoutSeconds`。例: `PT5M` → `300`、`PT1M30.5S` → `90.5` |
+| `minecraft_server.timeout` | 引き継がない。Rust版の入力待ちは既存の固定5分を使用 |
 | `web.port` | Helm `publicApi.port` に同じ Service ポート。コンテナ内は8080。Tunnel の転送先も同じポートへ変更 |
 | `minecraft_server.address` / `web.address` | Pod 内は `0.0.0.0`。旧アドレスによる公開範囲の制限は Service・Tunnel・クラスタの通信制御に引き継ぐ |
 
-直接起動では `MC_LINK_SERVER_LISTEN` と `PUBLIC_API_LISTEN` に旧 address:port を指定できます。タイムアウトは `MC_LINK_SERVER_INPUT_TIMEOUT_SECONDS` です。入力待ちの秒数は正の有限値で、既定300秒です。新規の DB 接続設定は各サービス専用の `DATABASE_URL` と Secret の `DATABASE_PASSWORD` に配置します。生成済み `static/whitelist.json` は移さず、公開 API が DB から生成します。
+直接起動では `MC_LINK_SERVER_LISTEN` と `PUBLIC_API_LISTEN` に旧 address:port を指定できます。新規の DB 接続設定は各サービス専用の `DATABASE_URL` と Secret の `DATABASE_PASSWORD` に配置します。生成済み `static/whitelist.json` は移さず、公開 API が DB から生成します。
 
-旧 Secret と新 Secret の上記各値を照合し、対象ギルド・管理ロール・監査チャンネル・表示アドレス・公開ポート・タイムアウトをリハーサル記録に残します。旧パネルの操作は専用 Bot に紐づくため、解禁後に統合 Bot の `/create_panel` で同じ場所へ設置し直します。
+旧 Secret と新 Secret の上記各値を照合し、対象ギルド・管理ロール・監査チャンネル・表示アドレス・公開ポートをリハーサル記録に残します。旧パネルの操作は専用 Bot に紐づくため、解禁後に統合 Bot の `/create_panel` で同じ場所へ設置し直します。
 
 ## 移行と全件照合
 
-アプリを停止した状態で、管理者として `deploy/postgres/cutover-freeze.sql` を `psql -X -v ON_ERROR_STOP=1 -f` で適用します。標準の `platform_bot`・`platform_mc_link_server` から書き込みロールを外し、起動確認に必要な読み取り権限を付けます。公開 API はもともと読み取り専用です。別ロール・直接付与などで書き込み権限が残れば処理全体が失敗します。独自の LOGIN 名を使う構成では SQL の LOGIN 名を実際の設定に合わせ、書き込みが拒否されることを確認します。凍結後に bootstrap を再実行すると書き込みロールが復活するので実行しません。
+アプリを停止した状態で、管理者として `scripts/mcguildlink-cutover-freeze.sql` を `psql -X -v ON_ERROR_STOP=1 -f` で適用します。標準の `platform_bot`・`platform_mc_link_server` から書き込みロールを外し、起動確認に必要な読み取り権限を付けます。公開 API はもともと読み取り専用です。別ロール・直接付与などで書き込み権限が残れば処理全体が失敗します。独自の LOGIN 名を使う構成では SQL の LOGIN 名を実際の設定に合わせ、書き込みが拒否されることを確認します。凍結後に bootstrap を再実行すると書き込みロールが復活するので実行しません。
 
 Python 3.11 以降で、保存した SQLite スナップショットから SQL を生成します。`--source-utc-offset` は旧 JVM のタイムゾーンです。標準の旧コンテナはUTCですが、`TZ`・`-Duser.timezone` の独自設定を確認してから指定してください。夏時間をまたぐローカル日時のデータは単一オフセットでは処理できないため、旧環境で日時をUTCに正規化した検証用コピーが必要です。
 
@@ -72,7 +74,7 @@ psql の接続先は移行専用ユーザーのテスト DB とし、`PGHOST`・
 2. 公開 API の `/whitelist.json` を取得し、旧版とUUID・名前・ブロック対象の除外を比較します。公開経路を切り替える前にクラスタ内で確認します。
 3. 旧設定との照合、MC の Status/本人認証/ダイアログまでの確認、公開経路の確認後、`--verify-only` で再照合します。監査ログ・outbox が空であることも確認します。
 4. 切り戻しの判断期限はここです。失敗時は次節の手順を実行し、解禁しません。
-5. 解禁を決めたら新アプリを一度停止し、管理者で `deploy/postgres/cutover-unfreeze.sql` を適用します。Bot・MC・API を起動して通常運用へ進みます。ここから旧 SQLite への切り戻しは対象外です。監査は以後のイベントから記録・配送されます。
+5. 解禁を決めたら新アプリを一度停止し、管理者で `scripts/mcguildlink-cutover-unfreeze.sql` を適用します。Bot・MC・API を起動して通常運用へ進みます。ここから旧 SQLite への切り戻しは対象外です。監査は以後のイベントから記録・配送されます。
 
 ## 自動検証
 
@@ -80,10 +82,9 @@ bootstrap と sqlx マイグレーションを適用した専用の空テスト 
 
 ```powershell
 python scripts/test-mcguildlink-migration.py --psql psql <専用テストDBの接続指定>
-cargo test --workspace --locked
 ```
 
-代表データで多対多・欠番ID・UUID BLOB・日本語・非UTC時刻・未使用コードの利用・ブロック・採番・再実行拒否・不一致検出・凍結中の書き込み拒否・解禁後の権限復帰を検証します。元SQLiteのハッシュ不変と旧版相当の問い合わせで、解禁前に元のデータへ戻れることを確認します。実際の旧版再起動、Secret変換、公開経路とMinecraft Java 26.3は統合環境で上記順序をリハーサルし、結果を記録します。
+代表データで多対多・欠番ID・UUID BLOB・日本語・非UTC時刻・未使用コードの保持・ブロック制約・採番・再実行拒否・不一致検出・凍結中の書き込み拒否・解禁後の権限復帰を検証します。元SQLiteのハッシュ不変と旧版相当の問い合わせで、解禁前に元のデータへ戻れることを確認します。コードの実消費、実際の旧版再起動、Secret変換、公開経路とMinecraft Java 26.3は[k3dリハーサル手順](mcguildlink-k3d-rehearsal.md)で確認し、結果を記録します。
 
 ## 公開経路と切り戻し
 

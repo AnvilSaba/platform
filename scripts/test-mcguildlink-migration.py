@@ -41,17 +41,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--psql", nargs=argparse.REMAINDER,
                         help="専用テストDBに接続するpsqlコマンド（本番では実行しない）")
-    parser.add_argument("--fixture-sql", action="store_true", help="Rustテスト用の代表データの移行SQLを出力")
+    parser.add_argument("--fixture-db", type=Path, help="手動リハーサル用の代表SQLiteを作成")
     args = parser.parse_args()
-    if args.fixture_sql:
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "app.db"
-            output = Path(temporary) / "import.sql"
-            create_fixture(source)
-            subprocess.run([sys.executable, str(ROOT / "scripts/migrate-mcguildlink.py"),
-                            str(source), str(output), "--source-utc-offset=+09:00"],
-                           check=True, capture_output=True)
-            sys.stdout.buffer.write(output.read_bytes())
+    if args.fixture_db:
+        if args.fixture_db.exists():
+            parser.error("既存のSQLiteは上書きしません")
+        create_fixture(args.fixture_db)
+        print("代表SQLiteを作成しました")
         return
     command = args.psql
     assert command, "psqlコマンドが必要です"
@@ -67,9 +63,9 @@ def main():
         create_fixture(source)
         # 別経路から付与された権限が残ると凍結は失敗し、半端な権限変更を残さない。
         psql("GRANT UPDATE ON mcguildlink.discord_accounts TO platform_bot")
-        psql((ROOT / "deploy/postgres/cutover-freeze.sql").read_text(encoding="utf-8"), success=False)
+        psql((ROOT / "scripts/mcguildlink-cutover-freeze.sql").read_text(encoding="utf-8"), success=False)
         psql("REVOKE UPDATE ON mcguildlink.discord_accounts FROM platform_bot")
-        psql((ROOT / "deploy/postgres/cutover-freeze.sql").read_text(encoding="utf-8"))
+        psql((ROOT / "scripts/mcguildlink-cutover-freeze.sql").read_text(encoding="utf-8"))
 
         def export(name, verify=False, success=True):
             output = Path(temporary) / name
@@ -103,7 +99,7 @@ def main():
         assert psql("SELECT minecraft_account_id FROM mcguildlink.blocked_minecraft_accounts WHERE block_group_id=4") == "8"
         for table in ("audit_logs", "audit_outbox"):
             assert psql(f"SELECT count(*) FROM mcguildlink.{table}") == "0"
-        # ID採番を確認。移行済みコードの実消費はRustのLinkStore統合テストで確認する。
+        # ID採番を確認。実際のコード消費はk3dリハーサルで確認する。
         assert "10" in psql("BEGIN; INSERT INTO mcguildlink.discord_accounts (user_id,last_known_username) VALUES (42,'new') RETURNING id; ROLLBACK;").splitlines()
         psql("INSERT INTO mcguildlink.link_requests VALUES (9,'blocked')", success=False)
         psql("INSERT INTO mcguildlink.account_links (discord_account_id,minecraft_account_id) VALUES (2,8)", success=False)
@@ -113,7 +109,7 @@ def main():
         psql("UPDATE mcguildlink.discord_accounts SET last_known_username='利用者' WHERE id=2")
 
         # bootstrap済みの標準LOGINロールで起動確認と同じ権限を検証する。
-        psql((ROOT / "deploy/postgres/cutover-freeze.sql").read_text(encoding="utf-8"))
+        psql((ROOT / "scripts/mcguildlink-cutover-freeze.sql").read_text(encoding="utf-8"))
         for role in ("platform_bot", "platform_mc_link_server"):
             assert "2" in psql(f"SET ROLE {role}; SELECT count(*) FROM mcguildlink.link_requests").splitlines()
             for write in ("DELETE FROM mcguildlink.link_requests", "UPDATE mcguildlink.minecraft_accounts SET last_known_name='changed'", "INSERT INTO mcguildlink.discord_accounts (user_id,last_known_username) VALUES (43,'new')"):
@@ -127,13 +123,13 @@ def main():
             assert old.execute("SELECT code FROM link_requests WHERE discord_account_id=2").fetchone() == ("AC234679",)
             assert old.execute("SELECT count(*) FROM account_links").fetchone() == (2,)
             assert old.execute("SELECT minecraft_account_id FROM blocked_minecraft_accounts").fetchone() == (8,)
-        psql((ROOT / "deploy/postgres/cutover-unfreeze.sql").read_text(encoding="utf-8"))
+        psql((ROOT / "scripts/mcguildlink-cutover-unfreeze.sql").read_text(encoding="utf-8"))
         psql("BEGIN; SET ROLE platform_bot; DELETE FROM mcguildlink.link_requests WHERE code='AC234679'; ROLLBACK;")
         with closing(sqlite3.connect(source)) as db, db:
             db.execute("UPDATE discord_accounts SET user_id=1.2345678901234568e19 WHERE id=2")
         export("lossy.sql", success=False)
         assert not (Path(temporary) / "lossy.sql").exists()
-    print("移行・全件照合・コード利用・ブロック・書き込み停止・解禁前の旧DB切り戻し: 成功")
+    print("移行・全件照合・ブロック制約・書き込み停止・解禁前の旧DB切り戻し: 成功")
 
 
 if __name__ == "__main__":
