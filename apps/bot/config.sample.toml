@@ -9,6 +9,8 @@ owners = [ "000000000000000000" ]
 guild_id = "000000000000000000"
 moderator_role_id = "000000000000000000"
 display_server_address = "link.example.com"
+# MCGuildLink の監査ログを送る必須チャンネル
+audit_channel_id = "000000000000000000"
 
 
 [auth]

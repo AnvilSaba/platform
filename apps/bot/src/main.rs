@@ -7,7 +7,13 @@ mod utils;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 // Bot が利用するスキーマだけを必須とする。
-const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260929120000, 20260929180000];
+const REQUIRED_MIGRATIONS: &[i64] = &[
+    20260926184758,
+    20260927120000,
+    20260929120000,
+    20260929180000,
+    20260930120000,
+];
 
 use std::sync::Arc;
 
@@ -91,20 +97,23 @@ async fn main() -> Result<(), AppError> {
     let database = database_config.connect().await?;
     platform_database::check_migrations(&database, &MIGRATIONS, REQUIRED_MIGRATIONS).await?;
 
-    let mut client = create_client(
-        config.bot.token.clone(),
-        intents,
-        event_handlers(&config, &database)
-            .add(MainEventHandler::new())
-            .on_error(handle_event_error),
-    )
-    .framework(Box::new(framework))
-    .cache_settings(settings)
-    .data(Arc::new(BotData::new(config, database)))
-    .await
-    .context("Failed to create Discord client")?;
+    let token = config.bot.token.clone();
+    let handlers = event_handlers(&config, &database)
+        .add(MainEventHandler::new())
+        .on_error(handle_event_error);
+    let data = Arc::new(BotData::new(config, database));
+    let mut client = create_client(token, intents, handlers)
+        .framework(Box::new(framework))
+        .cache_settings(settings)
+        .data(data.clone())
+        .await
+        .context("Failed to create Discord client")?;
 
     install_signal_handler(&client);
+    tokio::spawn(features::mcguildlink::audit_delivery::run_delivery(
+        data,
+        client.http.clone(),
+    ));
     let shutdown = client.shard_manager.get_shutdown_trigger();
     tokio::spawn(console::run(client.http.clone(), shutdown, output));
 

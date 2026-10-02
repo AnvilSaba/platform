@@ -18,13 +18,17 @@ impl BotData {
             config: RwLock::new(Arc::new(config)),
         }
     }
+
+    pub async fn app_config(&self) -> Arc<AppConfig> {
+        self.config.read().await.clone()
+    }
 }
 
 pub trait BotDataExt {
     fn bot_data(&self) -> Arc<BotData>;
 
     async fn app_config(&self) -> Arc<AppConfig> {
-        self.bot_data().config.read().await.clone()
+        self.bot_data().app_config().await
     }
 
     async fn replace_app_config(&self, config: AppConfig) {
