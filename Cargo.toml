@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/mcguildlink-rust",
+    "apps/public-api",
     "apps/bot",
     "crates/bot-macros",
     "crates/platform-database",

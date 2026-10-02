@@ -31,6 +31,7 @@ CREATE DATABASE platform OWNER platform_migrator;
 ```sql
 CREATE ROLE platform_bot_runtime NOLOGIN;
 CREATE ROLE platform_mcguildlink_runtime NOLOGIN;
+CREATE ROLE platform_public_api_runtime NOLOGIN;
 ```
 
 マイグレーション適用後、アプリ別のログインユーザーを作成し、それぞれの権限ロールを付与する。
@@ -42,6 +43,9 @@ GRANT platform_bot_runtime TO platform_bot;
 CREATE ROLE platform_mcguildlink LOGIN PASSWORD '<MCGuildLink 専用パスワード>';
 GRANT CONNECT ON DATABASE platform TO platform_mcguildlink;
 GRANT platform_mcguildlink_runtime TO platform_mcguildlink;
+CREATE ROLE platform_public_api LOGIN PASSWORD '<公開 API 専用パスワード>';
+GRANT CONNECT ON DATABASE platform TO platform_public_api;
+GRANT platform_public_api_runtime TO platform_public_api;
 ```
 
 Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `password` には
@@ -49,7 +53,7 @@ Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `passwor
 `postgres.serviceName`、`postgres.port`、`postgres.database` から `DATABASE_URL` を作る。
 
 アプリには DB 所有権、スキーマ作成権限、マイグレーションロールを与えない。
-`platform_bot_runtime` は Bot 全体の権限ロール、`platform_mcguildlink_runtime` は Minecraft 接続サービスの権限ロールとする。
+`platform_bot_runtime` は Bot 全体の権限ロール、`platform_mcguildlink_runtime` は Minecraft 接続サービスの権限ロール、`platform_public_api_runtime` はホワイトリスト公開専用の読み取りロールとする。
 ログインユーザーと分離し、各機能のマイグレーションで必要なテーブル・列の権限だけを追加する。
 将来のテーブルへ一括で権限を付与するデフォルト権限は設定しない。
 
