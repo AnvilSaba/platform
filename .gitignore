@@ -1,5 +1,6 @@
 # Secrets and local configuration
 config.toml
+!.cargo/config.toml
 app.toml
 *.secret
 .env
@@ -13,6 +14,7 @@ target/
 
 # IDE / OS
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .DS_Store
 Thumbs.db

@@ -7,6 +7,8 @@ bot:
     tag: ""
     pullPolicy: IfNotPresent
   configSecretName: bot-config
+  databaseUsername: platform_bot
+  databaseSecretName: bot-database
 
 mcguildlink:
   replicas: 1
@@ -25,12 +27,14 @@ mcguildlink:
 
 postgres:
   replicas: 1
+  serviceName: postgres
+  port: 5432
   image:
     repository: postgres
     tag: "18.6-trixie"
     pullPolicy: IfNotPresent
-  database: anvilsaba
-  username: anvilsaba
+  database: platform
+  username: platform_migrator
   storageSize: 10Gi
   storageClassName: ""
   secretName: postgres

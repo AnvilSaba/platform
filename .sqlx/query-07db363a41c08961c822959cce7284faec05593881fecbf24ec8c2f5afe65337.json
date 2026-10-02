@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE public._sqlx_migrations SET success = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "07db363a41c08961c822959cce7284faec05593881fecbf24ec8c2f5afe65337"
+}

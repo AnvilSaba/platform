@@ -18,6 +18,12 @@
 
 ### 2.1 Rust / Bot
 
+紐付けコードのテストには実 PostgreSQL と `DATABASE_URL` が必要です。
+[DB のセットアップとマイグレーション](database.md)を参照してください。
+テスト専用 DB は `platform_test` とし、本番 DB には接続しないでください。
+sqlx のテストごとの DB 作成には `CREATEDB`、権限ロールの初回作成には
+`CREATEROLE` が必要です。
+
 リポジトリルートで実行します。
 
 ```powershell
@@ -64,6 +70,7 @@ Botの設定構文を確認します。
 
 ```powershell
 podman run --rm `
+  --env DATABASE_URL=postgres://platform_bot:bot-dev-password@postgres:5432/platform `
   --volume "${PWD}/apps/bot/config.sample.toml:/app/config.toml:ro" `
   localhost/anvilsaba/bot:test --check-config
 ```
@@ -108,6 +115,10 @@ kubectl create namespace anvilsaba --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n anvilsaba create secret generic bot-config `
   --from-file=config.toml=apps/bot/config.sample.toml `
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n anvilsaba create secret generic bot-database `
+  --from-literal=password=bot-dev-password `
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n anvilsaba create secret generic mcguildlink-config `

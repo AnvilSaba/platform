@@ -2,6 +2,14 @@
 token = "TOKEN.PLACEHOLDER.NOT_A_REAL_SECRET"
 owners = [ "000000000000000000" ]
 
+# 共有 DB の接続先は必須の環境変数 DATABASE_URL に設定する。
+# 例: postgres://platform_bot:CHANGE_ME@postgres:5432/platform
+
+[mcguildlink]
+guild_id = "000000000000000000"
+moderator_role_id = "000000000000000000"
+display_server_address = "link.example.com"
+
 
 [auth]
 # 認証の結果を通知するチャンネルID

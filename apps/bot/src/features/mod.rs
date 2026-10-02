@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod honeypot;
+pub mod mcguildlink;
 mod message_cache_handler;
 mod message_logging;
 mod pin;
@@ -24,6 +25,7 @@ use crate::{
 
 pub fn event_handlers(config: &AppConfig) -> BotEventHandlers {
     BotEventHandlers::new()
+        .add(mcguildlink::handle_link_event)
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
@@ -36,6 +38,7 @@ pub fn event_handlers(config: &AppConfig) -> BotEventHandlers {
 pub fn commands() -> Vec<AppCommand> {
     build_commands(
         [
+            mcguildlink::create_panel,
             auth::create_keyword_button,
             question::question,
             pin::pin,

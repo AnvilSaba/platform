@@ -5,6 +5,10 @@ mod extensions;
 mod features;
 mod utils;
 
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+// Bot が利用するスキーマだけを必須とする。
+const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758];
+
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -52,6 +56,7 @@ async fn main() -> Result<(), AppError> {
     init_tracing(output.clone());
 
     let config = AppConfig::from_file("config.toml").await?;
+    let database_config = platform_database::DatabaseConfig::from_env()?;
 
     let options = options().run();
 
@@ -83,6 +88,9 @@ async fn main() -> Result<(), AppError> {
     let mut settings = CacheSettings::default();
     settings.max_messages = usize::MAX;
 
+    let database = database_config.connect().await?;
+    platform_database::check_migrations(&database, &MIGRATIONS, REQUIRED_MIGRATIONS).await?;
+
     let mut client = create_client(
         config.bot.token.clone(),
         intents,
@@ -92,7 +100,7 @@ async fn main() -> Result<(), AppError> {
     )
     .framework(Box::new(framework))
     .cache_settings(settings)
-    .data(Arc::new(BotData::new(config)))
+    .data(Arc::new(BotData::new(config, database)))
     .await
     .context("Failed to create Discord client")?;
 

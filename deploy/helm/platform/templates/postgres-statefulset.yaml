@@ -3,7 +3,7 @@ kind: StatefulSet
 metadata:
   name: postgres
 spec:
-  serviceName: postgres
+  serviceName: {{ .Values.postgres.serviceName }}
   replicas: {{ .Values.postgres.replicas }}
   selector:
     matchLabels: { app.kubernetes.io/name: postgres }

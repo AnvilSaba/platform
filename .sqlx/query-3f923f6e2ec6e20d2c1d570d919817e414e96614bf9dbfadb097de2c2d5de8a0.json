@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mcguildlink.blocked_discord_accounts (discord_account_id, block_group_id)\n            SELECT root_discord_account_id, id FROM mcguildlink.block_groups",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3f923f6e2ec6e20d2c1d570d919817e414e96614bf9dbfadb097de2c2d5de8a0"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SET ROLE platform_bot_runtime",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "8c65301cf94d5d6bc6dfa05330725d0c9d77d23c8a5b034a0f473d4c93c6f946"
+}
