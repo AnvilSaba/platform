@@ -6,25 +6,25 @@ license = "MIT"
 publish = false
 
 [dependencies]
-anyhow = "1"
-async-stream = "0.3"
+anyhow = { workspace = true }
+async-stream = { workspace = true }
 bot-macros = { path = "../../crates/bot-macros" }
 platform-signal = { path = "../../crates/platform-signal" }
-bpaf = { version = "0.9", features = [ "derive" ] }
-chrono = "0.4"
-dashmap = "6.1"
-duration-str = "0.21"
-futures = "0.3"
-itertools = "0.15"
-nutype = "0.8.0"
+bpaf = { workspace = true, features = [ "derive" ] }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+duration-str = { workspace = true }
+futures = { workspace = true }
+itertools = { workspace = true }
+nutype = { workspace = true }
 platform-database = { path = "../../crates/platform-database" }
-rand = "0.10"
-regex = "1.0"
-rustyline = { version = "18", default-features = false }
-serde = { version = "1.0", features = [ "derive" ] }
-serde_with = "3"
-similar = "3.1"
-sqlx = { version = "0.8", default-features = false, features = [
+rand = { workspace = true }
+regex = { workspace = true }
+rustyline = { workspace = true }
+serde = { workspace = true, features = [ "derive" ] }
+serde_with = { workspace = true }
+similar = { workspace = true }
+sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-rustls-aws-lc-rs",
     "postgres",
@@ -33,25 +33,23 @@ sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     "uuid",
 ] }
-sysinfo = "0.39"
-thiserror = "2"
-tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal", "sync" ] }
-toml = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
-uuid = { version = "1", features = [ "serde" ] }
+sysinfo = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "signal", "sync" ] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
+uuid = { workspace = true, features = [ "serde" ] }
 
 [dependencies.serenity]
-git = "https://github.com/serenity-rs/serenity"
-rev = "37b9f433ada8b9ccc5f93f04826403b175855f86"
+workspace = true
 
 [dependencies.poise]
-git = "https://github.com/serenity-rs/poise"
-rev = "b189f7c1cfd47eb4e7863683a49c389a9702ce23"
+workspace = true
 
 [dev-dependencies]
-axum = "0.8"
-http-body-util = "0.1"
+axum = { workspace = true }
+http-body-util = { workspace = true }
 public-api = { path = "../public-api" }
-serde_json = "1"
-tower = { version = "0.5", features = [ "util" ] }
+serde_json = { workspace = true }
+tower = { workspace = true, features = [ "util" ] }

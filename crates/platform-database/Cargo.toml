@@ -6,6 +6,6 @@ license = "MIT"
 publish = false
 
 [dependencies]
-rustls = { version = "0.23", default-features = false, features = [ "aws-lc-rs", "std" ] }
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
-thiserror = "2"
+rustls = { workspace = true, features = [ "aws-lc-rs", "std" ] }
+sqlx = { workspace = true, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
+thiserror = { workspace = true }
