@@ -33,6 +33,9 @@ impl LinkingRepository for DatabaseLinkingRepository {
         username: &str,
     ) -> Result<Self::CodeIssuance, AppError> {
         let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT mcguildlink.serialize_account_changes()")
+            .execute(&mut *transaction)
+            .await?;
         let account = queries::upsert_discord_account(&mut transaction, user_id, username).await?;
         Ok(DatabaseCodeIssuanceSession { transaction, account })
     }

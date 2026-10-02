@@ -77,7 +77,7 @@ async fn bot_role_allows_code_storage_but_rejects_schema_and_unrelated_changes(p
         "DELETE FROM mcguildlink.audit_logs",
         "DELETE FROM public._sqlx_migrations",
         "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ('00000000-0000-0000-0000-000000000001', 'player')",
-        "SELECT * FROM mcguildlink.block_groups",
+        "SELECT * FROM mcguildlink.audit_logs",
     ] {
         let error = sqlx::query(forbidden).execute(&bot).await.unwrap_err();
         assert_eq!(error.as_database_error().unwrap().code().as_deref(), Some("42501"));

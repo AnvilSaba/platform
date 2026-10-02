@@ -2,28 +2,16 @@ use super::{
     presentation::{ListPage, Scope, load, page, save_snapshot},
     repository::DatabaseAccountLinksRepository,
 };
+use crate::features::mcguildlink::permissions::require_moderator;
 use crate::{
-    app::{AppApplicationContext, AppError, BotDataExt, BotError},
+    app::{AppApplicationContext, AppError, BotDataExt},
     utils::create_safe_allowed_mentions,
 };
 use poise::CreateReply;
 use serenity::all::{MessageFlags, User};
 use uuid::Uuid;
 
-async fn moderator(ctx: AppApplicationContext<'_>) -> Result<bool, AppError> {
-    let config = ctx.app_config().await;
-    Ok(ctx.guild_id() == Some(config.mcguildlink.guild_id)
-        && ctx
-            .interaction
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&config.mcguildlink.moderator_role_id)))
-}
-
 async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Result<(), AppError> {
-    if !moderator(ctx).await? {
-        return Err(BotError::HasNoRole.into());
-    }
     ctx.defer_ephemeral().await?;
     let data = ctx.bot_data();
     let repository = DatabaseAccountLinksRepository::new(data.database.clone());
@@ -45,6 +33,7 @@ async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Resu
     slash_command,
     ephemeral,
     guild_only,
+    check = "require_moderator",
     subcommands("links_discord", "links_minecraft", "links_all")
 )]
 pub async fn links(_: AppApplicationContext<'_>) -> Result<(), AppError> {
@@ -66,9 +55,6 @@ pub async fn links_minecraft(
     ctx: AppApplicationContext<'_>,
     #[description = "一覧表示する Minecraft UUID"] uuid: String,
 ) -> Result<(), AppError> {
-    if !moderator(ctx).await? {
-        return Err(BotError::HasNoRole.into());
-    }
     let Ok(uuid) = Uuid::parse_str(&uuid) else {
         ctx.say("Minecraft UUID は `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` 形式で指定してください。")
             .await?;

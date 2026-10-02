@@ -5,7 +5,7 @@ use crate::{AppResult, session::SessionProfile};
 mod queries;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
-const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260927120000];
+const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260927120000, 20260929180000];
 
 #[derive(Clone)]
 pub(crate) struct LinkStore {
@@ -40,6 +40,9 @@ impl CodeLinker for LinkStore {
 
 async fn consume(pool: &PgPool, code: &str, player: &SessionProfile) -> Result<LinkResult, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT mcguildlink.serialize_account_changes()")
+        .execute(&mut *tx)
+        .await?;
     queries::lock_code(&mut tx, code).await?;
     let request = queries::find_request(&mut tx, code).await?;
     let Some(request) = request else {

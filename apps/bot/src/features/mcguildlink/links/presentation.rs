@@ -1,6 +1,6 @@
 use super::{model::Link, ports::AccountLinksRepository};
 use crate::app::AppError;
-use dashmap::DashMap;
+use crate::features::mcguildlink::pagination::{Pagination, Snapshot as PageSnapshot};
 use serenity::{
     all::{ButtonStyle, CreateActionRow, CreateButton, ReactionType, SeparatorSpacingSize},
     builder::{
@@ -8,50 +8,26 @@ use serenity::{
         CreateSectionComponent, CreateSeparator, CreateTextDisplay, CreateThumbnail, CreateUnfurledMediaItem,
     },
 };
-use std::{
-    sync::{Arc, OnceLock},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 const PAGE_SIZE: usize = 5;
 const PAGE_BUTTON_PREFIX: &str = "account_links_page_button:";
 const UNLINK_BUTTON_PREFIX: &str = "unlink_button:";
-const SNAPSHOT_TTL: Duration = Duration::from_secs(600);
+pub(super) type Snapshot = PageSnapshot<Link, Scope>;
 
-pub(super) struct Snapshot {
-    pub(super) owner: u64,
-    pub(super) scope: Scope,
-    pub(super) links: Vec<Link>,
-    expires_at: Instant,
-}
+static SNAPSHOTS: OnceLock<Pagination<Link, Scope>> = OnceLock::new();
 
-static SNAPSHOTS: OnceLock<DashMap<u64, Arc<Snapshot>>> = OnceLock::new();
-
-fn snapshots() -> &'static DashMap<u64, Arc<Snapshot>> {
-    SNAPSHOTS.get_or_init(DashMap::new)
-}
-
-fn prune_snapshots() {
-    let now = Instant::now();
-    snapshots().retain(|_, snapshot| snapshot.expires_at > now);
+fn pagination() -> &'static Pagination<Link, Scope> {
+    SNAPSHOTS.get_or_init(|| Pagination::new(PAGE_BUTTON_PREFIX))
 }
 
 pub(super) fn save_snapshot(id: u64, owner: u64, scope: Scope, links: Vec<Link>) -> Arc<Snapshot> {
-    prune_snapshots();
-    let snapshot = Arc::new(Snapshot {
-        owner,
-        scope,
-        links,
-        expires_at: Instant::now() + SNAPSHOT_TTL,
-    });
-    snapshots().insert(id, snapshot.clone());
-    snapshot
+    pagination().save(id, owner, scope, links)
 }
 
 pub(super) fn get_snapshot(id: u64) -> Option<Arc<Snapshot>> {
-    prune_snapshots();
-    snapshots().get(&id).map(|snapshot| snapshot.clone())
+    pagination().get(id)
 }
 
 #[derive(Clone, Copy)]
@@ -60,12 +36,6 @@ pub(super) enum Scope {
     Discord(u64),
     Minecraft(Uuid),
     All,
-}
-
-impl Scope {
-    pub(super) fn is_admin(self) -> bool {
-        !matches!(self, Self::User(_))
-    }
 }
 
 pub(super) async fn load(repository: &impl AccountLinksRepository, scope: Scope) -> Result<Vec<Link>, AppError> {
@@ -130,41 +100,10 @@ fn append_admin_link(components: &mut Vec<CreateContainerComponent<'static>>, li
     ));
 }
 
-fn append_pagination(
-    components: &mut Vec<CreateContainerComponent<'static>>,
-    snapshot_id: u64,
-    index: usize,
-    pages: usize,
-    total: usize,
-) {
-    if pages <= 1 {
-        return;
-    }
-    components.push(large_divider());
-    components.push(CreateContainerComponent::ActionRow(CreateActionRow::buttons(vec![
-        CreateButton::new(format!("{PAGE_BUTTON_PREFIX}{snapshot_id}:{}", index.saturating_sub(1)))
-            .label("◀")
-            .style(ButtonStyle::Primary)
-            .disabled(index == 0),
-        CreateButton::new(format!("{PAGE_BUTTON_PREFIX}disabled"))
-            .label(format!("{} / {} ({total})", index + 1, pages))
-            .style(ButtonStyle::Secondary)
-            .disabled(true),
-        CreateButton::new(format!(
-            "{PAGE_BUTTON_PREFIX}{snapshot_id}:{}",
-            (index + 1).min(pages - 1)
-        ))
-        .label("▶")
-        .style(ButtonStyle::Primary)
-        .disabled(index + 1 >= pages),
-    ])));
-}
-
 pub(super) fn page(snapshot_id: u64, snapshot: &Snapshot, requested: usize) -> ListPage {
-    let scope = snapshot.scope;
+    let scope = snapshot.context;
     let owner = snapshot.owner;
-    let links = &snapshot.links;
-    if links.is_empty() {
+    if snapshot.entries.is_empty() {
         let empty = match scope {
             Scope::User(_) => "あなたの Discordアカウントに紐付けられた Minecraftアカウントはありません。",
             Scope::Discord(_) => "その Discordアカウントに紐付けられている Minecraftアカウントはありません。",
@@ -174,8 +113,7 @@ pub(super) fn page(snapshot_id: u64, snapshot: &Snapshot, requested: usize) -> L
         return ListPage::Empty(empty);
     }
 
-    let pages = links.len().div_ceil(PAGE_SIZE);
-    let index = requested.min(pages - 1);
+    let visible = snapshot.page(requested, PAGE_SIZE);
     let heading = match scope {
         Scope::User(_) => {
             "## 紐付けられたアカウント\n以下の Minecraftアカウントがあなたの Discordアカウントに紐付けられています。\n紐付けを解除したいアカウントがある場合は、各アカウントの「解除」ボタンを押してください。"
@@ -192,19 +130,21 @@ pub(super) fn page(snapshot_id: u64, snapshot: &Snapshot, requested: usize) -> L
         CreateContainerComponent::TextDisplay(CreateTextDisplay::new(heading)),
         header_separator(),
     ];
-    for (item, link) in links.iter().skip(index * PAGE_SIZE).take(PAGE_SIZE).enumerate() {
+    for (item, link) in visible.entries.iter().enumerate() {
         match scope {
             Scope::User(_) => append_user_link(&mut components, owner, link),
             _ => append_admin_link(&mut components, link, item == 0),
         }
     }
-    append_pagination(&mut components, snapshot_id, index, pages, links.len());
+    if let Some(controls) = pagination().controls(snapshot_id, visible.index, visible.pages, visible.total) {
+        components.push(large_divider());
+        components.push(controls);
+    }
     ListPage::Components(vec![CreateComponent::Container(CreateContainer::new(components))])
 }
 
 pub(super) fn parse_page(id: &str) -> Option<(u64, usize)> {
-    let (snapshot_id, page) = id.strip_prefix(PAGE_BUTTON_PREFIX)?.split_once(':')?;
-    Some((snapshot_id.parse().ok()?, page.parse().ok()?))
+    pagination().parse(id)
 }
 
 #[cfg(test)]
@@ -223,12 +163,7 @@ mod tests {
     }
 
     fn rendered(scope: Scope, links: Vec<Link>, requested: usize) -> String {
-        let snapshot = Snapshot {
-            owner: 123,
-            scope,
-            links,
-            expires_at: Instant::now() + SNAPSHOT_TTL,
-        };
+        let snapshot = Snapshot::new(123, scope, links);
         let ListPage::Components(components) = page(456, &snapshot, requested) else {
             panic!("expected a components V2 list");
         };
@@ -264,12 +199,7 @@ mod tests {
 
     #[test]
     fn empty_list_uses_legacy_plain_message() {
-        let snapshot = Snapshot {
-            owner: 123,
-            scope: Scope::User(123),
-            links: vec![],
-            expires_at: Instant::now() + SNAPSHOT_TTL,
-        };
+        let snapshot = Snapshot::new(123, Scope::User(123), vec![]);
         assert!(matches!(
             page(456, &snapshot, 0),
             ListPage::Empty("あなたの Discordアカウントに紐付けられた Minecraftアカウントはありません。")

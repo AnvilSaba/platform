@@ -1,4 +1,5 @@
 use super::{
+    blocking::{interactions as block_interactions, presentation as block_presentation},
     interactions::{self, UNLINK_BUTTON_PREFIX, UNLINK_MODAL_PREFIX},
     repository::DatabaseAccountLinksRepository,
 };
@@ -38,14 +39,9 @@ impl AccountLinksEventHandler {
         if id == LIST_LINK_BUTTON_ID {
             interactions::show_link_list(&self.repository, ctx, component).await?;
         } else if let Some((snapshot_id, page_index)) = parse_page(id) {
-            interactions::show_page(
-                ctx,
-                component,
-                config.mcguildlink.moderator_role_id,
-                snapshot_id,
-                page_index,
-            )
-            .await?;
+            interactions::show_page(ctx, component, snapshot_id, page_index).await?;
+        } else if let Some((snapshot_id, page_index)) = block_presentation::parse(id) {
+            block_interactions::show_page(ctx, component, snapshot_id, page_index).await?;
         } else if let Some((owner, uuid)) = interactions::parse_unlink(id, UNLINK_BUTTON_PREFIX) {
             interactions::show_unlink_confirmation(&self.repository, ctx, component, owner, uuid).await?;
         }

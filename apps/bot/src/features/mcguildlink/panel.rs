@@ -1,6 +1,7 @@
+use super::permissions::require_moderator;
 use super::{linking::START_LINK_BUTTON_ID, links::LIST_LINK_BUTTON_ID};
 use crate::{
-    app::{AppApplicationContext, AppError, BotDataExt, BotError},
+    app::{AppApplicationContext, AppError},
     utils::{create_safe_allowed_mentions, create_safe_message},
 };
 use poise::CreateReply;
@@ -34,20 +35,8 @@ fn link_panel_message() -> CreateMessage<'static> {
 }
 
 /// 紐付けを開始するためのパネルを送信します。
-#[poise::command(slash_command, ephemeral, guild_only)]
+#[poise::command(slash_command, ephemeral, guild_only, check = "require_moderator")]
 pub async fn create_panel(ctx: AppApplicationContext<'_>) -> Result<(), AppError> {
-    let config = ctx.app_config().await;
-    let config = &config.mcguildlink;
-    if ctx.guild_id() != Some(config.guild_id)
-        || !ctx
-            .interaction
-            .member
-            .as_ref()
-            .is_some_and(|member| member.roles.contains(&config.moderator_role_id))
-    {
-        return Err(BotError::HasNoRole.into());
-    }
-
     ctx.defer_ephemeral().await?;
 
     ctx.channel_id().send_message(ctx.http(), link_panel_message()).await?;
