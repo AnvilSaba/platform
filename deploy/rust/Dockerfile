@@ -53,6 +53,10 @@ RUN case "$TARGETARCH" in \
     echo "$rust_target" > /tmp/rust-target; \
     rustup target add "$rust_target"
 
+ARG PACKAGE
+ARG BINARY
+ARG SOURCE_DIR
+
 COPY --from=planner /recipe.json ./recipe.json
 COPY .sqlx ./.sqlx
 COPY migrations ./migrations
@@ -61,7 +65,7 @@ ENV SQLX_OFFLINE=true
 RUN rust_target="$(cat /tmp/rust-target)" && \
     cargo chef cook \
       --release \
-      --package bot \
+      --package "$PACKAGE" \
       --target "$rust_target" \
       --zigbuild \
       --recipe-path recipe.json
@@ -72,7 +76,7 @@ RUN rust_target="$(cat /tmp/rust-target)" && \
     cargo zigbuild \
       --release \
       --locked \
-      --package bot \
+      --package "$PACKAGE" \
       --target "$rust_target"
 
 COPY crates ./crates
@@ -82,33 +86,35 @@ RUN find crates -type f -exec touch {} + && \
     cargo zigbuild \
       --release \
       --locked \
-      --package bot \
+      --package "$PACKAGE" \
       --target "$rust_target"
 
-COPY apps/bot ./apps/bot
+COPY ${SOURCE_DIR} ./${SOURCE_DIR}
 
-RUN find apps/bot -type f -exec touch {} + && \
+RUN find "$SOURCE_DIR" -type f -exec touch {} + && \
     rust_target="$(cat /tmp/rust-target)" && \
     cargo zigbuild \
       --release \
       --locked \
-      --package bot \
+      --package "$PACKAGE" \
       --target "$rust_target" && \
     install -Dm755 \
-      "target/$rust_target/release/bot" \
-      /workspace/out/bot
+      "target/$rust_target/release/$BINARY" \
+      /workspace/out/service
+
+COPY deploy/rust/about.toml deploy/rust/about.hbs /licenses/
 
 RUN cargo about generate \
-      --manifest-path apps/bot/Cargo.toml \
-      --config apps/bot/about.toml \
-      apps/bot/about.hbs \
+      --manifest-path "$SOURCE_DIR/Cargo.toml" \
+      --config /licenses/about.toml \
+      /licenses/about.hbs \
       --locked \
       --fail \
       -o /workspace/THIRD_PARTY_LICENSES
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 WORKDIR /app
-COPY --from=builder /workspace/out/bot /app/bot
+COPY --from=builder /workspace/out/service /app/service
 COPY LICENSE /app/LICENSE
 COPY --from=builder /workspace/THIRD_PARTY_LICENSES /app/THIRD_PARTY_LICENSES
-ENTRYPOINT ["/app/bot"]
+ENTRYPOINT ["/app/service"]

@@ -4,13 +4,12 @@
         Changelog     = "apps/bot/CHANGELOG.md"
         Paths         = @(
             "apps/bot/**"
+            "deploy/rust/**"
             "crates/bot-macros/**"
             "crates/platform-database/**"
             "migrations/**"
             ".sqlx/**"
             ".cargo/**"
-            "Cargo.toml"
-            "Cargo.lock"
 
             # リリースしていないがモノレポ化前の変更を含めるため
             "src/**"
@@ -19,12 +18,26 @@
         BaselineTag   = "bot/v3.5.0"
         DisplayName   = "Bot"
     }
-    mcguildlink = @{
-        VersionFile   = "apps/mcguildlink/gradle.properties"
-        Changelog     = "apps/mcguildlink/CHANGELOG.md"
-        Paths         = @("apps/mcguildlink/**")
-        BaselineTag   = "mcguildlink/v1.0.0"
-        DisplayName   = "MCGuildLink"
+    'mc-link-server' = @{
+        VersionFile = 'apps/mc-link-server/Cargo.toml'
+        Changelog = 'apps/mc-link-server/CHANGELOG.md'
+        Paths = @('apps/mc-link-server/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'deploy/rust/**')
+        FullHistory = $true
+        DisplayName = 'mc-link-server'
+    }
+    'public-api' = @{
+        VersionFile = 'apps/public-api/Cargo.toml'
+        Changelog = 'apps/public-api/CHANGELOG.md'
+        Paths = @('apps/public-api/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'deploy/rust/**')
+        FullHistory = $true
+        DisplayName = 'public-api'
+    }
+    'db-migrator' = @{
+        VersionFile = 'apps/db-migrator/Cargo.toml'
+        Changelog = 'apps/db-migrator/CHANGELOG.md'
+        Paths = @('apps/db-migrator/**', 'crates/platform-database/**', 'migrations/**', '.sqlx/**', '.cargo/**', 'deploy/rust/**')
+        FullHistory = $true
+        DisplayName = 'db-migrator'
     }
     chart = @{
         VersionFile   = "deploy/helm/platform/Chart.yaml"

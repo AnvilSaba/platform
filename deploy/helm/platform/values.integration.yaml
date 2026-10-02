@@ -1,17 +1,21 @@
+# 実 Discord を起動しない統合環境。
 bot:
+  replicas: 0
   image:
-    repository: localhost/anvilsaba/bot
     tag: test
-
 cloudflared:
   replicas: 0
-
 mcLinkServer:
+  replicas: 1
   image:
     repository: localhost/anvilsaba/mc-link-server
     tag: test
-
 publicApi:
+  replicas: 1
   image:
     repository: localhost/anvilsaba/public-api
+    tag: test
+dbMigrator:
+  image:
+    repository: localhost/anvilsaba/db-migrator
     tag: test

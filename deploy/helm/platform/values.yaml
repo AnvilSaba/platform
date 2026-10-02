@@ -8,22 +8,38 @@ bot:
     pullPolicy: IfNotPresent
   configSecretName: bot-config
   databaseUsername: platform_bot
-  databaseSecretName: bot-database
+  databaseSecretName: bot-db-credentials
 
-mcguildlink:
+mcLinkServer:
   replicas: 1
   image:
-    repository: ghcr.io/anvilsaba/mcguildlink
+    repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""
     pullPolicy: IfNotPresent
-  configSecretName: mcguildlink-config
-  sqlite:
-    storageSize: 1Gi
-    storageClassName: ""
-  http:
-    port: 8080
-  minecraft:
-    port: 25565
+  databaseUsername: platform_mc_link_server
+  databaseSecretName: mc-link-server-db-credentials
+  # Service 側のポート。コンテナ内は25565固定。
+  port: 25565
+
+publicApi:
+  replicas: 1
+  image:
+    repository: ghcr.io/anvilsaba/public-api
+    tag: ""
+    pullPolicy: IfNotPresent
+  databaseUsername: platform_public_api
+  databaseSecretName: public-api-db-credentials
+  # Service 側のポート。コンテナ内は8080固定。
+  port: 8080
+
+dbMigrator:
+  enabled: false
+  image:
+    repository: ghcr.io/anvilsaba/db-migrator
+    tag: ""
+    pullPolicy: IfNotPresent
+  databaseUsername: platform_db_migrator
+  databaseSecretName: db-migrator-db-credentials
 
 postgres:
   replicas: 1
@@ -34,10 +50,10 @@ postgres:
     tag: "18.6-trixie"
     pullPolicy: IfNotPresent
   database: platform
-  username: platform_migrator
+  username: platform_admin
   storageSize: 10Gi
   storageClassName: ""
-  secretName: postgres
+  secretName: postgres-db-credentials
 
 cloudflared:
   replicas: 1

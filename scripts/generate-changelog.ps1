@@ -18,6 +18,7 @@ if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
 
 $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-config.psd1")
 $settings = $releaseConfig[$App]
+if (-not $settings) { throw "未対応のリリース対象です: $App" }
 $outputPath = if ($Output) { $Output } else { $settings.Changelog }
 $baselineTag = $settings.BaselineTag
 
@@ -38,7 +39,7 @@ if ($Tag) {
     }
     $cliffArgs += @("--tag", $Tag)
 }
-$cliffArgs += if ($settings.FullHistory) { "HEAD" } else { "$baselineTag..HEAD" }
+$cliffArgs += if ($settings.FullHistory) { (git rev-parse HEAD).Trim() } else { "$baselineTag..HEAD" }
 foreach ($path in $settings.Paths) { $cliffArgs += "--include-path=$path" }
 
 & git-cliff @cliffArgs

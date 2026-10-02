@@ -1,0 +1,24 @@
+{{- if .Values.dbMigrator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrator
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      {{- include "platform.rustPodSettings" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.dbMigrator.image.repository }}:{{ required "dbMigrator.image.tag is required" .Values.dbMigrator.image.tag }}"
+          imagePullPolicy: {{ .Values.dbMigrator.image.pullPolicy }}
+          securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
+          env:
+            {{- include "platform.databaseEnv" (dict "service" .Values.dbMigrator "postgres" .Values.postgres) | nindent 12 }}
+{{- end }}

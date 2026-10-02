@@ -19,8 +19,8 @@ sqlx-cli と統合テストも `DATABASE_URL` を使用する。
 DB を手動で作成する場合は、管理者として以下を実行する。
 
 ```sql
-CREATE ROLE platform_migrator LOGIN;
-CREATE DATABASE platform OWNER platform_migrator;
+CREATE ROLE platform_admin LOGIN;
+CREATE DATABASE platform OWNER platform_admin;
 ```
 
 ログインユーザーのパスワードは運用環境の Secret 管理を通じて設定する。
@@ -30,7 +30,7 @@ CREATE DATABASE platform OWNER platform_migrator;
 
 ```sql
 CREATE ROLE platform_bot_runtime NOLOGIN;
-CREATE ROLE platform_mcguildlink_runtime NOLOGIN;
+CREATE ROLE platform_mc_link_server_runtime NOLOGIN;
 CREATE ROLE platform_public_api_runtime NOLOGIN;
 ```
 
@@ -40,20 +40,20 @@ CREATE ROLE platform_public_api_runtime NOLOGIN;
 CREATE ROLE platform_bot LOGIN PASSWORD '<Bot 専用パスワード>';
 GRANT CONNECT ON DATABASE platform TO platform_bot;
 GRANT platform_bot_runtime TO platform_bot;
-CREATE ROLE platform_mcguildlink LOGIN PASSWORD '<MCGuildLink 専用パスワード>';
-GRANT CONNECT ON DATABASE platform TO platform_mcguildlink;
-GRANT platform_mcguildlink_runtime TO platform_mcguildlink;
+CREATE ROLE platform_mc_link_server LOGIN PASSWORD '<MC Link Server 専用パスワード>';
+GRANT CONNECT ON DATABASE platform TO platform_mc_link_server;
+GRANT platform_mc_link_server_runtime TO platform_mc_link_server;
 CREATE ROLE platform_public_api LOGIN PASSWORD '<公開 API 専用パスワード>';
 GRANT CONNECT ON DATABASE platform TO platform_public_api;
 GRANT platform_public_api_runtime TO platform_public_api;
 ```
 
-Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-database`）の `password` には
+Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-db-credentials`）の `password` には
 `platform_bot` のパスワードを設定する。Helm は `bot.databaseUsername`、
 `postgres.serviceName`、`postgres.port`、`postgres.database` から `DATABASE_URL` を作る。
 
 アプリには DB 所有権、スキーマ作成権限、マイグレーションロールを与えない。
-`platform_bot_runtime` は Bot 全体の権限ロール、`platform_mcguildlink_runtime` は Minecraft 接続サービスの権限ロール、`platform_public_api_runtime` はホワイトリスト公開専用の読み取りロールとする。
+`platform_bot_runtime` は Bot 全体の権限ロール、`platform_mc_link_server_runtime` は Minecraft 接続サービスの権限ロール、`platform_public_api_runtime` はホワイトリスト公開専用の読み取りロールとする。
 ログインユーザーと分離し、各機能のマイグレーションで必要なテーブル・列の権限だけを追加する。
 将来のテーブルへ一括で権限を付与するデフォルト権限は設定しない。
 
@@ -75,7 +75,7 @@ sqlx migrate info
 ```
 
 運用時は専用マイグレーション Job が実行する。アプリ自身はスキーマ変更を行わない。
-Job のデプロイ構成は後続のデプロイ Issue で扱う。
+Job のデプロイ構成・配置順序は [分離サービスの統合環境と独立リリース](independent-deployment.md) を参照する。
 
 起動時は `public._sqlx_migrations` を読み取り、必須の適用履歴・チェックサム・成功状態を検証する。
 Bot ロールには `version`・`success`・`checksum` の読み取り権限だけを付与する。

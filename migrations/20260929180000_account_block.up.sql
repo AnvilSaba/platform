@@ -22,7 +22,7 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION mcguildlink.serialize_account_changes() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION mcguildlink.serialize_account_changes()
-    TO platform_bot_runtime, platform_mcguildlink_runtime;
+    TO platform_bot_runtime, platform_mc_link_server_runtime;
 
 CREATE OR REPLACE FUNCTION mcguildlink.reject_blocked_link_request() RETURNS trigger
 LANGUAGE plpgsql AS $$

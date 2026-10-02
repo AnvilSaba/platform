@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-link-server
+spec:
+  replicas: {{ .Values.mcLinkServer.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: mc-link-server }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mc-link-server }
+    spec:
+      {{- include "platform.rustPodSettings" . | nindent 6 }}
+      containers:
+        - name: mc-link-server
+          image: {{ printf "%s:%s" .Values.mcLinkServer.image.repository (required "mcLinkServer.image.tag is required" .Values.mcLinkServer.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.mcLinkServer.image.pullPolicy }}
+          securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
+          ports:
+            - { name: tcp, containerPort: 25565 }
+          env:
+            {{- include "platform.databaseEnv" (dict "service" .Values.mcLinkServer "postgres" .Values.postgres) | nindent 12 }}
+          readinessProbe:
+            tcpSocket: { port: tcp }

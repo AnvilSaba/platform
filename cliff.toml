@@ -16,7 +16,7 @@ body = """
 {%- endmacro -%}
 
 {% if version %}\
-    ## [{{ version | trim_start_matches(pat="bot/v") | trim_start_matches(pat="mcguildlink/v") | trim_start_matches(pat="chart/v") }}]({{ self::remote_url() }}/
+    ## [{% if version is matching("^[^/]+/v[0-9]+[.][0-9]+[.][0-9]+$") %}{{ version | split(pat="/v") | last }}{% else %}{{ version }}{% endif %}]({{ self::remote_url() }}/
     {%- if previous.version -%}\
         compare/{{ previous.version }}..{{ version }}
     {%- else -%}\

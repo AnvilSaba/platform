@@ -1,6 +1,6 @@
 # 変更履歴とリリース
 
-Bot、MCGuildLink、Platform Helm Chart は独立してバージョン管理します。タグはそれぞれ `bot/vX.Y.Z`、`mcguildlink/vX.Y.Z`、`chart/vX.Y.Z` です。変更履歴は各リリース対象の `CHANGELOG.md` に生成されます。
+Bot、MC Link Server、公開 API、DB マイグレーション、Platform Helm Chart は独立してバージョン管理します。タグ接頭辞はそれぞれ `bot`、`mc-link-server`、`public-api`、`db-migrator`、`chart` で、形式は `<対象>/vX.Y.Z` です。変更履歴は各リリース対象の `CHANGELOG.md` に生成されます。
 
 ## コミット規約
 
@@ -28,7 +28,9 @@ Workflow は次を自動実行します。
 
 ```powershell
 ./scripts/prepare-release.ps1 -App bot -Bump auto
-./scripts/prepare-release.ps1 -App mcguildlink -Bump auto
+./scripts/prepare-release.ps1 -App mc-link-server -Bump auto
+./scripts/prepare-release.ps1 -App public-api -Bump auto
+./scripts/prepare-release.ps1 -App db-migrator -Bump auto
 ./scripts/prepare-release.ps1 -App chart -Bump auto
 ```
 
@@ -40,8 +42,12 @@ Workflow は次を自動実行します。
 
 ```powershell
 ./scripts/generate-changelog.ps1 -App bot
-./scripts/generate-changelog.ps1 -App mcguildlink
+./scripts/generate-changelog.ps1 -App mc-link-server
+./scripts/generate-changelog.ps1 -App public-api
+./scripts/generate-changelog.ps1 -App db-migrator
 ./scripts/generate-changelog.ps1 -App chart
 ```
 
 リリース対象ごとのバージョンファイル、変更ログ出力先、対象パス、基準タグは`scripts/release-config.psd1`で一元管理します。
+ルートの `Cargo.toml`・`Cargo.lock` は変更履歴と自動 bump の対象パスから除外します。共通依存だけの更新をリリースする場合は bump を明示してください。全差分は各バージョン見出しの GitHub リンクから確認できます。
+バージョンの解析・更新形式は `VersionFile` のファイル名で判定します。`Cargo.toml` は Cargo.lock の対象パッケージも更新し、`Chart.yaml` は Chart のバージョンを更新します。

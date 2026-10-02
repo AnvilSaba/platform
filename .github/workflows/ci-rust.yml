@@ -2,9 +2,9 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
+    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci-rust.yml"]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -26,6 +26,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
+      - name: Verify database role bootstrap
+        run: |
+          docker exec '${{ job.services.postgres.id }}' createdb -U postgres platform
+          docker exec -i '${{ job.services.postgres.id }}' psql -U postgres -d platform -v ON_ERROR_STOP=1 < deploy/postgres/bootstrap.sql
       - run: sqlx migrate run
       - run: cargo sqlx prepare --check --workspace -- --all-targets --locked
       - run: cargo check --workspace --locked --all-targets

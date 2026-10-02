@@ -1,11 +1,13 @@
 # 本番デプロイ手順
 
+この手順の MCGuildLink 配置は旧 Kotlin 版・Chart 0.x 向け。分離サービスの配置は[独立デプロイ手順](independent-deployment.md)、旧版からの切替は[移行手順](mcguildlink-migration.md)を参照する。
+
 ## 1. デプロイ構成
 
 本番はLinuxサーバー上のk3sへ、GHCRのDockerイメージをHelmでデプロイします。アプリケーションのソースコード全体は本番サーバーに不要です。
 
 - Botイメージ：`ghcr.io/anvilsaba/bot:<tag>`
-- MCGuildLinkイメージ：`ghcr.io/anvilsaba/mcguildlink:<tag>`
+- 旧 MCGuildLinkイメージ：既存の `ghcr.io/anvilsaba/mcguildlink:<tag>`（新規リリース対象外）
 - Helm Chart：`oci://ghcr.io/anvilsaba/charts/platform`
 - namespace：`anvilsaba`
 - release：`platform`
@@ -150,6 +152,8 @@ Cloudflare側のPublished applicationのserviceを次に設定します。
 http://mcguildlink-http:8080
 ```
 
+これは旧 Kotlin 版の本番経路です。分離した公開 API の開発用 Tunnel と将来の切替先は[独立デプロイ手順](independent-deployment.md#公開-api-の-cloudflare-tunnel-経路)を参照してください。Helm のリリースだけでは Cloudflare 側の転送先は変更されません。
+
 ### 2.6 GitHub Actionsの本番環境
 
 GitHubのSettingsから`production` Environmentを作成し、次のEnvironment secretsを登録します。
@@ -172,6 +176,8 @@ SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も�
 必要に応じて`production` EnvironmentへRequired reviewersを設定すると、本番デプロイ前に承認を挟めます。
 
 ## 3. GitHub Actions からデプロイ
+Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。
+
 GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
 
 ## 4. デプロイ後の確認

@@ -1,6 +1,5 @@
 imagePullSecrets:
   - name: ghcr-pull
 
-mcguildlink:
-  minecraft:
-    port: 25600
+mcLinkServer:
+  port: 25600

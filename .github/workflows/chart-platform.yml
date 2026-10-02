@@ -30,7 +30,8 @@ jobs:
           helm lint ./deploy/helm/platform
           -f ./deploy/helm/platform/values.prod.yaml
           --set-string bot.image.tag=ci
-          --set-string mcguildlink.image.tag=ci
+          --set-string mcLinkServer.image.tag=ci
+          --set-string publicApi.image.tag=ci
       - name: Package chart
         env:
           CHART_VERSION: ${{ steps.chart.outputs.version }}

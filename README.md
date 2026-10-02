@@ -1,6 +1,6 @@
 # Platform
 
-あんびる鯖 の Discord Bot、MCGuildLink、および k3s / Helm デプロイ設定を管理するモノレポです。
+あんびる鯖 の Discord Bot、MC Link Server、公開 API、DB Migrator、旧 Kotlin 版 MCGuildLink、および k3s / Helm デプロイ設定を管理するモノレポです。
 
 ## ドキュメント
 
@@ -12,9 +12,9 @@
 
 このリポジトリの本体コードは、ルートの [MIT License](LICENSE) で公開しています。
 
-BotとMCGuildLinkは別々のコンテナイメージとして配布するため、第三者ライセンスもイメージごとに同梱します。
+各アプリは別々のコンテナイメージとして配布するため、第三者ライセンスもイメージごとに同梱します。
 
-- Bot：`/app/THIRD_PARTY_LICENSES`
-- MCGuildLink：`/app/THIRD_PARTY_LICENSES/index.html` と同ディレクトリ内のライセンスファイル
+- Rust アプリ：`/app/THIRD_PARTY_LICENSES`
+- 旧 Kotlin 版：`/app/THIRD_PARTY_LICENSES/index.html` と同ディレクトリ内のライセンスファイル
 
 第三者ライセンス一覧は、コンテナイメージのビルド時に自動生成されます。DockerfileはPodmanでビルドできます。
