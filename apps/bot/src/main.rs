@@ -13,6 +13,7 @@ const REQUIRED_MIGRATIONS: &[i64] = &[
     20260929120000,
     20260929180000,
     20260930120000,
+    20260930180000,
 ];
 
 use std::sync::Arc;
@@ -110,10 +111,7 @@ async fn main() -> Result<(), AppError> {
         .context("Failed to create Discord client")?;
 
     install_signal_handler(&client);
-    tokio::spawn(features::mcguildlink::audit_delivery::run_delivery(
-        data,
-        client.http.clone(),
-    ));
+    tokio::spawn(features::mcguildlink::audit::run_delivery(data, client.http.clone()));
     let shutdown = client.shard_manager.get_shutdown_trigger();
     tokio::spawn(console::run(client.http.clone(), shutdown, output));
 

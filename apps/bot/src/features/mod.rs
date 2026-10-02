@@ -44,6 +44,7 @@ pub fn commands() -> Vec<AppCommand> {
             mcguildlink::create_panel,
             mcguildlink::links,
             mcguildlink::block,
+            mcguildlink::audit_retry,
             auth::create_keyword_button,
             question::question,
             pin::pin,
