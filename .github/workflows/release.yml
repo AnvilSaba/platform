@@ -174,7 +174,7 @@ jobs:
       - build-db-migrator-image
       - publish-platform-chart
     runs-on: ubuntu-latest
-    environment: production
+    environment: production/${{ inputs.app }}
     concurrency:
       group: deploy-production
       cancel-in-progress: false
