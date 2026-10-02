@@ -1,0 +1,188 @@
+[settings]
+idiomatic_version_file_enable_tools = [ "rust" ]
+
+[tools]
+"cargo:sqlx-cli" = { version = "0.8.6", default-features = false, features = [ "postgres", "rustls" ] }
+
+[task_config]
+shell = "{% if os() == 'windows' %}cmd /d /c{% else %}sh -c{% endif %}"
+
+[vars]
+engine = "wslc"
+null = "{% if os() == 'windows' %}NUL{% else %}/dev/null{% endif %}"
+
+[tasks."db:up"]
+description = "開発用 PostgreSQL を起動し、接続可能になるまで待つ"
+run = [
+    '{{ vars.engine }} start platform-local-postgres >{{ vars.null }} 2>&1 || {{ vars.engine }} run --detach --name platform-local-postgres --publish 127.0.0.1:55432:5432 --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=dev-password --env POSTGRES_DB=platform --volume platform-local_postgres-data:/var/lib/postgresql --volume "{{ config_root }}/deploy/postgres/bootstrap.sql:/docker-entrypoint-initdb.d/10-bootstrap.sql:ro" --volume "{{ config_root }}/deploy/postgres/local-passwords.sql:/docker-entrypoint-initdb.d/20-passwords.sql:ro" docker.io/library/postgres:18.6-trixie',
+    '{{ vars.engine }} exec -i platform-local-postgres sh -s -- platform < "{{ config_root }}/scripts/wait-postgres.sh"',
+]
+
+[tasks."db:down"]
+description = "開発用 PostgreSQL を停止する（データは保持）"
+run = "{{ vars.engine }} stop platform-local-postgres"
+
+[tasks."db:logs"]
+description = "開発用 PostgreSQL のログを表示する"
+run = "{{ vars.engine }} logs --tail 100 platform-local-postgres"
+
+[tasks."db:reset"]
+description = "開発用 DB の全データを削除し、再作成してマイグレーションを適用する"
+run = [
+    "{{ vars.engine }} rm --force platform-local-postgres",
+    "{{ vars.engine }} volume rm platform-local_postgres-data",
+    { task = "db:migrate" },
+]
+
+[tasks."db:test:up"]
+description = "テスト用 PostgreSQL を起動し、接続可能になるまで待つ"
+run = [
+    '{{ vars.engine }} start platform-local-postgres-test >{{ vars.null }} 2>&1 || {{ vars.engine }} run --detach --name platform-local-postgres-test --publish 127.0.0.1:55433:5432 --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=test-password --env POSTGRES_DB=platform_test --volume platform-local_postgres-test-data:/var/lib/postgresql docker.io/library/postgres:18.6-trixie',
+    '{{ vars.engine }} exec -i platform-local-postgres-test sh -s -- platform_test < "{{ config_root }}/scripts/wait-postgres.sh"',
+]
+
+[tasks."db:test:down"]
+description = "テスト用 PostgreSQL を停止する（データは保持）"
+run = "{{ vars.engine }} stop platform-local-postgres-test"
+
+[tasks."db:test:logs"]
+description = "テスト用 PostgreSQL のログを表示する"
+run = "{{ vars.engine }} logs --tail 100 platform-local-postgres-test"
+
+[tasks."db:test:reset"]
+description = "テスト用 DB の全データを削除し、空の DB を再作成する"
+run = [
+    "{{ vars.engine }} rm --force platform-local-postgres-test",
+    "{{ vars.engine }} volume rm platform-local_postgres-test-data",
+    { task = "db:test:up" },
+]
+
+[tasks."db:migrate"]
+description = "開発用 DB にマイグレーションを適用する"
+depends = [ "db:up" ]
+env.DATABASE_URL = "postgres://platform_db_migrator:migrator-dev-password@127.0.0.1:55432/platform"
+run = "sqlx migrate run"
+
+[tasks.check]
+description = "Rust ワークスペースの全ターゲットを検査する"
+run = "cargo check --locked --all-targets"
+
+[tasks.test]
+description = "テスト用 DB を起動し、Rust ワークスペースをテストする"
+depends = [ "db:test:up" ]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked"
+
+[tasks."sqlx:prepare"]
+description = "開発用 DB から SQL メタデータを更新する"
+depends = [ "db:migrate" ]
+env.DATABASE_URL = "postgres://postgres:dev-password@127.0.0.1:55432/platform"
+run = "cargo sqlx prepare --workspace -- --all-targets --locked"
+
+[tasks."sqlx:check"]
+description = "開発用 DB と SQL メタデータの一致を検査する"
+depends = [ "db:migrate" ]
+env.DATABASE_URL = "postgres://postgres:dev-password@127.0.0.1:55432/platform"
+run = "cargo sqlx prepare --check --workspace -- --all-targets --locked"
+
+[tasks."run:bot"]
+description = "開発用 DB を準備して Bot を起動する"
+depends = [ "db:migrate" ]
+dir = "apps/bot"
+env.DATABASE_URL = "postgres://platform_bot:bot-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p bot"
+
+[tasks."run:mc-link-server"]
+description = "開発用 DB を準備して MC Link Server を起動する"
+depends = [ "db:migrate" ]
+env.DATABASE_URL = "postgres://platform_mc_link_server:mc-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p mc-link-server"
+
+[tasks."run:public-api"]
+description = "開発用 DB を準備して公開 API を起動する"
+depends = [ "db:migrate" ]
+env.DATABASE_URL = "postgres://platform_public_api:api-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p public-api"
+
+[tasks.build]
+description = "Rust ワークスペースをビルドする（-p で個別指定）"
+run = "cargo build --locked"
+
+[tasks."check:helm"]
+description = "Helm Chart の lint とテンプレート生成を検査する"
+run = [
+    "helm lint deploy/helm/platform --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test",
+    "helm template platform deploy/helm/platform --namespace anvilsaba --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test >{{ vars.null }}",
+]
+
+[tasks."check:bot"]
+description = "bot の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p bot"
+
+[tasks."test:bot"]
+description = "bot をテストする"
+depends = [ "db:test:up" ]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p bot"
+
+[tasks."check:mc-link-server"]
+description = "mc-link-server の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p mc-link-server"
+
+[tasks."test:mc-link-server"]
+description = "mc-link-server をテストする"
+depends = [ "db:test:up" ]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p mc-link-server"
+
+[tasks."check:public-api"]
+description = "public-api の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p public-api"
+
+[tasks."test:public-api"]
+description = "public-api をテストする"
+depends = [ "db:test:up" ]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p public-api"
+
+[tasks."check:db-migrator"]
+description = "db-migrator の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p db-migrator"
+
+[tasks."test:db-migrator"]
+description = "db-migrator をテストする"
+run = "cargo test --locked -p db-migrator"
+
+[tasks."check:bot-macros"]
+description = "bot-macros の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p bot-macros"
+
+[tasks."test:bot-macros"]
+description = "bot-macros をテストする"
+run = "cargo test --locked -p bot-macros"
+
+[tasks."check:platform-database"]
+description = "platform-database の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p platform-database"
+
+[tasks."test:platform-database"]
+description = "platform-database をテストする"
+depends = [ "db:test:up" ]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p platform-database"
+
+[tasks."check:platform-signal"]
+description = "platform-signal の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p platform-signal"
+
+[tasks."test:platform-signal"]
+description = "platform-signal をテストする"
+run = "cargo test --locked -p platform-signal"
+
+[tasks.up]
+description = "開発用 DB を準備し、全アプリを並列起動する"
+depends = [ "run:bot", "run:mc-link-server", "run:public-api" ]
+
+[tasks.down]
+description = "開発用 DB を停止する（データは保持）"
+depends = [ "db:down" ]
