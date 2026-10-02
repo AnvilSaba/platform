@@ -25,6 +25,8 @@ podman build -f deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 --build-arg 
 k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c anvilsaba
 ```
 
+<a id="db-secrets"></a>
+
 ## DB と Secret の準備
 
 新規の統合 DB を管理者で作成し、`deploy/postgres/bootstrap.sql` を `psql -v ON_ERROR_STOP=1 -f` で一度適用する。

@@ -3,7 +3,9 @@
 import argparse
 from contextlib import closing
 import hashlib
+import json
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
@@ -37,12 +39,67 @@ def create_fixture(source):
         ])
 
 
+def check_document_commands():
+    """本番手順に掲載したコードを代表SQLiteとPVC記録でそのまま実行する。"""
+    document = (ROOT / "docs/mcguildlink-production-cutover.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"python3 - \"\$cutoverDir\" <<'PY'\n(.*?)\nPY", document, re.S)
+    block, = (code for code in blocks if "expected-whitelist.json" in code)
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "app.db"
+        create_fixture(source)
+        with closing(sqlite3.connect(source)) as db, db:
+            # 多対多の重複、Discord側のブロック、MC側のブロックを含む。
+            db.execute("INSERT INTO minecraft_accounts VALUES (?, ?, ?)",
+                       (11, uuid.UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff").bytes, "DiscordBlocked"))
+            db.executemany("INSERT INTO account_links VALUES (?, ?, ?, ?)", [
+                (3, 9, 11, "2026-09-30 14:00:00"),
+                (4, 2, 8, "2026-09-30 14:00:00"),
+            ])
+        before = hashlib.sha256(source.read_bytes()).digest()
+        command = [sys.executable, "-X", "utf8", "-", str(root)]
+        subprocess.run(command, input=block, text=True, encoding="utf-8", check=True, capture_output=True)
+        expected = [{"uuid": "12345678-1234-5678-9abc-123456789abc", "name": "Player"}]
+        assert json.loads((root / "expected-whitelist.json").read_text(encoding="utf-8")) == expected
+        assert hashlib.sha256(source.read_bytes()).digest() == before
+        # 出力済みファイルは上書きしない。
+        assert subprocess.run(command, input=block, text=True, encoding="utf-8", capture_output=True).returncode != 0
+        (root / "expected-whitelist.json").unlink()
+        with closing(sqlite3.connect(source)) as db, db:
+            db.execute("INSERT INTO blocked_minecraft_accounts VALUES (2, 3, 4)")
+        subprocess.run(command, input=block, text=True, encoding="utf-8", check=True, capture_output=True)
+        assert json.loads((root / "expected-whitelist.json").read_text(encoding="utf-8")) == []
+        rollback = (ROOT / "docs/mcguildlink-production-rollback.md").read_text(encoding="utf-8")
+        block, = (code for code in re.findall(r"<<'PY'\n(.*?)\nPY", rollback, re.S)
+                  if "rollback-postgres-values.json" in code)
+        old = {"metadata": {"uid": "old"}, "spec": {"resources": {"requests": {"storage": "10Gi"}}, "storageClassName": "old-class"}}
+        new = {"metadata": {"uid": "new"}, "spec": {"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "new-class"}}
+        (root / "old-postgres-pvc.json").write_text(json.dumps(old), encoding="utf-8")
+        for current in (None, old, new):
+            (root / "rollback-postgres-pvc.json").write_text(json.dumps(current) if current else "", encoding="utf-8")
+            subprocess.run(command, input=block, text=True, encoding="utf-8", check=True, capture_output=True)
+            postgres = json.loads((root / "rollback-postgres-values.json").read_text(encoding="utf-8"))["postgres"]
+            assert postgres["storageSize"] == ("20Gi" if current == new else "10Gi")
+            assert postgres["storageClassName"] == ("new-class" if current == new else "old-class")
+            if current == old:
+                assert "username" not in postgres and "secretName" not in postgres
+            else:
+                assert postgres["username"] == "platform_admin"
+                assert postgres["database"] == "platform"
+                assert postgres["secretName"] == "postgres-db-credentials"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--psql", nargs=argparse.REMAINDER,
                         help="専用テストDBに接続するpsqlコマンド（本番では実行しない）")
     parser.add_argument("--fixture-db", type=Path, help="手動リハーサル用の代表SQLiteを作成")
+    parser.add_argument("--document-check", action="store_true", help="DB接続なしで本番文書の比較用JSON・切り戻し設定生成を検証")
     args = parser.parse_args()
+    if args.document_check:
+        check_document_commands()
+        print("本番文書の比較用JSON・切り戻し設定生成: 成功")
+        return
     if args.fixture_db:
         if args.fixture_db.exists():
             parser.error("既存のSQLiteは上書きしません")
