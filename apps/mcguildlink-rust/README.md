@@ -1,22 +1,23 @@
-# MCGuildLink Rust 通信サーバー（Issue #57）
+# MCGuildLink Rust 通信サーバー
 
-Minecraft Java 26.3（プロトコル 777）の online-mode 本人認証後、Play に進めず Configuration ダイアログでコードを受け付ける。現段階では判定は固定であり、PostgreSQL のコード消費と紐付けは Issue #58 で接続する。本番環境へはまだ配置しない。
+Minecraft Java 26.3（プロトコル 777）の online-mode 本人認証後、Play に進めず Configuration ダイアログでコードを受け付ける。コードは PostgreSQL で照合し、成功時は紐付け、コード消費、監査ログ、配送予定を同一トランザクションで保存する。本番環境へはまだ配置しない。
 
 ```powershell
-$env:MCGUILDLINK_LISTEN = '127.0.0.1:25565'
+Copy-Item apps/mcguildlink-rust/config.example.toml config.toml
+$env:DATABASE_URL = 'postgres://platform_mcguildlink:<パスワード>@localhost:5432/platform'
 cargo run -p mcguildlink-rust
 ```
 
-未設定時は `127.0.0.1:25565` で待ち受ける。接続時に Mojang セッションサーバーへ問い合わせ、返された UUID と名前が Login Start の値と一致した場合だけ Configuration に進む。接続から 5 分でコード入力を打ち切る。
+作業ディレクトリの `config.toml` に待受アドレスを設定する。書式は [config.example.toml](config.example.toml) を参照。`DATABASE_URL` は必須。接続時に Mojang セッションサーバーへ問い合わせ、返された UUID と名前が Login Start の値と一致した場合だけ Configuration に進む。接続から 5 分でコード入力を打ち切る。
 
-| 入力コード | 固定結果 |
+| 入力コード | 結果 |
 | --- | --- |
-| `SUCCESS1` | 成功ダイアログ |
-| `ALREADY1` | 紐付け済みダイアログ |
-| `BLOCKED1` | ブロック済みダイアログ |
-| それ以外・空欄 | エラーを表示して再入力 |
+| 未使用の有効なコード | 成功ダイアログ。コードを消費 |
+| 対象の組み合わせが既に紐付け済み | 紐付け済みダイアログ。コードは保持 |
+| どちらかのアカウントがブロック済み | ブロック済みダイアログ。コードは保持 |
+| 無効・空欄 | エラーを表示して再入力 |
 
-固定の「成功」は永続化を伴わない。実クライアントでの確認は、正規アカウントで Java 26.3 を起動し、上記の接続先に入り、コード入力・結果・切断を画面上で確認する。別バージョン（例: 26.2）が Login に進めないことも確認する。確認結果は次の表へ記録する。
+実クライアントでの確認は、正規アカウントで Java 26.3 を起動し、Discord でコードを発行してから上記の接続先に入り、コード入力・結果・切断を画面上で確認する。別バージョン（例: 26.2）が Login に進めないことも確認する。確認結果は次の表へ記録する。
 
 | 確認項目 | 結果 |
 | --- | --- |

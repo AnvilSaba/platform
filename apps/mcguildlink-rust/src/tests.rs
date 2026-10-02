@@ -1,7 +1,8 @@
 use crate::{
     VERSION,
     identity::Name,
-    link_flow::configuration_with_timeout,
+    link_flow::configuration,
+    link_store::{CodeLinker, LinkResult},
     protocol::{
         Connection,
         connection::{decode_exact, packet_from},
@@ -9,8 +10,8 @@ use crate::{
         dialog::{self, Submission},
         packets::*,
     },
-    server::{serve, serve_with_verifier},
-    session::{SessionProfile, signed_sha1},
+    server::LinkServer,
+    session::{SessionProfile, SessionVerifier, signed_sha1},
 };
 use mc_protocol::{
     packet::{PacketId, RawPacket, UncompressedPacket},
@@ -18,18 +19,14 @@ use mc_protocol::{
     varint::VarInt,
 };
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey, rand_core::OsRng};
-use std::{
-    io::Write,
-    net::{TcpListener, TcpStream},
-    time::Duration,
-};
+use std::{io::Write, net::TcpStream, time::Duration};
 use uuid::Uuid;
 
-#[test]
-fn status_advertises_26_3_and_echoes_ping() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+#[tokio::test(flavor = "multi_thread")]
+async fn status_advertises_26_3_and_echoes_ping() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || serve(listener.accept().unwrap().0));
+    let server = tokio::spawn(async move { test_server().serve(listener.accept().await.unwrap().0).await });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     send_packet(
@@ -51,14 +48,14 @@ fn status_advertises_26_3_and_echoes_ping() {
     let pong = RawPacket::read_sync(&mut client).unwrap().as_uncompressed().unwrap();
     assert_eq!(pong.packet_id, 1);
     assert_eq!(decode_exact::<StatusPong>(&pong.payload).unwrap().timestamp, 123);
-    assert!(server.join().unwrap().is_ok());
+    assert!(server.await.unwrap().is_ok());
 }
 
-#[test]
-fn older_protocol_never_reaches_login() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+#[tokio::test(flavor = "multi_thread")]
+async fn older_protocol_never_reaches_login() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || serve(listener.accept().unwrap().0));
+    let server = tokio::spawn(async move { test_server().serve(listener.accept().await.unwrap().0).await });
     let mut client = TcpStream::connect(address).unwrap();
     send_packet(
         &mut client,
@@ -82,16 +79,16 @@ fn older_protocol_never_reaches_login() {
     let reason: LoginDisconnect<'_> = decode_exact(&disconnect.payload).unwrap();
     assert!(reason.reason.text.contains("26.3"));
     drop(client);
-    assert!(server.join().unwrap().is_err());
+    assert!(server.await.unwrap().is_err());
 }
 
-#[test]
-fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+#[tokio::test(flavor = "multi_thread")]
+async fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_secs(2))
+    let server = tokio::spawn(async move {
+        let mut connection = Connection::new(listener.accept().await.unwrap().0).unwrap();
+        configuration(&mut connection, &test_player(), Duration::from_secs(2), &TestLinker).await
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -127,16 +124,16 @@ fn configuration_retries_invalid_code_then_shows_result_and_disconnects() {
     assert_eq!(disconnect.packet_id, 2);
     let reason: NbtTextComponent<'_> = decode_exact(&disconnect.payload).unwrap();
     assert_eq!(reason.text, "正常に切断されました。");
-    assert!(server.join().unwrap().is_ok());
+    assert!(server.await.unwrap().is_ok());
 }
 
-#[test]
-fn configuration_times_out_with_disconnect_reason() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+#[tokio::test(flavor = "multi_thread")]
+async fn configuration_times_out_with_disconnect_reason() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
-        configuration_with_timeout(&mut connection, &test_player(), Duration::from_millis(100))
+    let server = tokio::spawn(async move {
+        let mut connection = Connection::new(listener.accept().await.unwrap().0).unwrap();
+        configuration(&mut connection, &test_player(), Duration::from_millis(100), &TestLinker).await
     });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -145,7 +142,7 @@ fn configuration_times_out_with_disconnect_reason() {
     assert_eq!(disconnect.packet_id, 2);
     let reason: NbtTextComponent<'_> = decode_exact(&disconnect.payload).unwrap();
     assert!(reason.text.contains("コードを入力する時間"));
-    assert!(server.join().unwrap().is_ok());
+    assert!(server.await.unwrap().is_ok());
 }
 
 #[test]
@@ -165,20 +162,12 @@ fn player_name_is_validated_in_login_and_session_profile() {
     assert!(Name::try_new("a").is_ok());
 }
 
-#[test]
-fn authenticated_login_enters_configuration_without_play() {
+#[tokio::test(flavor = "multi_thread")]
+async fn authenticated_login_enters_configuration_without_play() {
     let player_id = Uuid::parse_str("069a79f4-44e9-4726-a5be-fca90e38aaf5").unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        serve_with_verifier(listener.accept().unwrap().0, |name, _, _| {
-            assert_eq!(name, "TestPlayer");
-            Ok(SessionProfile {
-                id: player_id,
-                name: Name::try_new("TestPlayer").unwrap(),
-            })
-        })
-    });
+    let server = tokio::spawn(async move { test_server().serve(listener.accept().await.unwrap().0).await });
     let mut client = TcpStream::connect(address).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     send_packet(
@@ -247,7 +236,7 @@ fn authenticated_login_enters_configuration_without_play() {
             .packet_id,
         2
     );
-    assert!(server.join().unwrap().is_ok());
+    assert!(server.await.unwrap().is_ok());
 }
 
 fn read_packet(stream: &mut TcpStream) -> UncompressedPacket {
@@ -275,4 +264,33 @@ fn test_player() -> SessionProfile {
         id: Uuid::nil(),
         name: Name::try_new("TestPlayer").unwrap(),
     }
+}
+
+struct TestLinker;
+
+impl CodeLinker for TestLinker {
+    async fn consume(&self, code: &str, _: &SessionProfile) -> crate::AppResult<LinkResult> {
+        Ok(match code {
+            "SUCCESS1" => LinkResult::Success("検証用ユーザー".into()),
+            "ALREADY1" => LinkResult::AlreadyLinked,
+            "BLOCKED1" => LinkResult::Blocked,
+            _ => LinkResult::InvalidCode,
+        })
+    }
+}
+
+struct TestVerifier;
+
+impl SessionVerifier for TestVerifier {
+    async fn authenticate(&self, name: &str, _: &[u8; 16], _: &[u8]) -> crate::AppResult<SessionProfile> {
+        assert_eq!(name, "TestPlayer");
+        Ok(SessionProfile {
+            id: Uuid::parse_str("069a79f4-44e9-4726-a5be-fca90e38aaf5").unwrap(),
+            name: Name::try_new("TestPlayer").unwrap(),
+        })
+    }
+}
+
+fn test_server() -> LinkServer<TestVerifier, TestLinker> {
+    LinkServer::new(TestVerifier, TestLinker)
 }
