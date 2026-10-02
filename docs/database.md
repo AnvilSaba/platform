@@ -59,19 +59,20 @@ Bot 用 Secret（`bot.databaseSecretName`、既定 `bot-db-credentials`）の `p
 
 ## マイグレーション
 
-sqlx-cli 0.8.6 を使用する。リポジトリルートで実行する。
+リポジトリルートで実行する。
 
 ```powershell
-cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features postgres,rustls
-sqlx migrate add -r <名前>
+mise exec -- sqlx migrate add -r <名前>
 ```
 
 `migrations/` に up/down のペアが生成される。
 適用時は `DATABASE_URL` をマイグレーション専用ユーザーの接続先に設定する。
+ローカル開発では `mise run db:migrate` が DB 起動とマイグレーションをまとめて実行する。
+接続設定・アプリ起動・テストは [ローカル開発](development-and-integration-testing.md#ローカル開発) を参照する。
 
 ```powershell
-sqlx migrate run
-sqlx migrate info
+mise exec -- sqlx migrate run
+mise exec -- sqlx migrate info
 ```
 
 運用時は専用マイグレーション Job が実行する。アプリ自身はスキーマ変更を行わない。
@@ -91,7 +92,7 @@ DB 全体の履歴の整合性と適用は専用マイグレーション Job が
 適用済みのマイグレーションファイルは変更せず、新しいファイルを追加する。
 
 ```powershell
-sqlx migrate revert
+mise exec -- sqlx migrate revert
 ```
 
 初期マイグレーションの down は `mcguildlink` スキーマと保存データを削除する。
@@ -116,9 +117,9 @@ SQL またはスキーマを変更した場合は、開発用 DB にマイグレ
 その接続先を `DATABASE_URL` に指定してメタデータを更新する。
 
 ```powershell
-sqlx migrate run
-cargo sqlx prepare --workspace -- --all-targets --locked
-cargo sqlx prepare --check --workspace -- --all-targets --locked
+mise exec -- sqlx migrate run
+mise exec -- cargo sqlx prepare --workspace -- --all-targets --locked
+mise exec -- cargo sqlx prepare --check --workspace -- --all-targets --locked
 ```
 
 `prepare` は DB に接続して検証する。更新された `.sqlx/` もコミットする。

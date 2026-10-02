@@ -6,9 +6,8 @@
 
 開発時はWindows上で各アプリを個別に検証し、全体の統合テストではDocker DesktopまたはPodman上のk3dを使用します。
 
-- Rust/Cargo（`rust-toolchain.toml`に合わせる）
-- JDK 25
-- Docker DesktopまたはPodman
+- WSL Container CLI（切り替え可）
+- Docker DesktopまたはPodman（切り替え・k3d 統合テストに使用）
 - Helm
 - kubectl
 - k3d（Kubernetes統合テストを行う場合）
@@ -16,46 +15,49 @@
 
 本番用のDiscord token、Cloudflare Tunnel token、データベースの本番passwordは開発環境へ持ち込まないでください。
 
-## 2. 個別テスト
-
-### 2.1 Rust / Bot
-
-紐付けコードのテストには実 PostgreSQL と `DATABASE_URL` が必要です。
-[DB のセットアップとマイグレーション](database.md)を参照してください。
-テスト専用 DB は `platform_test` とし、本番 DB には接続しないでください。
-sqlx のテストごとの DB 作成には `CREATEDB`、権限ロールの初回作成には
-`CREATEROLE` が必要です。
+### ローカル開発
 
 リポジトリルートで実行します。
 
 ```powershell
-cargo check --workspace --locked --all-targets
-cargo test --workspace --locked
-cargo build --package bot --locked
+mise trust
+mise install
 ```
 
-### 2.2 MCGuildLink
+DB は WSL Container CLI／Podman／Docker の `run`・`start`・`exec` を直接使用して管理します。
+既定は `wslc` を使用します。引数で Podman／Docker に切り替えられます。
 
 ```powershell
-Push-Location apps/mcguildlink
-.\gradlew.bat --no-daemon test
-.\gradlew.bat --no-daemon installDist
-Pop-Location
+mise run test                 # WSL Container CLI（既定）
+mise -E podman run test        # Podman
+mise -E docker run test        # Docker
+mise run run:public-api
+mise run db:test:down
+```
+
+`mise run up` で開発用 DB の起動・マイグレーション後、3アプリを並列実行します。
+実行中はログが流れ続けます。Ctrl+C でアプリを終了し、`mise run down` で DB を停止します。
+Bot は `apps/bot/config.toml` に開発用設定が必要です。
+`mise -E podman run up`／`mise -E docker run up` で DB の起動先を切り替えられます。
+
+## 2. 個別テスト
+
+### 2.1 Rust
+
+リポジトリルートで実行します。`check`／`test` はワークスペース全体、`check:<クレート名>`／`test:<クレート名>` は個別のアプリ・クレートを対象にします。
+
+一覧は `mise tasks ls` で確認できます。DB が必要なテストはテスト用 DB を自動起動し、`DATABASE_URL` を設定します。
+テスト名や `--test` などの Cargo 引数は `--` の後に渡せます。
+
+```powershell
+mise run check:bot
+mise -E podman run test:public-api -- --test whitelist
 ```
 
 ### 2.3 Helm Chart
 
 ```powershell
-helm lint deploy/helm/platform `
-  --set bot.image.tag=test `
-  --set mcLinkServer.image.tag=test `
-  --set publicApi.image.tag=test
-
-helm template platform deploy/helm/platform `
-  --namespace anvilsaba `
-  --set bot.image.tag=test `
-  --set mcLinkServer.image.tag=test `
-  --set publicApi.image.tag=test | Out-Null
+mise run check:helm
 ```
 
 ### 2.4 コンテナイメージ
