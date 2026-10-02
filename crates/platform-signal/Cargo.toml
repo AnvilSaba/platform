@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "signal", "sync"] }
+tokio = { workspace = true, features = ["rt", "signal", "sync"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "time"] }
+tokio = { workspace = true, features = ["macros", "time"] }

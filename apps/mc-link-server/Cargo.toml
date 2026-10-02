@@ -6,19 +6,18 @@ license = "MIT"
 publish = false
 
 [dependencies]
-aes = "0.9.3"
-cfb8 = "0.9.1"
-fastnbt = "2.6"
-mc_protocol = { version = "2.2.0", default-features = false }
-nutype = { version = "0.8.0", features = [ "serde" ] }
-reqwest = { version = "0.13", features = [ "json", "query" ] }
-rsa = { version = "0.9", features = [ "getrandom" ] }
-serde = { version = "1", features = [ "derive" ] }
-serde_json = "1"
-serde_with = { version = "3", features = [ "json" ] }
-sha1 = "0.11"
-uuid = { version = "1", features = [ "serde", "v4" ] }
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros", "uuid" ] }
-tokio = { version = "1", features = [ "rt-multi-thread", "macros", "net", "io-util", "time", "sync" ] }
+aes = { workspace = true }
+cfb8 = { workspace = true }
+fastnbt = { workspace = true }
+mc_protocol = { workspace = true }
+nutype = { workspace = true, features = [ "serde" ] }
+reqwest = { workspace = true, features = [ "json", "query" ] }
+rsa = { workspace = true, features = [ "getrandom" ] }
+serde = { workspace = true, features = [ "derive" ] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+uuid = { workspace = true, features = [ "serde", "v4" ] }
+sqlx = { workspace = true, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros", "uuid" ] }
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "net", "io-util", "time", "sync" ] }
 platform-database = { path = "../../crates/platform-database" }
 platform-signal = { path = "../../crates/platform-signal" }

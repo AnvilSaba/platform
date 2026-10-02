@@ -7,5 +7,5 @@ publish = false
 
 [dependencies]
 platform-database = { path = "../../crates/platform-database" }
-sqlx = { version = "0.8", default-features = false, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
-tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }
+sqlx = { workspace = true, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros" ] }
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros" ] }
