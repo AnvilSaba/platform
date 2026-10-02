@@ -29,6 +29,8 @@ sqlx = { version = "0.8", default-features = false, features = [
     "postgres",
     "migrate",
     "macros",
+    "chrono",
+    "uuid",
 ] }
 sysinfo = "0.39"
 thiserror = "2"
@@ -36,6 +38,7 @@ tokio = { version = "1.0", features = [ "rt-multi-thread", "macros", "signal", "
 toml = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [ "env-filter" ] }
+uuid = "1"
 
 [dependencies.serenity]
 git = "https://github.com/serenity-rs/serenity"
@@ -44,3 +47,10 @@ rev = "37b9f433ada8b9ccc5f93f04826403b175855f86"
 [dependencies.poise]
 git = "https://github.com/serenity-rs/poise"
 rev = "b189f7c1cfd47eb4e7863683a49c389a9702ce23"
+
+[dev-dependencies]
+axum = "0.8"
+http-body-util = "0.1"
+public-api = { path = "../public-api" }
+serde_json = "1"
+tower = { version = "0.5", features = [ "util" ] }

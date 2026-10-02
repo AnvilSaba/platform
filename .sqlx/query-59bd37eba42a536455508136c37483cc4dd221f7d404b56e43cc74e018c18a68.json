@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.user_id::text AS \"discord_user_id!\", d.last_known_username AS \"discord_name!\", m.uuid AS \"minecraft_uuid!\", m.last_known_name AS \"minecraft_name!\", l.linked_at AS \"linked_at!\" FROM mcguildlink.account_links l JOIN mcguildlink.discord_accounts d ON d.id = l.discord_account_id JOIN mcguildlink.minecraft_accounts m ON m.id = l.minecraft_account_id WHERE ($1::text IS NULL OR d.user_id = $1::text::numeric) AND ($2::uuid IS NULL OR m.uuid = $2) ORDER BY l.linked_at DESC, d.user_id, m.uuid",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "discord_user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "minecraft_uuid!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "minecraft_name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "linked_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "59bd37eba42a536455508136c37483cc4dd221f7d404b56e43cc74e018c18a68"
+}

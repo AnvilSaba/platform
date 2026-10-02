@@ -8,6 +8,7 @@ mod pin;
 mod question;
 mod thread_auto_invite;
 
+use sqlx::PgPool;
 use std::borrow::Cow;
 
 use crate::{
@@ -23,9 +24,11 @@ use crate::{
     },
 };
 
-pub fn event_handlers(config: &AppConfig) -> BotEventHandlers {
+pub fn event_handlers(config: &AppConfig, database: &PgPool) -> BotEventHandlers {
     BotEventHandlers::new()
-        .add(mcguildlink::handle_link_event)
+        .add(mcguildlink::LinkCodeEventHandler::new(database))
+        .add(mcguildlink::AccountLinksEventHandler::new(database))
+        .add(mcguildlink::GuildMembershipEventHandler::new(database))
         .add(handle_honeypot_event)
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
@@ -39,6 +42,7 @@ pub fn commands() -> Vec<AppCommand> {
     build_commands(
         [
             mcguildlink::create_panel,
+            mcguildlink::links,
             auth::create_keyword_button,
             question::question,
             pin::pin,

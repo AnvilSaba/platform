@@ -64,9 +64,17 @@ async fn bot_role_allows_code_storage_but_rejects_schema_and_unrelated_changes(p
         .await
         .unwrap();
     assert_eq!(code, "AC234679");
+    assert_eq!(
+        sqlx::query("DELETE FROM mcguildlink.link_requests")
+            .execute(&bot)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
     for forbidden in [
         "CREATE TABLE mcguildlink.forbidden (id integer)",
-        "DELETE FROM mcguildlink.link_requests",
+        "DELETE FROM mcguildlink.audit_logs",
         "DELETE FROM public._sqlx_migrations",
         "INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ('00000000-0000-0000-0000-000000000001', 'player')",
         "SELECT * FROM mcguildlink.block_groups",

@@ -7,7 +7,7 @@ mod utils;
 
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 // Bot が利用するスキーマだけを必須とする。
-const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758];
+const REQUIRED_MIGRATIONS: &[i64] = &[20260926184758, 20260929120000];
 
 use std::sync::Arc;
 
@@ -94,7 +94,7 @@ async fn main() -> Result<(), AppError> {
     let mut client = create_client(
         config.bot.token.clone(),
         intents,
-        event_handlers(&config)
+        event_handlers(&config, &database)
             .add(MainEventHandler::new())
             .on_error(handle_event_error),
     )

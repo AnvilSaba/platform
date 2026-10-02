@@ -1,12 +1,12 @@
-mod code_generator;
-mod discord;
-mod ports;
-mod queries;
-mod repository;
-mod service;
-mod types;
+mod guild_membership;
+mod linking;
+mod links;
+mod panel;
 
-pub use discord::{create_panel, handle_link_event};
+pub use guild_membership::GuildMembershipEventHandler;
+pub use linking::LinkCodeEventHandler;
+pub use links::{AccountLinksEventHandler, links};
+pub use panel::create_panel;
 
 #[cfg(test)]
 mod test_support;
