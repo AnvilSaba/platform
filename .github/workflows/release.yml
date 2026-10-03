@@ -13,7 +13,6 @@ on:
           - bot
           - mc-link-server
           - public-api
-          - db-migrator
           - chart
       bump:
         description: バージョン更新（auto は Conventional Commits から判定）
@@ -134,7 +133,7 @@ jobs:
       release_ref: ${{ needs.release.outputs.tag }}
 
   build-db-migrator-image:
-    if: ${{ inputs.app == 'db-migrator' && !inputs.dry_run }}
+    if: ${{ contains(fromJSON('["bot", "mc-link-server", "public-api"]'), inputs.app) && !inputs.dry_run }}
     needs: release
     permissions:
       contents: read
@@ -160,10 +159,9 @@ jobs:
       inputs.deploy &&
       needs.release.result == 'success' &&
       (
-        (inputs.app == 'bot' && needs.build-bot-image.result == 'success') ||
-        (inputs.app == 'mc-link-server' && needs.build-mc-link-server-image.result == 'success') ||
-        (inputs.app == 'public-api' && needs.build-public-api-image.result == 'success') ||
-        (inputs.app == 'db-migrator' && needs.build-db-migrator-image.result == 'success') ||
+        (inputs.app == 'bot' && needs.build-bot-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
+        (inputs.app == 'mc-link-server' && needs.build-mc-link-server-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
+        (inputs.app == 'public-api' && needs.build-public-api-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
         (inputs.app == 'chart' && needs.publish-platform-chart.result == 'success')
       )
     needs:
@@ -182,10 +180,13 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
       - uses: ./.github/actions/deploy-production
         with:
           target: ${{ inputs.app }}
           release-ref: ${{ needs.release.outputs.tag }}
+          migrator-image-tag: ${{ needs.build-db-migrator-image.outputs.image_tag }}
         env:
           DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}

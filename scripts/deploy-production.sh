@@ -5,8 +5,11 @@ set -Eeuo pipefail
 target="${1:-}"
 release_ref="${2:-}"
 chart_version="${3:-}"
+release_revision="${4:-}"
+migrator_image_tag="${5:-}"
+release_version="${release_ref#*/}"
 
-if [[ ! "$target" =~ ^(bot|mc-link-server|public-api|db-migrator|chart)$ ]]; then
+if [[ ! "$target" =~ ^(bot|mc-link-server|public-api|chart)$ ]]; then
   echo "デプロイ対象が不正です: $target" >&2
   exit 2
 fi
@@ -19,7 +22,12 @@ if [[ ! "$chart_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 
-release_version="${release_ref#*/}"
+if [[ "$target" != chart ]]; then
+  if [[ ! "$release_revision" =~ ^[0-9a-f]{40}$ || "$migrator_image_tag" != "sha-$release_revision" ]]; then
+    echo "Migrator にはアプリのリリースコミットに対応する完全な SHA タグが必要です。" >&2
+    exit 2
+  fi
+fi
 
 for command in flock helm; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -62,9 +70,6 @@ case "$target" in
   public-api)
     image_args+=(--set-string "publicApi.image.tag=$release_version")
     ;;
-  db-migrator)
-    image_args+=(--set dbMigrator.enabled=true --set-string "dbMigrator.image.tag=$release_version")
-    ;;
 esac
 
 helm pull "$chart" \
@@ -79,14 +84,31 @@ if [[ ! -f "$values_file" ]]; then
   exit 1
 fi
 
-helm upgrade "$helm_release" "$chart_path" \
-  --namespace "$namespace" \
-  --reset-then-reuse-values \
-  --values "$values_file" \
-  "${image_args[@]}" \
-  --rollback-on-failure \
-  --wait=watcher \
-  --timeout 10m \
+upgrade_args=(
+  "$helm_release" "$chart_path"
+  --namespace "$namespace"
+  --reset-then-reuse-values
+  --values "$values_file"
+  --rollback-on-failure
+  --wait=watcher
+  --timeout 10m
   --history-max 20
+)
+
+if [[ "$target" != chart ]]; then
+  # pre-upgrade hook の Job 完了までは既存リソースを更新しない。
+  # この段階ではどのアプリの image tag も変更しない。
+  helm upgrade "${upgrade_args[@]}" \
+    --set dbMigrator.enabled=true \
+    --set-string "dbMigrator.image.tag=$migrator_image_tag"
+fi
+
+if ! helm upgrade "${upgrade_args[@]}" "${image_args[@]}"; then
+  if [[ "$target" != chart ]]; then
+    # rollout の rollback 先は migration 段階。旧アプリのまま Job を無効に戻す。
+    helm upgrade "${upgrade_args[@]}" --set dbMigrator.enabled=false --no-hooks
+  fi
+  exit 1
+fi
 
 helm status "$helm_release" --namespace "$namespace"

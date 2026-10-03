@@ -1,5 +1,6 @@
 [package]
 name = "db-migrator"
+# Cargo のパッケージメタデータ。独立したリリースバージョンとしては使用しない。
 version = "0.1.0"
 edition = "2024"
 license = "MIT"

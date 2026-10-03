@@ -156,17 +156,17 @@ http://mcguildlink-http:8080
 
 ### 2.6 GitHub Actionsの本番環境
 
-デプロイ対象ごとに、次の5つのEnvironmentを作成します。
+デプロイ対象ごとに、次の4つのEnvironmentを作成します。
 
 ```text
 production/bot
 production/mc-link-server
 production/public-api
-production/db-migrator
 production/chart
 ```
 
 既存の`production` Environmentは、過去のデプロイ履歴のため削除せず残します。手動デプロイでは次の指定で対象別の環境を使い、Releaseでは`inputs.app`を使います。[GitHubのWorkflow構文](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idenvironment)
+migration はデプロイ対象アプリの Environment 内で自動実行します。
 
 ```yaml
 environment: production/${{ inputs.target }}
@@ -197,7 +197,7 @@ environment: production/${{ inputs.target }}
 各Environmentは共通のHelm release（`platform`）を更新するため、workflowの共通concurrencyとサーバー側の`flock`による排他を維持します。Environmentを分けても、同一releaseへの同時更新を許可しません。
 
 ## 3. GitHub Actions からデプロイ
-Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。対象に応じて`production/bot`、`production/mc-link-server`、`production/public-api`、`production/db-migrator`、`production/chart`のEnvironmentを参照します。
+Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。対象に応じて`production/bot`、`production/mc-link-server`、`production/public-api`、`production/chart`のEnvironmentを参照します。アプリでは、指定した Git tag と同じ revision の Migrator Job を先行実行し、成功後にのみアプリを更新します。Job は最後に無効な通常状態へ戻します。
 
 GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
 

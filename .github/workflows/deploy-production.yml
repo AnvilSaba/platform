@@ -13,7 +13,6 @@ on:
           - bot
           - mc-link-server
           - public-api
-          - db-migrator
           - chart
       release_ref:
         description: デプロイする既存リリースタグ

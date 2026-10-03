@@ -8,6 +8,9 @@ inputs:
   release-ref:
     description: デプロイするリリースタグ
     required: true
+  migrator-image-tag:
+    description: 同じリリースコミットからビルドした Migrator タグ（省略時はリリースタグから解決）
+    default: ""
 
 runs:
   using: composite
@@ -17,13 +20,26 @@ runs:
         ref: ${{ inputs.release-ref }}
         path: .deploy-release
 
-    - name: Resolve chart version
+    - name: Resolve release artifacts
       id: chart
       shell: bash
       working-directory: .deploy-release
+      env:
+        TARGET: ${{ inputs.target }}
+        MIGRATOR_IMAGE_TAG: ${{ inputs.migrator-image-tag }}
       run: |
         chart_version="$(ruby -e 'require "yaml"; puts YAML.safe_load_file("deploy/helm/platform/Chart.yaml").fetch("version")')"
         echo "chart_version=$chart_version" >> "$GITHUB_OUTPUT"
+        revision="$(git rev-parse HEAD)"
+        echo "revision=$revision" >> "$GITHUB_OUTPUT"
+        if [[ "$TARGET" != chart ]]; then
+          migrator_image_tag="${MIGRATOR_IMAGE_TAG:-sha-$revision}"
+          if [[ "$migrator_image_tag" != "sha-$revision" ]]; then
+            echo "Migrator とアプリの Git revision が一致しません。" >&2
+            exit 1
+          fi
+          echo "migrator_image_tag=$migrator_image_tag" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Configure SSH
       shell: bash
@@ -50,7 +66,8 @@ runs:
         TARGET: ${{ inputs.target }}
         RELEASE_REF: ${{ inputs.release-ref }}
         CHART_VERSION: ${{ steps.chart.outputs.chart_version }}
-      working-directory: .deploy-release
+        RELEASE_REVISION: ${{ steps.chart.outputs.revision }}
+        MIGRATOR_IMAGE_TAG: ${{ steps.chart.outputs.migrator_image_tag }}
       run: |
         ssh_port="${DEPLOY_SSH_PORT:-22}"
         if [[ ! "$ssh_port" =~ ^[0-9]+$ ]]; then
@@ -66,5 +83,5 @@ runs:
           -o StrictHostKeyChecking=yes \
           -o UserKnownHostsFile=~/.ssh/known_hosts \
           "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" \
-          bash -s -- "$TARGET" "$RELEASE_REF" "$CHART_VERSION" \
+          bash -s -- "$TARGET" "$RELEASE_REF" "$CHART_VERSION" "$RELEASE_REVISION" "$MIGRATOR_IMAGE_TAG" \
           < scripts/deploy-production.sh

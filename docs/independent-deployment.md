@@ -4,15 +4,15 @@
 
 ## 配布単位
 
-| 対象 / タグ接頭辞 | イメージ | Helm 設定 | 接続ロール |
+| 配布物 | イメージ | Helm 設定 | 接続ロール |
 |---|---|---|---|
 | bot | ghcr.io/anvilsaba/bot | bot | platform_bot |
 | mc-link-server | ghcr.io/anvilsaba/mc-link-server | mcLinkServer | platform_mc_link_server |
 | public-api | ghcr.io/anvilsaba/public-api | publicApi | platform_public_api |
-| db-migrator | ghcr.io/anvilsaba/db-migrator | dbMigrator | platform_db_migrator |
+| db-migrator（アプリに付随する成果物） | ghcr.io/anvilsaba/db-migrator | dbMigrator | platform_db_migrator |
 
-GitHub Actions の Release は各対象を別タグでビルド・公開する。通常は deploy=false とする。
-Production deployment と既存デプロイスクリプトは対象の image.tag を更新し、他のタグ・replicas を維持する。
+GitHub Actions の Release は bot・mc-link-server・public-api・chart を選択できる。各アプリの実リリースでは、同じリリースコミットからアプリと Migrator の image をビルド・公開する。Migrator を個別にリリースする操作はない。
+Release の deploy=true、または後日の Production deployment でアプリを指定すると、対応する Migrator の正常完了後に対象の image.tag を更新し、他のアプリのタグ・replicas を維持する。アプリは従来どおり `vX.Y.Z`、Migrator は同じリリースコミットの `sha-<完全なGit SHA>` タグを使う。
 MC・API のタグは replicas=0 でも必須。起動するかどうかは replicas で制御する。MC・API の既定 replicas は1。初回の DB 準備・マイグレーション中は明示的に0へ上書きし、完了後に1へ戻す。
 Bot の監査送信役は1つなので replicas=1 を維持する。公開 API の HTTP Service は ClusterIP のままにする。
 
@@ -55,7 +55,7 @@ Bot の設定は `apps/bot/config.sample.toml` を基に bot-config の config.t
 ## 配置順序
 
 まず開発手順で k3d と namespace を準備し、PostgreSQL 初期化ユーザーのパスワードを `postgres-db-credentials` Secret の `password` キーへ登録する。
-初回はアプリと Job を無効にして PostgreSQL を先に配置し、Ready 後に DB ロールと Secret を準備する。続いて Job を完了させ、その後でアプリを起動する。post-install/post-upgrade hook は PostgreSQL の配置後に実行され、Helm は Job の完了を待つ。準備中のアプリは replicas=0 とし、各リソースの Ready を個別に確認する。
+初回はアプリと Job を無効にして PostgreSQL を先に配置し、Ready 後に DB ロールと Secret を準備する。続いて Job を完了させ、その後でアプリを起動する。Job は post-install/pre-upgrade hook とする。初回インストールでは PostgreSQL 配置後、既存 release の upgrade ではリソース更新前に実行され、Helm は Job の正常完了まで待機する。準備中のアプリは replicas=0 とし、各リソースの Ready を個別に確認する。
 
 ```powershell
 helm upgrade --install platform deploy/helm/platform -n anvilsaba --create-namespace -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 --set publicApi.replicas=0 --set dbMigrator.enabled=false --timeout 10m
@@ -72,15 +72,20 @@ kubectl run curl-test -n anvilsaba --rm --restart=Never -i --image=curlimages/cu
 
 専用 apps/db-migrator アプリは `sqlx::migrate!()` で SQL をバイナリへ埋め込み、sqlx の適用履歴・チェックサム・ロックを使用する。platform-database は接続設定・互換性検証を共有するライブラリとして保持し、リリース対象にしない。
 失敗した Job は残し、ログと履歴を確認してから再実行する。アプリ自身は DDL を実行しない。
-Job を無効化した通常のリリースではマイグレーションは実行しない。
+ここまでが初回セットアップである。通常のアプリデプロイでは `scripts/deploy-production.sh` が次を自動実行する。
+
+1. 既存アプリのタグを引き継ぎ、`dbMigrator.enabled=true` と同じ revision の Migrator タグで Helm upgrade する。pre-upgrade Job の正常完了を待つ。
+2. 成功した場合のみ、`dbMigrator.enabled=false` と対象アプリのリリースバージョンで再度 Helm upgrade する。他のアプリは更新しない。
+
+migration 失敗・タイムアウト時は後段へ進まない。rollout 失敗時は Helm が旧アプリへ rollback し、Job を無効に戻す。失敗した Job はログ調査用に残す。DB 変更がない場合も Job を実行し、SQLx の履歴により適用済み SQL を再適用しない。Chart だけのデプロイは migration を実行しない。
 
 ## 互換期間と更新順序
 
 既存3アプリは必要な migration ID・成功状態・チェックサムを起動時に検証する。
 未適用や不一致ではポートを開く前に失敗する。未知の追加履歴は許可するが、互換性の自動判定ではない。
 
-1. 追加的なテーブル・列・権限を専用 Job で先に適用する。既存 SQL は変更しない。
-2. 旧アプリが新スキーマで動くことを検証した後、変更が必要なアプリだけを更新する。
+1. リリース前に旧アプリが新スキーマで動くことを検証する。追加的なテーブル・列・権限を migration に含め、適用済み SQL は変更しない。
+2. 変更が必要なアプリをリリース・デプロイする。専用 Job の先行実行と完了待機はデプロイ処理が行う。
 3. 旧アプリがすべて停止し、切り戻し対象から外れるまで旧列・関数・権限を保持する。この期間が旧新版の共存期間となる。
 4. 破壊的変更は別リリースで、影響する全アプリを対応・停止した後に適用する。
 
@@ -93,6 +98,7 @@ Helm のロールバックでは DB を戻せない。down SQL はデータ削�
 既存のテストでコード発行・再利用・消費、紐付け、解除、関連ブロック、HTTP 一覧、503、監査の原子性、配送失敗・再開を確認する。
 実 Discord の常時接続は不要。`platform-database` の互換性テストは旧・新の必須 ID リストを同じ DB で適用前後に検証する。
 `scripts/check-deployment.ps1` は分離構成・本番既定値・必須タグを検証する。
+`cargo test --locked -p db-migrator` はテスト用 PostgreSQL 上で適用済み migration の反復実行と履歴の不変性を検証し、通常の Rust CI に含まれる。
 
 統合クラスタでは Pod の起動、HTTP、PostgreSQL 再起動後のデータ保持を確認する。
 障害確認はテスト環境で PostgreSQL を一時停止し、API の /whitelist.json が503になることと、復旧後に200へ戻ることを確認する。
