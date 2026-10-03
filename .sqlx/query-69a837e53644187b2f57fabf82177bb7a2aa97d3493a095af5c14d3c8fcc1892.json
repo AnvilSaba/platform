@@ -6,17 +6,30 @@
       {
         "ordinal": 0,
         "name": "event_type!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "event_type"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "actor_discord_user_id!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 2,
         "name": "target_minecraft_name!",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "target_minecraft_name"
+          }
+        }
       }
     ],
     "parameters": {

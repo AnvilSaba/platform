@@ -42,7 +42,7 @@ serenity = { git = "https://github.com/serenity-rs/serenity", rev = "37b9f433ada
 sha1 = "0.11"
 sha2 = "0.10"
 similar = "3.1"
-sqlx = { version = "0.8", default-features = false }
+sqlx = { version = "0.9", default-features = false }
 syn = "2"
 sysinfo = "0.39"
 thiserror = "2"

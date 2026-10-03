@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "revision",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.whitelist_revision",
+            "name": "revision"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "last_modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.whitelist_revision",
+            "name": "last_modified_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "if_modified_since_safe",
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.whitelist_revision",
+            "name": "if_modified_since_safe"
+          }
+        }
       }
     ],
     "parameters": {

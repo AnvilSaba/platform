@@ -15,6 +15,17 @@
 
 本番用のDiscord token、Cloudflare Tunnel token、データベースの本番passwordは開発環境へ持ち込まないでください。
 
+### Rust ツールチェーン
+
+workspace は SQLx `0.9` を指定し、ライブラリと CLI を `0.9.0` に揃えます。
+各利用クレートの `build.rs` は `cargo:rerun-if-changed=../../migrations` を出力し、
+Rust ソースを変更せずに新しいマイグレーションを追加した場合も再ビルドします。
+これは [SQLx 0.9.0 の公式資料](https://docs.rs/sqlx/0.9.0/sqlx/macro.migrate.html#stable-rust-cargo-build-script)
+にある Stable Rust の Cargo build script による検知方法です。
+
+Nightly は、ReFS の増分コンパイル修正、Cargo の `min-publish-age`、rustfmt の `group_imports` も利用するため固定しています。
+GitHub Actions の SQLx CLI も `mise.toml` から導入するため、CLI のバージョン指定は `mise.toml` に集約します。
+
 ### ローカル開発
 
 リポジトリルートで実行します。

@@ -11,13 +11,14 @@ pub const FIRST: &str = "00000000-0000-0000-0000-000000000001";
 pub const SECOND: &str = "00000000-0000-0000-0000-000000000002";
 
 pub async fn seed_linked_accounts(pool: &PgPool) {
-    sqlx::raw_sql(&format!(
+    // 埋め込む値はこのモジュールの固定 UUID のみで、外部入力を含まない。
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "INSERT INTO mcguildlink.discord_accounts (user_id, last_known_username) VALUES (10, 'alice'), (20, 'bob');
          INSERT INTO mcguildlink.minecraft_accounts (uuid, last_known_name) VALUES ('{FIRST}', 'First'), ('{SECOND}', 'Second');
          INSERT INTO mcguildlink.account_links (discord_account_id, minecraft_account_id)
              VALUES (1, 1), (1, 2), (2, 1);
          INSERT INTO mcguildlink.link_requests (discord_account_id, code) VALUES (1, 'ALICECODE');"
-    ))
+    )))
     .execute(pool).await.unwrap();
 }
 

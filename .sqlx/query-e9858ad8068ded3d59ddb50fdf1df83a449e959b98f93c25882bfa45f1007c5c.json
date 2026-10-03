@@ -6,72 +6,146 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "event_type",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "event_type"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "occurred_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "occurred_at"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "actor_type",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "actor_type"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "actor_minecraft_uuid",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "actor_minecraft_uuid"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "actor_minecraft_name",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "actor_minecraft_name"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "actor_discord_user_id",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 7,
         "name": "actor_discord_username",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "actor_discord_username"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "target_discord_user_id!",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 9,
         "name": "target_discord_username",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "target_discord_username"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "target_minecraft_uuid",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "target_minecraft_uuid"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "target_minecraft_name",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "target_minecraft_name"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "related_discord_accounts: Json<Vec<DiscordSnapshot>>",
-        "type_info": "Jsonb"
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "related_discord_accounts"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "related_minecraft_accounts: Json<Vec<MinecraftSnapshot>>",
-        "type_info": "Jsonb"
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "mcguildlink.audit_logs",
+            "name": "related_minecraft_accounts"
+          }
+        }
       }
     ],
     "parameters": {

@@ -2,7 +2,7 @@
 idiomatic_version_file_enable_tools = [ "rust" ]
 
 [tools]
-"cargo:sqlx-cli" = { version = "0.8.6", default-features = false, features = [ "postgres", "rustls" ] }
+"cargo:sqlx-cli" = { version = "0.9.0", default-features = false, features = [ "postgres", "rustls" ] }
 
 [task_config]
 shell = "{% if os() == 'windows' %}cmd /d /c{% else %}sh -c{% endif %}"

@@ -113,14 +113,16 @@ SQL は `sqlx::query!` と `sqlx::query_scalar!` でコンパイル時に検証�
 リポジトリの `.sqlx/` に保存したメタデータを使うため、通常のビルドは DB 接続を必要としない。
 `.cargo/config.toml` は `SQLX_OFFLINE=true` を設定する。
 
-SQL またはスキーマを変更した場合は、開発用 DB にマイグレーションを適用し、
-その接続先を `DATABASE_URL` に指定してメタデータを更新する。
+SQL またはスキーマを変更した場合は、次のタスクでローカル開発用 DB にマイグレーションを適用し、
+メタデータを更新・検査する。
 
 ```powershell
-mise exec -- sqlx migrate run
-mise exec -- cargo sqlx prepare --workspace -- --all-targets --locked
-mise exec -- cargo sqlx prepare --check --workspace -- --all-targets --locked
+mise run sqlx:prepare
+mise run sqlx:check
 ```
 
 `prepare` は DB に接続して検証する。更新された `.sqlx/` もコミットする。
 CI はマイグレーション適用後の DB とメタデータの一致を確認する。
+上記タスクはローカル開発用 DB の起動・マイグレーションも行う。
+マイグレーションを埋め込む各クレートの `build.rs` が `cargo:rerun-if-changed` で
+ディレクトリを追跡するため、Rust ソースを変更せずに SQL ファイルを追加した場合も再ビルドする。
