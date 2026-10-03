@@ -300,14 +300,16 @@ mod tests {
         let delivery = AuditDelivery::new(test_support::bot_pool(&pool).await, sender.clone(), ChannelId::new(123));
         delivery.deliver_pending().await.unwrap();
 
-        let sent = sender.0.lock().unwrap();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].channel_id, ChannelId::new(123));
-        assert!(sent[0].description.contains("DiscordOld"));
-        assert!(sent[0].description.contains("AliceOld"));
-        assert_eq!(sent[0].event_id, 1);
-        assert_eq!(sent[0].occurred_at.timestamp(), 1_790_685_296);
-        let message = serde_json::to_value(sent[0].clone().into_message()).unwrap();
+        let message = {
+            let sent = sender.0.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].channel_id, ChannelId::new(123));
+            assert!(sent[0].description.contains("DiscordOld"));
+            assert!(sent[0].description.contains("AliceOld"));
+            assert_eq!(sent[0].event_id, 1);
+            assert_eq!(sent[0].occurred_at.timestamp(), 1_790_685_296);
+            serde_json::to_value(sent[0].clone().into_message()).unwrap()
+        };
         assert_eq!(message["flags"], 32768);
         assert!(message["content"].as_str().unwrap_or_default().is_empty());
         assert!(message["embeds"].as_array().is_none_or(Vec::is_empty));
@@ -417,12 +419,14 @@ mod tests {
         .deliver_pending()
         .await
         .unwrap();
-        let first = sender.0.lock().unwrap();
-        let second = retry_sender.0.lock().unwrap();
-        assert_eq!(first.len(), 1);
-        assert_eq!(second.len(), 1);
-        assert_eq!(first[0].event_id, second[0].event_id);
-        assert_eq!(second[0].channel_id, ChannelId::new(456));
+        {
+            let first = sender.0.lock().unwrap();
+            let second = retry_sender.0.lock().unwrap();
+            assert_eq!(first.len(), 1);
+            assert_eq!(second.len(), 1);
+            assert_eq!(first[0].event_id, second[0].event_id);
+            assert_eq!(second[0].channel_id, ChannelId::new(456));
+        }
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcguildlink.audit_outbox")
                 .fetch_one(&pool)
