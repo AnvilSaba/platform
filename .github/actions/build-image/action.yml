@@ -19,15 +19,23 @@ inputs:
   platforms:
     description: 配布アーキテクチャ
     default: linux/arm64
+outputs:
+  sha-tag:
+    description: ビルドした Git revision の完全な SHA タグ
+    value: ${{ steps.release.outputs.sha_tag }}
 runs:
   using: composite
   steps:
-    - name: Resolve release image tag
+    - name: Resolve image tags from checkout
       id: release
       shell: bash
       env:
         RELEASE_REF: ${{ inputs.release-ref }}
-      run: echo "image_tag=${RELEASE_REF#*/}" >> "$GITHUB_OUTPUT"
+      run: |
+        revision="$(git rev-parse HEAD)"
+        echo "revision=$revision" >> "$GITHUB_OUTPUT"
+        echo "sha_tag=sha-$revision" >> "$GITHUB_OUTPUT"
+        echo "image_tag=${RELEASE_REF#*/}" >> "$GITHUB_OUTPUT"
     - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
       with:
         registry: ghcr.io
@@ -39,8 +47,10 @@ runs:
       with:
         images: ${{ inputs.image }}
         tags: |
-          type=sha
+          type=raw,value=${{ steps.release.outputs.sha_tag }}
           type=raw,value=${{ steps.release.outputs.image_tag }},enable=${{ steps.release.outputs.image_tag != '' }}
+        labels: |
+          org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
     - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
         context: .

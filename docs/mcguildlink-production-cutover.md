@@ -1,30 +1,20 @@
 # 本番の旧MCGuildLinkから分離構成へ移行する手順
 
-本番では次の1〜8を順に実行します。この文書は作業手順で、本番環境を操作した記録ではありません。リハーサルの実施済み・未検証の範囲は[実行記録](mcguildlink-rehearsal-results.md)を参照してください。
+デプロイ前準備 → GitHub Actionsでデプロイ → デプロイの確認、の順に進めます。エラーが出たら次へ進みません。
 
-切り戻しは通常手順の続きとして実行しません。必要になった場合だけ、別文書の[本番切り戻し手順](mcguildlink-production-rollback.md)を選びます。
+## 1. デプロイ前準備
 
-コマンド以外に必要な操作は次のとおりです。設定ファイル・DBパスワード・SQLは掲載コマンドで生成します。
+### 1.1. 公開物と作業環境を準備する
 
-| タイミング | 手動操作 |
-|---|---|
-| 手順1の前 | イメージ・Chartの公開、停止時間の案内、バックアップ先のマウント |
-| 手順1・2 | 公開バージョン・タグ、バックアップ先の入力、旧PostgreSQLに必要データがないことの確認 |
-| 手順6 | Botコンソールへの入力、Cloudflareの既存ルート変更、Minecraft接続確認 |
-| 手順7 | 新版で継続するか切り戻すかの判断 |
-| 手順8 | Discordパネル設置、協力者のテストアカウントでの操作確認 |
+1. 停止時間と対応クライアント（Minecraft Java 26.3）を案内する。
+2. 外部バックアップ先を本番サーバーへマウントする。
+3. ReleaseでChartを `bump=major / dry_run=false / deploy=false` で公開する。
+4. Bot・MC・APIを、同じマイグレーションSQLを含むソースから `dry_run=false / deploy=false` で公開し、タグ・digest・ソースSHAを記録する。
+5. `production/chart` のSSH接続先・ユーザーと本番kubeconfigを確認する。
 
-## 1. 公開物と本番設定を準備する
+本番デプロイ用ユーザーのzshで、以下のブロックを順に実行します。Python 3.11以降を使い、移行中は他のデプロイを実行しません。
 
-入力が必要なのは、新Chartの公開バージョンと4イメージの公開タグです。本番hostnameは確認済みの `api.anvilsaba.org` に設定しています。バックアップ先は手順2で入力します。contextは確認済みの `default`、namespace・release・OCI URLは既存デプロイと同じ固定値です。旧Chartバージョンは既存releaseから取得します。MCポートは本番用 `values.prod.yaml` の25600、Public APIポートは8080を使います。PostgreSQLの容量とStorageClassは既存PVCから自動で引き継ぎ、入力や確認は求めません。旧JVMのUTCオフセットは、標準旧Chart・イメージとリハーサルの結果に基づき `+00:00` を使います。本番Deploymentにも明示的なタイムゾーン指定・時刻設定ファイルのマウントはありません。追加の実機確認は行いません。Cloudflareの宛先は移行時に `http://public-api:8080`、切り戻し時に `http://mcguildlink-http:8080` を設定します。
-
-- Bot・MC Link Server・Public API・DB Migratorを、同じマイグレーションSQLを含むソースからビルド・公開します。初回は自動デプロイを行わず、各イメージのタグ・digest・ソースSHAを記録します。古いBotイメージを流用しません。
-- 分離構成のChartを公開します。初回はRelease Actionで `chart / bump=major / deploy=false` を指定します。
-- 本番のkube-context・namespace・Helm release・旧Chart・旧イメージ・本番values・Tunnel hostnameを記録します。手順6でCloudflareの宛先を `http://public-api:8080` へ変更します。切り戻し時は宛先を `http://mcguildlink-http:8080` に戻します。k3d用のcontext、`localhost/...` イメージ、開発用token・パスワードは使用しません。
-- 新valuesは新Chartに同梱された `values.prod.yaml` を基準に作り、各公開イメージタグと本番設定を明示します。初期状態はBot・MC・APIのreplicasを0、Migratorを無効にします。
-- 対象プレイヤーに停止時間と新版の対応クライアント（Minecraft Java 26.3）を案内します。
-
-コマンドは本番kubeconfigを使えるLinuxのzshとPython 3.11以降（`python3`）で実行します。Chartは既存の運用と同じOCIから取得し、移行用ファイルは公開Chartタグから自動取得するため、本番にリポジトリ全体を配置する必要はありません。認証情報は本番サーバーのHelmログイン、本番contextから取得するBot設定、本番の `ghcr-pull`・`cloudflare-tunnel` だけを継続します。リハーサルのtoken・パスワード・Secret・設定ファイル・作業ディレクトリは一切参照しません。DB用パスワードは本番作業ディレクトリ内で新規生成します。秘密値を保存する `$cutoverDir` はGitの外です。`kubectl`・`helm`・`curl`・`sha256sum`・GNU tar・`flock` も必要です。本番デプロイ用ユーザーのHelm registry loginと本番サーバーの `~/.kube/config` を使います。最初に `zsh` で作業用シェルを開き、各番号の確認が完了してから次の番号へ進みます。エラーで作業用シェルが終了した場合は、再び `zsh` を開き、`setopt ERR_EXIT PIPE_FAIL; umask 077` と `source "$HOME/mcguildlink-cutover-日時/context.zsh"` で変数・関数を復元します。手順1からやり直して別ディレクトリを作りません。全ブロックを一括で貼り付けません。公開イメージは本番CPUアーキテクチャに対応するものを使います。
+途中から再開するときは、zshで `setopt ERR_EXIT PIPE_FAIL; umask 077` を設定し、作成済みの `$cutoverDir/context.zsh` を読み込みます。Actions実行中は読み込みません。
 
 ```zsh
 setopt ERR_EXIT PIPE_FAIL
@@ -42,12 +32,11 @@ read -r 'newChartVersion?新Chartの公開バージョン（例: 1.0.0）: '
 read -r 'botTag?新Botの公開タグ（vX.Y.Z または bot/vX.Y.Z）: '
 read -r 'mcTag?新MC Link Serverの公開タグ: '
 read -r 'apiTag?新Public APIの公開タグ: '
-read -r 'migratorTag?新DB Migratorの公開タグ: '
+read -r 'migratorTag?Botのリリースコミットに対応するDB Migratorタグ（sha-完全な40桁のGit SHA）: '
 newChartVersion=${newChartVersion#chart/v}
 botTag=${botTag#bot/}
 mcTag=${mcTag#mc-link-server/}
 apiTag=${apiTag#public-api/}
-migratorTag=${migratorTag#db-migrator/}
 for value in "$newChartVersion" "$botTag" "$mcTag" "$apiTag" "$migratorTag" "$productionHostname" "$sourceUtcOffset"; do
   [[ -n "$value" ]]
 done
@@ -63,12 +52,13 @@ oldValues="$cutoverDir/old-values.yaml"
 newValuesFile="$cutoverDir/new-values.json"
 oldChart="$cutoverDir/charts/old/platform"
 newChart="$cutoverDir/charts/new/platform"
+prepareChart="$cutoverDir/charts/prepare/platform"
 sourceDir="$cutoverDir/source"
-export productionContext productionNamespace releaseName chartOci newChartVersion oldChart newChart sourceDir productionHostname sourceUtcOffset botTag mcTag apiTag migratorTag cutoverDir oldValues newValuesFile stateDir
+export productionContext productionNamespace releaseName chartOci newChartVersion oldChart newChart prepareChart sourceDir productionHostname sourceUtcOffset botTag mcTag apiTag migratorTag cutoverDir oldValues newValuesFile stateDir
 k() { kubectl --context "$productionContext" -n "$productionNamespace" "$@"; }
 h() { helm "$@" --kube-context "$productionContext" -n "$productionNamespace"; }
 db() { k exec -i postgres-0 -- psql -X -U platform_admin -d platform -v ON_ERROR_STOP=1; }
-typeset -p KUBECONFIG productionContext productionNamespace releaseName chartOci newChartVersion oldChart newChart sourceDir productionHostname sourceUtcOffset botTag mcTag apiTag migratorTag cutoverDir oldValues newValuesFile stateDir > "$cutoverDir/context.zsh"
+typeset -p KUBECONFIG productionContext productionNamespace releaseName chartOci newChartVersion oldChart newChart prepareChart sourceDir productionHostname sourceUtcOffset botTag mcTag apiTag migratorTag cutoverDir oldValues newValuesFile stateDir > "$cutoverDir/context.zsh"
 functions k h db >> "$cutoverDir/context.zsh"
 # 失敗後に別の作業用zshからsourceする場合も、通常デプロイと排他する。
 printf '%s\n' 'exec 9>"$stateDir/deploy.lock"' 'flock -n 9' >> "$cutoverDir/context.zsh"
@@ -87,6 +77,20 @@ PY
 h pull "$chartOci" --version "$oldChartVersion" --untar --untardir "$cutoverDir/charts/old"
 h pull "$chartOci" --version "$newChartVersion" --untar --untardir "$cutoverDir/charts/new"
 [[ -f "$newChart/values.prod.yaml" ]]
+# 準備中だけ使うChartを複製する。公開Chart・リポジトリは変更しない。
+mkdir -p "$cutoverDir/charts/prepare"
+cp -a "$newChart" "$prepareChart"
+python3 - "$prepareChart" <<'PY'
+import pathlib, sys
+chart = pathlib.Path(sys.argv[1])
+for name, key in (('bot', 'bot'), ('mc-link-server', 'mcLinkServer'), ('public-api', 'publicApi')):
+    path = chart / 'templates' / f'{name}-deployment.yaml'
+    text = path.read_text(encoding='utf-8')
+    source = '{{ .Values.' + key + '.replicas }}'
+    if text.count(source) != 1:
+        raise ValueError(f'準備用Chartのreplicasを設定できません: {name}')
+    path.write_text(text.replace(source, '0'), encoding='utf-8')
+PY
 # 本番へリポジトリ全体を配置せず、新Chartと同じ公開タグから4ファイルだけ取り出す。
 curl --fail --location --silent --show-error "https://api.github.com/repos/AnvilSaba/platform/tarball/chart%2Fv${newChartVersion}" -o "$cutoverDir/source.tar.gz"
 tar -xzf "$cutoverDir/source.tar.gz" -C "$sourceDir" --strip-components=1 --wildcards \
@@ -105,9 +109,9 @@ import json, os, pathlib
 root = pathlib.Path(os.environ['cutoverDir'])
 pvc = json.loads((root / 'old-postgres-pvc.json').read_text())['spec']
 values = {
-    'bot': {'replicas': 0, 'image': {'repository': 'ghcr.io/anvilsaba/bot', 'tag': os.environ['botTag']}},
-    'mcLinkServer': {'replicas': 0, 'image': {'repository': 'ghcr.io/anvilsaba/mc-link-server', 'tag': os.environ['mcTag']}},
-    'publicApi': {'replicas': 0, 'image': {'repository': 'ghcr.io/anvilsaba/public-api', 'tag': os.environ['apiTag']}},
+    'bot': {'replicas': 1, 'image': {'repository': 'ghcr.io/anvilsaba/bot', 'tag': os.environ['botTag']}},
+    'mcLinkServer': {'replicas': 1, 'image': {'repository': 'ghcr.io/anvilsaba/mc-link-server', 'tag': os.environ['mcTag']}},
+    'publicApi': {'replicas': 1, 'image': {'repository': 'ghcr.io/anvilsaba/public-api', 'tag': os.environ['apiTag']}},
     'dbMigrator': {'enabled': False, 'image': {'repository': 'ghcr.io/anvilsaba/db-migrator', 'tag': os.environ['migratorTag']}},
     'postgres': {'username': 'platform_admin', 'database': 'platform', 'secretName': 'postgres-db-credentials', 'storageSize': pvc['resources']['requests']['storage'], 'storageClassName': pvc.get('storageClassName', '')},
     'cloudflared': {'replicas': 1, 'tokenSecretName': 'cloudflare-tunnel'},
@@ -116,32 +120,14 @@ values = {
 PY
 curl --fail --silent --show-error -A 'Mozilla/5.0' "https://$productionHostname/whitelist.json" > "$cutoverDir/old-whitelist.json"
 k get secret ghcr-pull cloudflare-tunnel -o name
-h template "$releaseName" "$newChart" -f "$newChart/values.prod.yaml" -f "$newValuesFile" > "$cutoverDir/new-manifest.yaml"
+h template "$releaseName" "$prepareChart" -f "$newChart/values.prod.yaml" -f "$newValuesFile" > "$cutoverDir/new-manifest.yaml"
 ```
 
-手順1のコマンドが作るファイルは次のとおりです。保存先を手で作ったり、Chartの絶対パスを入力したりする必要はありません。
+<a id="2-旧アプリを停止し復元に必要なものを保存する"></a>
 
-| 変数・ファイル | 保存先と内容 |
-|---|---|
-| `$cutoverDir` | 本番ユーザーの `$HOME/mcguildlink-cutover-YYYYMMDD-HHMMSS`。今回の作業で自動作成するディレクトリ |
-| `$cutoverDir/context.zsh` | この作業の変数・`k`・`h`・`db` 関数。失敗後の再開時に読み込む |
-| `$oldValues` | `$cutoverDir/old-values.yaml`。本番releaseから取得した旧values |
-| `$newValuesFile` | `$cutoverDir/new-values.json`。新イメージタグと本番設定をコマンドが生成する。手編集不要 |
-| `$oldChart`・`$newChart` | `$cutoverDir/charts/old/platform`・`$cutoverDir/charts/new/platform`。OCIから展開したChart |
-| `$sourceDir/scripts/` | 移行Python・凍結SQL・解禁SQL。新Chartの公開タグから取得する |
-| `$sourceDir/deploy/postgres/bootstrap.sql` | DBロールを準備するSQL。同じ公開タグから取得する |
-| `$cutoverDir/old-whitelist.json` | 停止前の公開応答の参考記録。移行DBとの比較基準は手順2で別に生成する |
+### 1.2. 旧版を停止してバックアップする
 
-`k` は `kubectl --context default -n anvilsaba`、`h` は本番context・namespace指定付きのHelm、`db` は `postgres-0` 内で `platform_admin` として `platform` DBへ接続する `psql` です。SQLの `< ファイル名` は、本番サーバー上のファイルを標準入力でDBへ送ります。
-
-## 2. 旧アプリを停止し、復元に必要なものを保存する
-
-旧Bot・旧MCGuildLinkと別の書き込み元を停止し、Pod終了を確認します。旧Chart・values・manifest・設定Secretの復元用ファイル・イメージdigest・公開経路を保存します。旧Bot設定は新設定で上書きせず別ファイルに残します。
-
-停止後、作業Podから `mcguildlink-data` を読み取り専用でマウントし、`app.db` と存在するWAL/SHMを取り出します。PythonのSQLite backupでWALを取り込んだ単一の `app.db` を作り、整合性とSHA256を記録します。作業Podを削除し、保存したDBと設定を作業マシン以外にも保管します。
-
-次のブロックで、本番Secretの `config.toml` を `$cutoverDir/config/bot-old.toml`、`app.toml` を `$cutoverDir/config/mcguildlink-old.toml` に保存します。その後、旧Bot・MCGuildLinkのreplicasを0にし、Podが消えるまで待ちます。設定ファイルを手入力する必要はありません。
-
+旧設定を保存し、旧Bot・MCGuildLinkを停止します。ほかの書き込み元も停止してください。
 
 ```zsh
 k get secret bot-config -o json | python3 -c 'import base64,json,pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(json.load(sys.stdin)["data"]["config.toml"]))' "$cutoverDir/config/bot-old.toml"
@@ -153,7 +139,7 @@ if [[ -n "$oldPods" ]]; then
 fi
 ```
 
-次のブロックで一時Pod `mcguildlink-sqlite-export` を作り、旧PVCのファイルを `$cutoverDir/sqlite-source/raw/` へコピーします。`source.sha256` と `source-after.sha256` はコピー前後のハッシュです。一致しなければ処理を止めます。ブロック終了時に一時Podを削除します。
+旧PVCからSQLite本体・WAL・SHMを取り出し、コピー前後のハッシュを照合します。
 
 ```zsh
 [[ ! -e "$cutoverDir/sqlite-source" && ! -e "$cutoverDir/app.db" ]]
@@ -204,7 +190,7 @@ YAML
 k get pvc mcguildlink-data -o jsonpath='{.metadata.uid}' > "$cutoverDir/sqlite-source/pvc-uid.txt"
 ```
 
-次のブロックで、取得したrawファイルを一時ディレクトリへ複製し、SQLiteのbackup APIでWALを取り込んだ `$cutoverDir/app.db` を作ります。復元・移行に使うのはこの単一ファイルです。`Snapshot ready:` が表示され、整合性チェックが成功すると、`sqlite-source/snapshot.sha256` にそのハッシュを保存します。
+WALを取り込んだ `app.db` を作り、整合性とハッシュを確認します。
 
 ```zsh
 python3 - "$cutoverDir" <<'PY'
@@ -240,7 +226,7 @@ PY
 (cd "$cutoverDir" && sha256sum app.db > sqlite-source/snapshot.sha256)
 ```
 
-比較用の `expected-whitelist.json` を、移行に使う同じスナップショットから生成します。紐付けのあるMinecraftアカウントを重複なく抽出し、Discord・Minecraft双方のブロックを除外します。停止前の公開応答は、その後の操作や非同期更新によって保存済みDBと時点が異なるため、比較基準には使いません。
+同じ `app.db` から照合用ホワイトリストを生成します。
 
 ```zsh
 python3 - "$cutoverDir" <<'PY'
@@ -264,7 +250,7 @@ print(f'比較用ホワイトリスト: {len(entries)}件')
 PY
 ```
 
-次の入力には、別マシン・外部ストレージなどを本番サーバーへマウント済みのディレクトリを指定します。コマンドはマウント操作を行いません。`$cutoverDir` 全体をその配下へコピーし、`app.db: OK` と表示されればDBコピーの照合成功です。以後、このコピー先を `$backupCopy` として使います。
+マウント済みの外部バックアップ先へコピーし、`app.db: OK` を確認します。
 
 ```zsh
 read -r 'backupDir?作業マシン以外に保管するバックアップ先（マウント済み絶対パス）: '
@@ -279,16 +265,9 @@ read -r 'oldPgUses?旧PostgreSQLに保存すべき他アプリのデータがな
 [[ "$oldPgUses" == 確認済み ]]
 ```
 
-## 3. PostgreSQLを作り直し、新Chartを配置する
+### 1.3. PostgreSQLを初期化する
 
-現行の旧BotがPostgreSQLを使用せず、他のアプリの必要データも入っていないことを確認してから、旧PostgreSQLを停止し、そのPVCを削除します。保存すべきデータがある場合は、この削除手順へ進みません。
-
-次のコマンドが `$cutoverDir/config/platform_admin.password` を自動作成します。中身は本番用に新しく生成する英字・数字・記号から生成する64文字のランダムな文字列（記号を必ず含む）だけで、UTF-8・BOMなし・改行なしです。`password=`、引用符、ユーザー名は書きません。手作業でのファイル作成は不要です。同じファイルからnamespace `anvilsaba` のSecret `postgres-db-credentials` の `password` キーを作り、新PostgreSQLの管理ユーザー `platform_admin` に使います。
-
-同じHelm releaseを新Chartへ更新し、アプリreplicas=0・Migrator無効のまま、空のPostgreSQLを起動します。旧valuesを `--reuse-values` で引き継がず、新valuesを使います。
-
-旧SQLite PVCは新Chartへの更新で削除します。`keep` は指定しません。手順2のDB保存が成功していること、新PostgreSQLのReady、旧SQLite PVCの削除を確認します。
-
+旧PostgreSQLに保存すべきデータがないことを確認してから実行します。バックアップ済みの旧SQLite PVCも、この更新で削除されます。
 
 ```zsh
 for file in app.db sqlite-source/snapshot.sha256 config/bot-old.toml config/mcguildlink-old.toml old-values.yaml; do
@@ -313,7 +292,7 @@ k wait --for=delete pod/postgres-0 --timeout=5m
 printf '%s\n' 'PostgreSQL再初期化を開始' > "$cutoverDir/postgres-rebuild-started"
 k delete pvc postgres-data
 k wait --for=delete pvc/postgres-data --timeout=5m
-h upgrade "$releaseName" "$newChart" --reset-values -f "$newChart/values.prod.yaml" -f "$newValuesFile" --timeout 10m
+h upgrade "$releaseName" "$prepareChart" --reset-values -f "$newChart/values.prod.yaml" -f "$newValuesFile" --timeout 10m
 k rollout status statefulset/postgres --timeout=5m
 remainingPvc=$(k get pvc mcguildlink-data --ignore-not-found -o name)
 [[ -z "$remainingPvc" ]]
@@ -321,24 +300,9 @@ remainingPvc=$(k get pvc mcguildlink-data --ignore-not-found -o name)
 db < "$sourceDir/deploy/postgres/bootstrap.sql"
 ```
 
-PostgreSQLのrolloutが成功し、bootstrapの `CREATE ROLE`・`GRANT` などの実行結果が表示されてエラーなく正常終了すれば手順3完了です。bootstrapはこのブロックで実行済みなので、手順4で再実行しません。
+### 1.4. DB認証情報とBot設定を登録する
 
-## 4. DBロール・Secret・Bot設定を登録する
-
-手順3のbootstrapで4つのLOGIN（PostgreSQLのログイン用ロール）は作成済みです。次の最初のコードブロックが、以下の4ファイルを**本番サーバー上に自動作成**し、それぞれの値をDBとKubernetes Secretの両方に登録します。自分でファイルを作る必要はありません。
-
-| パスワードファイル | DBのLOGIN | Secret（namespace `anvilsaba`）・キー |
-|---|---|---|
-| `$cutoverDir/config/db-credentials/platform_bot.password` | `platform_bot` | `bot-db-credentials` の `password` |
-| `$cutoverDir/config/db-credentials/platform_mc_link_server.password` | `platform_mc_link_server` | `mc-link-server-db-credentials` の `password` |
-| `$cutoverDir/config/db-credentials/platform_public_api.password` | `platform_public_api` | `public-api-db-credentials` の `password` |
-| `$cutoverDir/config/db-credentials/platform_db_migrator.password` | `platform_db_migrator` | `db-migrator-db-credentials` の `password` |
-
-各ファイルの書式は **パスワードの文字列だけ**です。UTF-8・BOMなし・1行で、`password=` や引用符、LOGIN名を付けません。コマンドはファイルごとに別々の64文字のランダムな文字列を英字・数字・記号からを生成し、改行なしで保存します。記号を必ず1文字以上含めます。64文字は自動生成時の長さで、入力の制限ではありません。自分で設定する場合は記号も使えますが、空文字・BOM・NUL・途中の改行は不可です。末尾のCR/LFはコマンドが除去します。
-
-初回は必ずこの本番作業ディレクトリで新規生成します。リハーサルのファイルはコピーしません。エラー後の再実行では既に生成した本番ファイルを使い、値を変えません。手順1の `umask 077` により、ディレクトリは700、パスワードファイルは600で作成されます。
-
-最初のPythonは4ファイルを生成・検査してから `ALTER ROLE ... PASSWORD` のSQLを `db` に渡します。続く `for` が各ファイルを `--from-file=password=...` でSecretへ登録します。**コードブロック全体を実行してください。ファイル生成だけで止めると登録は完了しません。** 最後の `COMMIT` と4つの `secret/... created` または `configured` が成功の目印です。秘密値は表示しません。
+DBロールのパスワードを生成し、DBとSecretへ登録します。
 
 ```zsh
 # ファイルの値をSQLとSecretの両方へ登録する。秘密値は表示しない。
@@ -368,16 +332,7 @@ for pair in platform_bot:bot-db-credentials platform_mc_link_server:mc-link-serv
 done
 ```
 
-DBとSecretの登録が成功したら、次のブロックでBot設定を変換します。入力は手順2で保存した `$cutoverDir/config/bot-old.toml` と `$cutoverDir/config/mcguildlink-old.toml`、出力は `$cutoverDir/config/bot-new.toml` です。旧Botのtoken・owners・他機能の設定はそのまま引き継ぎ、旧MC設定の `[bot]` から次の項目を追加します。手編集は不要です。
-
-| 旧MC設定 | 新Botの `[mcguildlink]` |
-|---|---|
-| `guild` | `guild_id` |
-| `moderator_role` | `moderator_role_id` |
-| `log_channel` | `audit_channel_id` |
-| `display_server_address` | `display_server_address` |
-
-変換後のファイルを、通常デプロイで使う `/etc/anvilsaba/secrets/bot/config.toml` に所有者root・権限600で配置し、Secret `bot-config` の `config.toml` キーにも登録します。`sudo` は本番サーバー上の設定ファイルを配置するために使います。旧設定のコピーは `$cutoverDir/config/bot-old.toml` に残ります。
+旧設定から新Bot設定を生成し、本番ファイルとSecretへ登録します。
 
 ```zsh
 python3 - "$cutoverDir" <<'PY'
@@ -409,30 +364,23 @@ sudo install -o root -g root -m 600 "$cutoverDir/config/bot-new.toml" /etc/anvil
 k create secret generic bot-config --from-file="config.toml=$cutoverDir/config/bot-new.toml" --dry-run=client -o yaml | k apply -f -
 ```
 
-`Bot settings converted; original settings preserved` と `secret/bot-config created` または `configured` が表示され、全コマンドが正常終了したら手順4完了です。
+<a id="5-migratorを完了させ凍結してデータを移行する"></a>
 
-## 5. Migratorを完了させ、凍結してデータを移行する
+### 1.5. スキーマとデータを移行する
 
-次のブロックを実行します。最初の `for` は手順4の4つのSecretに `password` キーがあることを検査します。Helmで `dbMigrator.enabled=true` にするとJob `db-migrator` が起動します。JobがCompleteになり、ログ取得まで成功したら `enabled=false` に戻します。失敗した場合は後続ブロックへ進みません。
-
-失敗時の調査には、同じ作業用zshで `k get pods -l job-name=db-migrator -o wide`、`k describe job db-migrator`、`k get events --sort-by=.metadata.creationTimestamp`、`k logs job/db-migrator --all-containers=true` を実行します。SQLの凍結はMigrator成功後に行います。
-
-保存したSQLiteから `scripts/migrate-mcguildlink.py` で移行SQLを生成し、新PostgreSQLへ適用します。手順1の `sourceUtcOffset=+00:00` を `--source-utc-offset` に指定します。続いて同じSQLiteから `--verify-only` のSQLを生成・実行し、紐付け・ブロック・未使用コードなどの全件一致と監査ログ・outboxが空であることを確認します。
-
-SQL適用は本番の新DBへ接続する管理者で行い、`psql -X -v ON_ERROR_STOP=1` を使います。各コマンドの失敗時は先へ進みません。移行先に既存の業務データがある場合、上書きやマージはしません。
-
+Migratorを実行し、完了後に無効化します。
 
 ```zsh
 for secretName in bot-db-credentials mc-link-server-db-credentials public-api-db-credentials db-migrator-db-credentials; do
   k get secret "$secretName" -o json | python3 -c 'import json,sys; assert json.load(sys.stdin)["data"].get("password"), "DB Secretのpasswordがありません"'
 done
-h upgrade "$releaseName" "$newChart" --reuse-values --set dbMigrator.enabled=true --timeout 10m
+h upgrade "$releaseName" "$prepareChart" --reuse-values --set dbMigrator.enabled=true --timeout 10m
 k wait --for=condition=Complete job/db-migrator --timeout=5m
 k logs job/db-migrator
-h upgrade "$releaseName" "$newChart" --reuse-values --set dbMigrator.enabled=false
+h upgrade "$releaseName" "$prepareChart" --reuse-values --set dbMigrator.enabled=false
 ```
 
-Migratorの完了・無効化が成功したら、次を実行します。Bot・MC・APIはここまでの手順でreplicas=0です。残ったPodの終了を待ってから、`postgres-0` 内の `psql` を管理ユーザー `platform_admin` で実行し、手順1で取得した凍結SQLを標準入力へ渡します。
+アプリの停止を確認してDBを凍結します。
 
 ```zsh
 appPods=$(k get pods -l 'app.kubernetes.io/name in (bot,mc-link-server,public-api)' -o name)
@@ -444,9 +392,7 @@ kubectl --context default -n anvilsaba exec -i postgres-0 -- \
   < "$sourceDir/scripts/mcguildlink-cutover-freeze.sql"
 ```
 
-最後に `COMMIT` が表示され、コマンドが正常終了したら凍結完了です。エラーの場合は次の移行SQLを実行しません。凍結後に `bootstrap.sql` を再実行すると書き込み権限が復活するため、再実行しません。
-
-次のブロックは `$cutoverDir/app.db` から `$cutoverDir/import.sql` を生成して新DBへ適用し、さらに `$cutoverDir/verify.sql` を生成して全件照合します。両SQLの生成先は新規ファイルである必要があり、既存ファイルは上書きしません。途中で失敗した場合は、DBへの適用状況を確認せずにブロックを最初から再実行しないでください。
+凍結後はbootstrapを再実行しません。SQLiteを移行し、全件照合します。
 
 ```zsh
 python3 "$sourceDir/scripts/migrate-mcguildlink.py" "$cutoverDir/app.db" "$cutoverDir/import.sql" "--source-utc-offset=$sourceUtcOffset"
@@ -455,17 +401,11 @@ python3 "$sourceDir/scripts/migrate-mcguildlink.py" "$cutoverDir/app.db" "$cutov
 db < "$cutoverDir/verify.sql"
 ```
 
-各テーブルの `table_name`・`verified_rows` と最後の `COMMIT` が表示され、エラーなしで終了したら手順5完了です。照合SQLは件数だけでなく全行の値も比較し、不一致や監査データの混入があれば失敗します。
+全件照合と最後の `COMMIT` が成功したら手順2へ進みます。
 
-### 手順5のSQL生成・適用・照合に失敗した場合
+#### 移行・照合に失敗した場合
 
-同じ作業ディレクトリの `context.zsh` を読み込み、凍結を維持したまま次を実行します。生成済みファイルの削除や、手順3のDB再初期化は行いません。接続切断ではCOMMIT済みか分からないため、まず新しい照合SQLで状態を判定します。
-
-| 状態 | 再開方法 |
-|---|---|
-| 移行SQLの生成前・適用前に失敗 | 下の照合・空状態確認を経て、新しいパスに移行SQLを生成して適用する |
-| 適用中に失敗、またはCOMMIT結果が不明 | 下の全件照合が成功すれば再インポートせず手順6へ進む |
-| 適用成功後の照合で失敗 | 下の照合を再試行。空でなく一致もしない場合は停止し、切り戻しを選ぶ |
+凍結を維持して次を実行します。DBの再初期化や生成済みファイルの削除は行いません。不一致が解消しなければ[切り戻し手順](mcguildlink-production-rollback.md)へ進みます。
 
 ```zsh
 (cd "$cutoverDir" && sha256sum -c sqlite-source/snapshot.sha256)
@@ -474,7 +414,7 @@ db < "$sourceDir/scripts/mcguildlink-cutover-freeze.sql"
 recoveryDir=$(mktemp -d "$cutoverDir/sql-retry.XXXXXX")
 python3 "$sourceDir/scripts/migrate-mcguildlink.py" "$cutoverDir/app.db" "$recoveryDir/verify.sql" "--source-utc-offset=$sourceUtcOffset" --verify-only
 if db < "$recoveryDir/verify.sql"; then
-  printf '%s\n' '移行済みデータが一致しました。再インポートせず手順6へ進みます。'
+  printf '%s\n' '移行済みデータが一致しました。再インポートせず手順2へ進みます。'
 else
   # 接続・スキーマの問題もここで停止する。空でないDBへ再投入しない。
   db <<'SQL'
@@ -494,41 +434,72 @@ SQL
 fi
 ```
 
-ブロック全体が成功したら手順5完了です。以後の再照合に使うファイルを更新し、手順6へ進みます。失敗した場合はここで停止し、データやDB履歴を削除して回避しません。
+成功したら照合SQLを更新し、手順2へ進みます。
 
 ```zsh
 cp "$recoveryDir/verify.sql" "$cutoverDir/verify.sql"
 ```
 
-## 6. 凍結を維持して起動・公開経路を確認する
+## 2. GitHub Actionsでデプロイ
 
-新Bot・MC・APIを起動し、各PodのReady・ログ・マイグレーション互換性を確認します。チェックサム不一致の場合はイメージのソースを修正し、DBの履歴を書き換えて回避しません。
-
-BotへTTY付きでattachし、コンソールの `register` と `list` でグローバルコマンドを登録・確認します。既存Botの他機能も確認します。
-
-クラスタ内のPublic APIと保存済みSQLiteから作ったホワイトリストを比較してから、既存の本番Tunnelにある `api.anvilsaba.org` のService URLを `http://public-api:8080` に変更します。本番Tunnelのtokenと公開hostnameは維持します。旧HTTP Service名を残す互換Serviceは作成しません。外部からUUID・名前・ブロック除外の一致を確認します。MCは従来の公開アドレス・ポートから、Java 26.3で状態応答・本人認証・ダイアログまで確認します。
-
-この段階ではコード消費・発行などの業務書き込みは拒否される想定です。公開経路の確認後に再度全件照合し、データが変わっていないことを確認します。
-
+アプリの停止と全件照合を確認し、作業ロックを解放します。
 
 ```zsh
-h upgrade "$releaseName" "$newChart" --reuse-values --set bot.replicas=1 --set mcLinkServer.replicas=1 --set publicApi.replicas=1
+k get deployment bot mc-link-server public-api -o json | python3 -c 'import json,sys; assert all(d["spec"]["replicas"] == 0 for d in json.load(sys.stdin)["items"]), "準備中のアプリが起動しています"'
+db < "$cutoverDir/verify.sql"
+flock -u 9
+exec 9>&-
+```
+
+1. **Actions → Production deployment → Run workflow** を開く。
+2. ブランチを `main`、`target` を `chart`、`release_ref` を `chart/v<手順1.1の公開バージョン>` にして実行する。
+3. 成功を確認し、実行URLを記録する。
+
+## 3. デプロイの確認
+
+Actions終了後、同じzshでロックを再取得します。別シェルで `context.zsh` を読み込んだ場合、このブロックは不要です。
+
+```zsh
+exec 9>"$stateDir/deploy.lock"
+flock -n 9
+```
+
+### 3.1. 起動と公開経路を確認する
+
+デプロイされたイメージとPodの起動を確認し、Botコンソールへ接続します。
+
+```zsh
+k get deployment bot mc-link-server public-api -o json > "$cutoverDir/new-deployments.json"
+python3 - "$cutoverDir" <<'PY'
+import json, os, pathlib, sys
+expected = {
+    'bot': 'ghcr.io/anvilsaba/bot:' + os.environ['botTag'],
+    'mc-link-server': 'ghcr.io/anvilsaba/mc-link-server:' + os.environ['mcTag'],
+    'public-api': 'ghcr.io/anvilsaba/public-api:' + os.environ['apiTag'],
+}
+items = json.loads((pathlib.Path(sys.argv[1]) / 'new-deployments.json').read_text())['items']
+if len(items) != 3 or any(
+    item['spec']['replicas'] != 1
+    or item['spec']['template']['spec']['containers'][0]['image'] != expected[item['metadata']['name']]
+    for item in items
+):
+    raise ValueError('Actions のデプロイ結果が選択したイメージ・replicasと一致しません')
+PY
+k get pods -o json > "$cutoverDir/new-pods.json"
 for service in bot mc-link-server public-api; do
   k rollout status "deployment/$service" --timeout=5m
 done
 k attach -it --detach-keys=ctrl-c deployment/bot
 ```
 
-attachした画面で、次を1行ずつ入力してEnterを押します。この2行はzshではなくBotコンソールへ入力します。
+Botコンソールで次を入力します。
 
 ```text
 register
 list
 ```
 
-登録結果と一覧に `/create_panel` が含まれることを確認し、Ctrl+Cで接続を終了します。`--detach-keys=ctrl-c` を指定しているのでBotは停止しません。
-
-次のブロックは一時Podから `http://public-api:8080/whitelist.json` を取得し、`$cutoverDir/internal-whitelist.json` に保存します。保存済みSQLiteから作った `expected-whitelist.json` とUUID・名前の全件一致を検査します。Pythonが何も表示せず正常終了すれば一致です。その後、一時Podを削除します。失敗時にPodが残っている場合は `k delete pod cutover-http-check --ignore-not-found` を実行してから、このブロックを再試行します。
+`/create_panel` の登録を確認してCtrl+Cで抜け、クラスタ内のホワイトリストを照合します。
 
 ```zsh
 k run cutover-http-check --restart=Never --image=curlimages/curl:8.15.0 --command -- curl --fail --silent --show-error "http://public-api:8080/whitelist.json"
@@ -544,7 +515,7 @@ PY
 k delete pod/cutover-http-check
 ```
 
-クラスタ内の照合成功後、Cloudflareで本番Tunnelの既存ルートを編集します。hostnameは `api.anvilsaba.org` のまま、ServiceのTypeを `HTTP`、URLを `public-api:8080` にして保存します。これは接続先URL全体では `http://public-api:8080` です。Service URLに `/whitelist.json` は付けません。新しいTunnelやtokenは作成せず、既存本番のルートだけ変更します。HelmではCloudflare側の設定は更新されません。保存後、次のコマンドで外部から確認します。
+Cloudflareで既存ルートのService URLを `http://public-api:8080` に変更し、外部応答とDBを照合します。
 
 ```zsh
 curl --fail --silent --show-error -A 'Mozilla/5.0' "https://$productionHostname/whitelist.json" > "$cutoverDir/new-whitelist.json"
@@ -558,16 +529,13 @@ PY
 db < "$cutoverDir/verify.sql"
 ```
 
-MCの本番アドレスのポート25600にJava 26.3で接続し、本人認証・ダイアログを確認します。コード消費はまだ行いません。
+Minecraft Java 26.3で本番ポート25600へ接続し、本人認証とダイアログを確認します。コードの発行・消費はまだ行いません。
 
-## 7. 結果を確認して解禁する
+### 3.2. 書き込みを解禁する
 
-手順6まで成功した時点で、本番を新版で継続するか判断します。不一致や起動・公開経路の問題が残る場合は解禁せず、別文書の切り戻し手順を選びます。
+問題があれば解禁せず[切り戻し手順](mcguildlink-production-rollback.md)へ進みます。
 
-継続する場合はBot・MC・APIを停止してPod終了を確認し、管理者で `scripts/mcguildlink-cutover-unfreeze.sql` を適用します。その後アプリを再開し、起動を確認します。ここから先の変更は旧SQLiteへ戻せません。
-
-
-手順6の確認が全て成功し、新版で運用を継続すると決めた場合だけ実行します。
+継続する場合はアプリを停止し、DBを解禁して同じイメージで再開します。**解禁開始後は旧SQLiteへ切り戻せません。**
 
 ```zsh
 k scale deployment/bot deployment/mc-link-server deployment/public-api --replicas=0
@@ -578,29 +546,20 @@ fi
 # 解禁の実行結果が不明な場合も、旧版へ戻す手順へ進まないための記録。
 printf '%s\n' '書き込み解禁を開始' > "$cutoverDir/unfreeze-started"
 db < "$sourceDir/scripts/mcguildlink-cutover-unfreeze.sql"
-h upgrade "$releaseName" "$newChart" --reuse-values --set bot.replicas=1 --set mcLinkServer.replicas=1 --set publicApi.replicas=1
+k scale deployment/bot deployment/mc-link-server deployment/public-api --replicas=1
 for service in bot mc-link-server public-api; do
   k rollout status "deployment/$service" --timeout=5m
 done
 ```
 
-## 8. 運用再開を確認する
+### 3.3. 運用を確認して終了する
 
-Discordで、旧パネルを置いていたチャンネルを開き、設定済みのmoderatorロールを持つアカウントから統合Botの `/create_panel` を実行します。「パネルを作成しました！」と表示され、そのチャンネルに新しいパネルが投稿されれば設置成功です。新パネルの動作確認後、旧専用Botのパネルメッセージを削除します。
-
-本人の協力を得たテスト用アカウントで、次を順に確認します。通常利用者のデータをテスト目的で変更しません。
-
-1. 新パネルの「MCアカウントと紐付ける」を押し、接続先とコードが表示されることを確認します。もう一度押し、同じ未使用コードが表示されることを確認します。
-2. 表示されたサーバーへMinecraft Java 26.3で接続し、入力欄にコードを入れます。紐付け成功後、新パネルの「紐付けられたアカウントを確認する」で対象アカウントを確認します。
-3. 同じコードをもう一度使い、再利用が拒否されることを確認します。
-4. 同意済みのブロック対象テストアカウントでは、コード取得または紐付けが拒否されることを確認します。
-5. `https://api.anvilsaba.org/whitelist.json` で新しい紐付けが反映され、ブロック対象は除外されることを確認します。
-6. 旧 `log_channel` から引き継いだ監査チャンネルに、紐付けなどの新しい操作の監査が届くことを確認します。
-
-リハーサルの移行元には未使用コードがなかったため、「旧コードの保持・消費」は実データでのリハーサル未検証です。本番の保存データに存在するコードは手順5・6のSQLで全件照合します。消費テストは解禁後に本人の協力を得たテスト用コードで行います。
-
-使用したChart・イメージdigest・設定・バックアップの場所・照合結果・解禁時刻を記録します。バックアップは直ちに削除しません。通常デプロイはMigrator無効の値を維持し、移行用コードと旧MCGuildLinkの削除は別作業にします。
-
+1. moderatorロールのアカウントで、旧パネルと同じチャンネルに `/create_panel` で新パネルを設置する。
+2. 協力者のテストアカウントで、コード発行・未使用コードの再表示・Minecraftでの紐付けを確認する。
+3. 使用済みコードの再利用とブロック対象の操作が拒否されることを確認する。
+4. ホワイトリストへの反映と監査チャンネルへの通知を確認する。
+5. 旧パネルを削除し、Chart・イメージdigest・照合結果・解禁時刻を記録する。
+6. 最終設定をバックアップへ追加する。
 
 ```zsh
 k get pods
@@ -609,3 +568,5 @@ date --iso-8601=seconds > "$cutoverDir/completed-at.txt"
 # 本番作業中に生成したDBパスワード・新Bot設定・最終valuesも別保管先へ追加する。
 cp -a "$cutoverDir/." "$backupCopy/"
 ```
+
+ここで移行完了です。バックアップは保持します。
