@@ -18,7 +18,7 @@
 
 入力が必要なのは、新Chartの公開バージョンと4イメージの公開タグです。本番hostnameは確認済みの `api.anvilsaba.org` に設定しています。バックアップ先は手順2で入力します。contextは確認済みの `default`、namespace・release・OCI URLは既存デプロイと同じ固定値です。旧Chartバージョンは既存releaseから取得します。MCポートは本番用 `values.prod.yaml` の25600、Public APIポートは8080を使います。PostgreSQLの容量とStorageClassは既存PVCから自動で引き継ぎ、入力や確認は求めません。旧JVMのUTCオフセットは、標準旧Chart・イメージとリハーサルの結果に基づき `+00:00` を使います。本番Deploymentにも明示的なタイムゾーン指定・時刻設定ファイルのマウントはありません。追加の実機確認は行いません。Cloudflareの宛先は移行時に `http://public-api:8080`、切り戻し時に `http://mcguildlink-http:8080` を設定します。
 
-- Bot・MC Link Server・Public API・DB Migratorを、同じマイグレーションSQLを含むソースからビルド・公開します。初回は自動デプロイを行わず、各イメージのタグ・digest・ソースSHAを記録します。古いBotイメージを流用しません。
+- Bot・MC Link Server・Public APIを、同じマイグレーションSQLを含むソースからリリースします。各アプリと同じ revision の DB Migrator も自動公開されます。初回は自動デプロイを行わず、各イメージのタグ・digest・ソースSHAを記録します。Migrator は Bot と同じ revision の `sha-<完全なGit SHA>` タグを使用します。古いBotイメージを流用しません。
 - 分離構成のChartを公開します。初回はRelease Actionで `chart / bump=major / deploy=false` を指定します。
 - 本番のkube-context・namespace・Helm release・旧Chart・旧イメージ・本番values・Tunnel hostnameを記録します。手順6でCloudflareの宛先を `http://public-api:8080` へ変更します。切り戻し時は宛先を `http://mcguildlink-http:8080` に戻します。k3d用のcontext、`localhost/...` イメージ、開発用token・パスワードは使用しません。
 - 新valuesは新Chartに同梱された `values.prod.yaml` を基準に作り、各公開イメージタグと本番設定を明示します。初期状態はBot・MC・APIのreplicasを0、Migratorを無効にします。
@@ -42,12 +42,11 @@ read -r 'newChartVersion?新Chartの公開バージョン（例: 1.0.0）: '
 read -r 'botTag?新Botの公開タグ（vX.Y.Z または bot/vX.Y.Z）: '
 read -r 'mcTag?新MC Link Serverの公開タグ: '
 read -r 'apiTag?新Public APIの公開タグ: '
-read -r 'migratorTag?新DB Migratorの公開タグ: '
+read -r 'migratorTag?Botのリリースコミットに対応するDB Migratorタグ（sha-完全な40桁のGit SHA）: '
 newChartVersion=${newChartVersion#chart/v}
 botTag=${botTag#bot/}
 mcTag=${mcTag#mc-link-server/}
 apiTag=${apiTag#public-api/}
-migratorTag=${migratorTag#db-migrator/}
 for value in "$newChartVersion" "$botTag" "$mcTag" "$apiTag" "$migratorTag" "$productionHostname" "$sourceUtcOffset"; do
   [[ -n "$value" ]]
 done

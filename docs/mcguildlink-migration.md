@@ -8,7 +8,7 @@
 
 ## リリースの準備
 
-Bot・mc-link-server・public-api・db-migrator を `deploy=false` で先行リリースし、公開済みイメージのタグを用意します。分離構成の Chart の初回公開は Release Action で **chart / bump=major / deploy=false** を手動指定します。旧構成の値だけとは互換性がないため、初回のメジャー更新を自動の bump 判定に任せません。
+Bot・mc-link-server・public-api を `deploy=false` で先行リリースし、公開済みイメージのタグを用意します。各アプリのリリースで同じ revision の `db-migrator` image も自動公開されるため、Migrator の独立リリースは不要です。初期セットアップ用の Migrator は Bot のリリースコミットに対応する `sha-<完全なGit SHA>` タグを使用します。分離構成の Chart の初回公開は Release Action で **chart / bump=major / deploy=false** を手動指定します。旧構成の値だけとは互換性がないため、初回のメジャー更新を自動の bump 判定に任せません。
 
 旧 Kotlin 版はリリース・CHANGELOG 生成の対象から外れています。既存の `mcguildlink/v*` と CHANGELOG は過去の履歴として保持します。移行検証には `apps/mcguildlink` のソース・Dockerfile、公開済みイメージと旧 Chart を使用します。分離構成の Chart は旧版の Deployment・Service・PVC・設定を含みません。
 
