@@ -1,7 +1,9 @@
-use crate::{AppResult, identity::Name, invalid};
-use sha1::{Digest, Sha1};
 use std::time::Duration;
+
+use sha1::{Digest, Sha1};
 use uuid::Uuid;
+
+use crate::{AppResult, identity::Name, invalid};
 
 #[derive(serde::Deserialize)]
 pub(crate) struct SessionProfile {

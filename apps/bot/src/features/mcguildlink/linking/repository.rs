@@ -1,11 +1,12 @@
+use serenity::async_trait;
+use sqlx::{PgPool, Postgres, Transaction};
+
 use super::{
     ports::{CodeIssuanceSession, LinkingRepository},
     queries,
     types::{DiscordAccountId, DiscordUserId, LinkCode},
 };
 use crate::app::AppError;
-use serenity::async_trait;
-use sqlx::{PgPool, Postgres, Transaction};
 
 #[derive(Clone)]
 pub struct DatabaseLinkingRepository {
@@ -63,13 +64,15 @@ impl CodeIssuanceSession for DatabaseCodeIssuanceSession {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use sqlx::PgPool;
+
     use super::*;
     use crate::features::mcguildlink::{
         linking::{ports::LinkCodeGenerator, ports::LinkCodeResult, service::LinkCodes, types::LinkCode},
         test_support,
     };
-    use sqlx::PgPool;
-    use std::{collections::VecDeque, sync::Mutex};
 
     struct FixedCodes(Mutex<VecDeque<&'static str>>);
 

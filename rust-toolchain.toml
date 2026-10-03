@@ -1,4 +1,5 @@
-# ReFS の増分コンパイル修正 (rust-lang/rust#162366) と
-# Cargo の min-publish-age 機能を利用するため。
+# ReFS の増分コンパイル修正 (rust-lang/rust#162366)、
+# Cargo の min-publish-age 機能、および rustfmt の不安定な
+# group_imports 設定 (StdExternalCrate) を利用するため。
 [toolchain]
 channel = "nightly-2026-09-25"

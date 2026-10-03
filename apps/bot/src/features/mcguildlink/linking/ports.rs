@@ -1,6 +1,7 @@
+use serenity::async_trait;
+
 use super::types::{DiscordUserId, LinkCode};
 use crate::app::AppError;
-use serenity::async_trait;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LinkCodeResult {

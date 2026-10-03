@@ -1,15 +1,16 @@
-use super::permissions::require_moderator;
-use super::{linking::START_LINK_BUTTON_ID, links::LIST_LINK_BUTTON_ID};
-use crate::{
-    app::{AppApplicationContext, AppError},
-    utils::{create_safe_allowed_mentions, create_safe_message},
-};
 use poise::CreateReply;
 use serenity::{
     all::{ButtonStyle, CreateActionRow, CreateButton, MessageFlags, ReactionType, SeparatorSpacingSize},
     builder::{
         CreateComponent, CreateContainer, CreateContainerComponent, CreateMessage, CreateSeparator, CreateTextDisplay,
     },
+};
+
+use super::permissions::require_moderator;
+use super::{linking::START_LINK_BUTTON_ID, links::LIST_LINK_BUTTON_ID};
+use crate::{
+    app::{AppApplicationContext, AppError},
+    utils::{create_safe_allowed_mentions, create_safe_message},
 };
 
 fn link_panel_message() -> CreateMessage<'static> {

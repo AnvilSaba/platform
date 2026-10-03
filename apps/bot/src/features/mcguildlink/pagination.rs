@@ -1,11 +1,12 @@
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use dashmap::DashMap;
 use serenity::{
     all::{ButtonStyle, CreateActionRow, CreateButton},
     builder::CreateContainerComponent,
-};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
 };
 
 const SNAPSHOT_TTL: Duration = Duration::from_secs(600);

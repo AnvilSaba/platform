@@ -1,3 +1,6 @@
+use poise::CreateReply;
+use serenity::all::{MessageFlags, User};
+
 use super::{
     presentation::{render, save},
     repository::{BlockCause, BlockGroup, BlockResult, DatabaseBlockRepository},
@@ -7,8 +10,6 @@ use crate::{
     app::{AppApplicationContext, AppError, BotDataExt},
     utils::create_safe_allowed_mentions,
 };
-use poise::CreateReply;
-use serenity::all::{MessageFlags, User};
 
 fn format_accounts(group: &BlockGroup) -> String {
     let mut text = String::from("ブロックした Discordアカウント:\n");

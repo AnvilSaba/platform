@@ -1,5 +1,6 @@
-use super::{ports::LinkCodeGenerator, types::LinkCode};
 use rand::RngExt;
+
+use super::{ports::LinkCodeGenerator, types::LinkCode};
 
 const CODE_LENGTH: usize = 8;
 const CODE_CHARACTERS: &[u8] = b"ACDEFGHJKMNPQRTUVWXYZacdefghjkmnpqrtuvwxyz234679";

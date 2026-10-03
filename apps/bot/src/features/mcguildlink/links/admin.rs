@@ -1,3 +1,7 @@
+use poise::CreateReply;
+use serenity::all::{MessageFlags, User};
+use uuid::Uuid;
+
 use super::{
     presentation::{ListPage, Scope, load, page, save_snapshot},
     repository::DatabaseAccountLinksRepository,
@@ -7,9 +11,6 @@ use crate::{
     app::{AppApplicationContext, AppError, BotDataExt},
     utils::create_safe_allowed_mentions,
 };
-use poise::CreateReply;
-use serenity::all::{MessageFlags, User};
-use uuid::Uuid;
 
 async fn send_command_page(ctx: AppApplicationContext<'_>, scope: Scope) -> Result<(), AppError> {
     ctx.defer_ephemeral().await?;

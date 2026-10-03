@@ -1,6 +1,5 @@
-use super::{model::Link, ports::AccountLinksRepository};
-use crate::app::AppError;
-use crate::features::mcguildlink::pagination::{Pagination, Snapshot as PageSnapshot};
+use std::sync::{Arc, OnceLock};
+
 use serenity::{
     all::{ButtonStyle, CreateActionRow, CreateButton, ReactionType, SeparatorSpacingSize},
     builder::{
@@ -8,8 +7,11 @@ use serenity::{
         CreateSectionComponent, CreateSeparator, CreateTextDisplay, CreateThumbnail, CreateUnfurledMediaItem,
     },
 };
-use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
+
+use super::{model::Link, ports::AccountLinksRepository};
+use crate::app::AppError;
+use crate::features::mcguildlink::pagination::{Pagination, Snapshot as PageSnapshot};
 
 const PAGE_SIZE: usize = 5;
 const PAGE_BUTTON_PREFIX: &str = "account_links_page_button:";
@@ -149,8 +151,9 @@ pub(super) fn parse_page(id: &str) -> Option<(u64, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::{TimeZone, Utc};
+
+    use super::*;
 
     fn link(index: u128) -> Link {
         Link {

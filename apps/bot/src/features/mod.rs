@@ -8,8 +8,9 @@ mod pin;
 mod question;
 mod thread_auto_invite;
 
-use sqlx::PgPool;
 use std::borrow::Cow;
+
+use sqlx::PgPool;
 
 use crate::{
     app::{AppCommand, config::AppConfig},

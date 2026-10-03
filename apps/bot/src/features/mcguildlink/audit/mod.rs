@@ -1,14 +1,12 @@
 mod queries;
 mod retry;
 
-pub use retry::audit_retry;
-
-pub use queries::resume_stopped;
-
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+pub use queries::resume_stopped;
+pub use retry::audit_retry;
 use serde::Deserialize;
 use serenity::{
     all::{ChannelId, CreateMessage, Http},
@@ -268,9 +266,10 @@ pub async fn run_delivery(data: Arc<BotData>, http: Arc<Http>) {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Mutex, time::Duration};
+
     use super::*;
     use crate::features::mcguildlink::test_support;
-    use std::{sync::Mutex, time::Duration};
 
     #[derive(Default)]
     struct CapturingSender(Mutex<Vec<AuditPost>>);

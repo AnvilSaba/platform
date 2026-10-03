@@ -1,5 +1,6 @@
-use super::types::{DiscordAccountId, DiscordUserId, LinkCode};
 use sqlx::PgConnection;
+
+use super::types::{DiscordAccountId, DiscordUserId, LinkCode};
 
 /// Discord アカウントを登録し、既存の場合は最終確認したユーザー名を更新する。
 /// 同一利用者の発行要求は、呼び出し元のトランザクションで行ロックを保持して直列化する。

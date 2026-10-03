@@ -4,10 +4,9 @@ mod question_creation_handler;
 
 use std::{str::FromStr, time::Duration};
 
-pub use command::question;
-
 use anyhow::Context as _;
 use bot_macros::event_handler;
+pub use command::question;
 use serenity::{
     all::{
         ButtonStyle, CacheHttp, ComponentInteractionDataKind, Context, CreateActionRow, CreateButton, EditThread,

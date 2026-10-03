@@ -1,7 +1,8 @@
-use super::model::Link;
-use crate::app::AppError;
 use serenity::async_trait;
 use uuid::Uuid;
+
+use super::model::Link;
+use crate::app::AppError;
 
 #[async_trait]
 pub trait AccountLinksRepository: Send + Sync {

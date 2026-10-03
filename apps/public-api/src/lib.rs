@@ -15,7 +15,6 @@ use axum::{
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
-
 use whitelist_store::{WhitelistVersion, snapshot, version};
 
 #[derive(Clone)]

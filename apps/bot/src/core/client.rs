@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::core::event_handler::BotEventHandlers;
 use serenity::{
     Client,
     all::prelude::{Context, EventHandler, GatewayIntents},
@@ -10,6 +9,8 @@ use serenity::{
     model::event::FullEvent,
     secrets::Token,
 };
+
+use crate::core::event_handler::BotEventHandlers;
 
 struct ClientEventHandler(BotEventHandlers);
 

@@ -1,3 +1,11 @@
+use serenity::{
+    all::{ComponentInteraction, ComponentInteractionDataKind, Context, FullEvent, Interaction, ModalInteraction},
+    async_trait,
+};
+use sqlx::PgPool;
+
+use super::LIST_LINK_BUTTON_ID;
+use super::presentation::parse_page;
 use super::{
     blocking::{interactions as block_interactions, presentation as block_presentation},
     interactions::{self, UNLINK_BUTTON_PREFIX, UNLINK_MODAL_PREFIX},
@@ -7,14 +15,6 @@ use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
 };
-use serenity::{
-    all::{ComponentInteraction, ComponentInteractionDataKind, Context, FullEvent, Interaction, ModalInteraction},
-    async_trait,
-};
-use sqlx::PgPool;
-
-use super::LIST_LINK_BUTTON_ID;
-use super::presentation::parse_page;
 
 pub struct AccountLinksEventHandler {
     repository: DatabaseAccountLinksRepository,

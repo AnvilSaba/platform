@@ -1,6 +1,5 @@
 use std::{borrow::Cow, time::Duration};
 
-use crate::app::{AppContext, AppError, BotDataExt, BotError};
 use async_stream::stream;
 use futures::{
     Stream, StreamExt,
@@ -18,6 +17,8 @@ use serenity::{
         id::GuildId,
     },
 };
+
+use crate::app::{AppContext, AppError, BotDataExt, BotError};
 
 pub fn create_safe_allowed_mentions<'a>() -> CreateAllowedMentions<'a> {
     CreateAllowedMentions::new()

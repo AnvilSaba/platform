@@ -1,7 +1,8 @@
-use super::{ports::MemberDepartureRepository, queries};
-use crate::app::AppError;
 use serenity::async_trait;
 use sqlx::PgPool;
+
+use super::{ports::MemberDepartureRepository, queries};
+use crate::app::AppError;
 
 pub struct DatabaseMemberDepartureRepository {
     pool: PgPool,

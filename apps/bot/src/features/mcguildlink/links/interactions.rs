@@ -1,11 +1,3 @@
-use super::{
-    ports::AccountLinksRepository,
-    presentation::{ListPage, Scope, get_snapshot, load, page, save_snapshot},
-};
-use crate::{
-    app::AppError,
-    utils::{create_ephemeral_message, create_safe_allowed_mentions},
-};
 use serenity::{
     all::{
         ComponentInteraction, Context, EditInteractionResponse, LabelComponent, MessageFlags, ModalComponent,
@@ -17,6 +9,15 @@ use serenity::{
     },
 };
 use uuid::Uuid;
+
+use super::{
+    ports::AccountLinksRepository,
+    presentation::{ListPage, Scope, get_snapshot, load, page, save_snapshot},
+};
+use crate::{
+    app::AppError,
+    utils::{create_ephemeral_message, create_safe_allowed_mentions},
+};
 
 pub(super) const UNLINK_BUTTON_PREFIX: &str = "unlink_button:";
 pub(super) const UNLINK_MODAL_PREFIX: &str = "unlink_confirm_modal:";

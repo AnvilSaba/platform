@@ -1,11 +1,12 @@
+use serenity::{
+    all::{ComponentInteraction, Context, MessageFlags},
+    builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
+};
+
 use super::presentation;
 use crate::{
     app::AppError,
     utils::{create_ephemeral_message, create_safe_allowed_mentions},
-};
-use serenity::{
-    all::{ComponentInteraction, Context, MessageFlags},
-    builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
 };
 
 pub(in crate::features::mcguildlink::links) async fn show_page(

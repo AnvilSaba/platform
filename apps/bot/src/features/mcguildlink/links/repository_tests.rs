@@ -1,8 +1,9 @@
+use serde_json::json;
+use sqlx::PgPool;
+
 use super::ports::AccountLinksRepository;
 use super::repository::DatabaseAccountLinksRepository;
 use crate::features::mcguildlink::test_support::{self, FIRST, SECOND};
-use serde_json::json;
-use sqlx::PgPool;
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn lists_and_unlinks_only_the_selected_relationship(pool: PgPool) {

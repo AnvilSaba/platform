@@ -1,11 +1,12 @@
+use sqlx::PgPool;
+use uuid::Uuid;
+
 use super::{
     ports::AccountLinksRepository,
     presentation::{ListPage, Scope, get_snapshot, page, save_snapshot},
     repository::DatabaseAccountLinksRepository,
 };
 use crate::features::mcguildlink::test_support;
-use sqlx::PgPool;
-use uuid::Uuid;
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn page_uses_initial_snapshot_after_a_link_changes(pool: PgPool) {

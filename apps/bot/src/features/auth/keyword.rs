@@ -4,10 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::app::{AppContext, AppError, BotDataExt, BotError};
-use crate::core::BotEventHandler;
-use crate::features::auth::utils::create_auth_log_message;
-use crate::utils::{create_ephemeral_message, create_interaction_message, create_message, create_model, send_message};
 use anyhow::Context as _;
 use dashmap::DashMap;
 use poise::say_reply;
@@ -23,6 +19,11 @@ use serenity::model::application::{ButtonStyle, LabelComponent, ModalComponent};
 use serenity::model::colour::colours::branding;
 use serenity::model::event::FullEvent;
 use serenity::small_fixed_array::FixedString;
+
+use crate::app::{AppContext, AppError, BotDataExt, BotError};
+use crate::core::BotEventHandler;
+use crate::features::auth::utils::create_auth_log_message;
+use crate::utils::{create_ephemeral_message, create_interaction_message, create_message, create_model, send_message};
 
 const KEYWORD_INPUT_BUTTON_CUSTOM_ID: &str = "keyword_input:button";
 const FAILED_ATTEMPT_COOLDOWN: Duration = Duration::from_secs(60);

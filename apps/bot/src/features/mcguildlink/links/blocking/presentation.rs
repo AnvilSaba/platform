@@ -1,7 +1,9 @@
+use std::sync::{Arc, OnceLock};
+
+use serenity::builder::{CreateComponent, CreateContainer, CreateContainerComponent, CreateTextDisplay};
+
 use super::repository::BlockGroup;
 use crate::features::mcguildlink::pagination::{Pagination, Snapshot as PageSnapshot};
-use serenity::builder::{CreateComponent, CreateContainer, CreateContainerComponent, CreateTextDisplay};
-use std::sync::{Arc, OnceLock};
 
 const PREFIX: &str = "blocked_accounts_page:";
 const PAGE_SIZE: usize = 10;
@@ -61,9 +63,10 @@ pub fn render(id: u64, snapshot: &Snapshot, requested: usize) -> Vec<CreateCompo
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::super::repository::DiscordAccount;
     use super::*;
-    use chrono::Utc;
 
     #[test]
     fn list_pages_keep_the_first_ten_groups_and_root_labels() {

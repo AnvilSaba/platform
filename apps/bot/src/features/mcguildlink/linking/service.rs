@@ -49,13 +49,15 @@ impl<R: LinkingRepository, G: LinkCodeGenerator> LinkCodes<R, G> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::LinkCode;
-    use super::*;
-    use serenity::async_trait;
     use std::{
         collections::{HashSet, VecDeque},
         sync::{Arc, Mutex},
     };
+
+    use serenity::async_trait;
+
+    use super::super::types::LinkCode;
+    use super::*;
 
     #[derive(Clone, Default)]
     struct State {

@@ -1,7 +1,8 @@
-use super::{ports::MemberDepartureRepository, repository::DatabaseMemberDepartureRepository};
-use crate::features::mcguildlink::test_support::{self, FIRST, SECOND};
 use serde_json::json;
 use sqlx::PgPool;
+
+use super::{ports::MemberDepartureRepository, repository::DatabaseMemberDepartureRepository};
+use crate::features::mcguildlink::test_support::{self, FIRST, SECOND};
 
 async fn link_count(pool: &PgPool, user_id: u64) -> i64 {
     sqlx::query_scalar::<_, i64>(

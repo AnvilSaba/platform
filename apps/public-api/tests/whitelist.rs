@@ -1,15 +1,15 @@
+use std::time::Duration;
+
 use axum::{
     Router,
     body::Body,
     http::{HeaderMap, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
+use public_api::router;
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::time::Duration;
 use tower::ServiceExt;
-
-use public_api::router;
 
 async fn reader(pool: &PgPool) -> PgPool {
     PgPoolOptions::new()

@@ -1,5 +1,6 @@
-use crate::app::AppError;
 use serenity::async_trait;
+
+use crate::app::AppError;
 
 /// 退出に伴う紐付け・未使用コードの削除と監査記録を一括で確定する。
 #[async_trait]

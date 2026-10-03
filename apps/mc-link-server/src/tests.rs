@@ -1,3 +1,13 @@
+use std::{io::Write, net::TcpStream, time::Duration};
+
+use mc_protocol::{
+    packet::{PacketId, RawPacket, UncompressedPacket},
+    ser::Serialize,
+    varint::VarInt,
+};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey, rand_core::OsRng};
+use uuid::Uuid;
+
 use crate::{
     VERSION,
     identity::Name,
@@ -13,14 +23,6 @@ use crate::{
     server::LinkServer,
     session::{SessionProfile, SessionVerifier, signed_sha1},
 };
-use mc_protocol::{
-    packet::{PacketId, RawPacket, UncompressedPacket},
-    ser::Serialize,
-    varint::VarInt,
-};
-use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey, rand_core::OsRng};
-use std::{io::Write, net::TcpStream, time::Duration};
-use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn status_advertises_26_3_and_echoes_ping() {

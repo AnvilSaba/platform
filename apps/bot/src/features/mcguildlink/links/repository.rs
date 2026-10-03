@@ -1,8 +1,9 @@
-use super::{model::Link, ports::AccountLinksRepository, queries};
-use crate::app::AppError;
 use serenity::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+use super::{model::Link, ports::AccountLinksRepository, queries};
+use crate::app::AppError;
 
 #[derive(Clone)]
 pub struct DatabaseAccountLinksRepository {

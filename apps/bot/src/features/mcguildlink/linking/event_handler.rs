@@ -1,9 +1,3 @@
-use super::{ports::LinkCodeResult, repository::DatabaseLinkingRepository, service::LinkCodes, types::DiscordUserId};
-use crate::{
-    app::{AppError, BotDataExt},
-    core::BotEventHandler,
-    utils::create_safe_allowed_mentions,
-};
 use serenity::{
     all::{
         ComponentInteraction, ComponentInteractionDataKind, Context, EditInteractionResponse, FullEvent, Interaction,
@@ -13,6 +7,12 @@ use serenity::{
 use sqlx::PgPool;
 
 use super::START_LINK_BUTTON_ID;
+use super::{ports::LinkCodeResult, repository::DatabaseLinkingRepository, service::LinkCodes, types::DiscordUserId};
+use crate::{
+    app::{AppError, BotDataExt},
+    core::BotEventHandler,
+    utils::create_safe_allowed_mentions,
+};
 
 pub struct LinkCodeEventHandler {
     codes: LinkCodes<DatabaseLinkingRepository>,

@@ -1,9 +1,11 @@
+use std::time::Duration;
+
+use serde_json::json;
+use sqlx::PgPool;
+
 use super::repository::{BlockCause, BlockResult, DatabaseBlockRepository};
 use crate::features::mcguildlink::GuildMembershipEventHandler;
 use crate::features::mcguildlink::test_support::{self, FIRST, SECOND};
-use serde_json::json;
-use sqlx::PgPool;
-use std::time::Duration;
 
 async fn counts(pool: &PgPool) -> (i64, i64, i64, i64) {
     let links: i64 = sqlx::query_scalar("SELECT count(*) FROM mcguildlink.account_links")

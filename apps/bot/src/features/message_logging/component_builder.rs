@@ -1,12 +1,5 @@
 use std::{borrow::Cow, iter};
 
-use crate::{
-    app::utils::components::{
-        create_container_section, create_container_text, create_section_thumbnail, create_separator,
-    },
-    extensions::{AttachmentExt, MessageBuilderTimestampExt},
-    features::message_logging::log_type::MessageLogKind,
-};
 use itertools::{Either, Itertools, enumerate};
 use serenity::{
     all::{Message, MessageBuilder, MessageReferenceKind},
@@ -21,6 +14,14 @@ use serenity::{
     utils::{Content, ContentModifier},
 };
 use similar::{Algorithm, Change, ChangeTag, TextDiff};
+
+use crate::{
+    app::utils::components::{
+        create_container_section, create_container_text, create_section_thumbnail, create_separator,
+    },
+    extensions::{AttachmentExt, MessageBuilderTimestampExt},
+    features::message_logging::log_type::MessageLogKind,
+};
 
 pub fn bold_underline<'a>(content: &'a str) -> Content<'a> {
     content + ContentModifier::Bold + ContentModifier::Underline

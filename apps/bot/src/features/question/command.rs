@@ -1,3 +1,9 @@
+use std::borrow::Cow;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
+
+use anyhow::Context as _;
 use poise::CreateReply;
 use serenity::all::{
     ButtonStyle, CreateActionRow, CreateButton, CreateForumPost, CreateMessage, CreateSelectMenu, CreateSelectMenuKind,
@@ -7,17 +13,11 @@ use serenity::builder::CreateComponent;
 use tokio::sync::{RwLock, mpsc};
 use tracing::debug;
 
-use std::borrow::Cow;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::vec;
-
 use crate::app::{AppApplicationContext, AppError, BotDataExt};
 use crate::features::question::create_question_toggle_button;
 use crate::features::question::modal::{BasicQuestionData, DetailedQuestionData};
 use crate::features::question::question_creation_handler::{CustomIds, QuestionCreationHandler};
 use crate::utils::has_authed_role;
-use anyhow::Context as _;
 
 fn reaction_from_forum_emoji(emoji: &ForumEmoji) -> Option<ReactionType> {
     match emoji.clone() {

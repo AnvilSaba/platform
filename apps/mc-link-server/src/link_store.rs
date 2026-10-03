@@ -76,9 +76,10 @@ async fn consume(pool: &PgPool, code: &str, player: &SessionProfile) -> Result<L
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
     use crate::identity::Name;
-    use uuid::Uuid;
 
     async fn restricted_pool(pool: &PgPool) -> PgPool {
         sqlx::postgres::PgPoolOptions::new()

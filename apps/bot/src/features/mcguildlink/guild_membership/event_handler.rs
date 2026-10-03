@@ -1,14 +1,15 @@
+use serenity::{
+    all::{Context, FullEvent},
+    async_trait,
+};
+use sqlx::PgPool;
+
 use super::super::links::blocking::repository::{BlockCause, DatabaseBlockRepository};
 use super::leave::{DatabaseMemberDepartureRepository, MemberDepartureRepository};
 use crate::{
     app::{AppError, BotDataExt},
     core::BotEventHandler,
 };
-use serenity::{
-    all::{Context, FullEvent},
-    async_trait,
-};
-use sqlx::PgPool;
 
 pub struct GuildMembershipEventHandler {
     departure: DatabaseMemberDepartureRepository,
