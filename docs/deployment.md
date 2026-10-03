@@ -156,16 +156,37 @@ http://mcguildlink-http:8080
 
 ### 2.6 GitHub Actionsの本番環境
 
-GitHubのSettingsから`production` Environmentを作成し、次のEnvironment secretsを登録します。
+デプロイ対象ごとに、次の5つのEnvironmentを作成します。
+
+```text
+production/bot
+production/mc-link-server
+production/public-api
+production/db-migrator
+production/chart
+```
+
+既存の`production` Environmentは、過去のデプロイ履歴のため削除せず残します。手動デプロイでは次の指定で対象別の環境を使い、Releaseでは`inputs.app`を使います。[GitHubのWorkflow構文](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idenvironment)
+
+```yaml
+environment: production/${{ inputs.target }}
+```
+
+デプロイ用の共通資格情報は、既存のリポジトリ secrets/variablesを使用します。
 
 | 名前 | 内容 |
 | --- | --- |
-| `DEPLOY_SSH_HOST` | 本番サーバーのホスト名またはIPアドレス |
-| `DEPLOY_SSH_USER` | k3sを操作できるデプロイ用ユーザー |
-| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵 |
-| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵 |
+| `DEPLOY_SSH_HOST` | 本番サーバーのホスト名またはIPアドレス（repository secret） |
+| `DEPLOY_SSH_USER` | k3sを操作できるデプロイ用ユーザー（repository secret） |
+| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵（repository secret） |
+| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵（repository secret） |
+| `DEPLOY_SSH_PORT` | SSHポート（repository variable、未設定時は22） |
 
-SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も設定します。`DEPLOY_SSH_KNOWN_HOSTS`には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵fingerprintと一致することを確認してください。
+各Environmentへ同じ値を複製する必要はありません。対象ごとに設定を変える場合は、そのEnvironmentに同名のsecretまたはvariableを登録します。[Secretsの優先順位](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)、[Variablesの優先順位](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence)
+
+保護ルールは既存の`production`と同じく未設定です。承認を必須にする場合は、各EnvironmentにRequired reviewersを設定します。[Environmentの管理](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+
+`DEPLOY_SSH_KNOWN_HOSTS`には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵fingerprintと一致することを確認してください。
 
 デプロイ用ユーザーには次の準備が必要です。
 
@@ -173,10 +194,10 @@ SSHポートが22以外の場合は、Environment variable `DEPLOY_SSH_PORT`も�
 - `kubectl`と`helm`がsudoなしでk3sを操作できるようにする
 - 2.3の`helm registry login`を同じユーザーで実行する
 
-必要に応じて`production` EnvironmentへRequired reviewersを設定すると、本番デプロイ前に承認を挟めます。
+各Environmentは共通のHelm release（`platform`）を更新するため、workflowの共通concurrencyとサーバー側の`flock`による排他を維持します。Environmentを分けても、同一releaseへの同時更新を許可しません。
 
 ## 3. GitHub Actions からデプロイ
-Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。
+Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。対象に応じて`production/bot`、`production/mc-link-server`、`production/public-api`、`production/db-migrator`、`production/chart`のEnvironmentを参照します。
 
 GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
 
