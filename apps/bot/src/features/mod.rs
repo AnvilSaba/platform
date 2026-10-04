@@ -56,6 +56,7 @@ pub fn commands() -> Vec<AppCommand> {
         discord_management::role_export,
         discord_management::role_plan,
         admin::reload_config,
+        discord_management::preview,
         thread_auto_invite::invite_thread,
         thread_auto_invite::add_invite_role,
         thread_auto_invite::remove_invite_role,

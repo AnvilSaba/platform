@@ -44,7 +44,8 @@ def resource(properties):
 definitions = {
     "default": obj({"default": {"const": True}}, ["default"]),
     "clear": obj({"clear": {"const": True}}, ["clear"]),
-    "message": obj({"id": logical_id, "body": {"type": "string", "minLength": 1}}, ["id", "body"]),
+    "message": obj({"id": logical_id, "body": {"type": "string", "minLength": 1,
+        "description": "Markdown本文。画像は ![代替テキスト](添付名) の独立行。同名画像を入力全体で最大8件共有。描画後のText Display合計4000文字、40コンポーネント以内（意味検証）。"}}, ["id", "body"]),
     "messages": {"type": "array", "items": ref("message"), "description": "各要素が1投稿。ID重複は意味検証で拒否。"},
     "thread": {"oneOf": [
         obj({"channel": logical_id, "name": {"type": "string", "minLength": 1, "maxLength": 100}, "body": ref("messages")}, ["channel", "name", "body"]),
@@ -86,7 +87,7 @@ definitions["channel"] = resource({
 })
 definitions["message_set"] = {"oneOf": [
     obj({"channel": logical_id, "body": ref("messages"),
-         "ensure": {"const": "present"}}),
+         "ensure": {"const": "present"}}, ["channel", "body"]),
     obj({"ensure": {"const": "absent"}}, ["ensure"]),
 ]}
 

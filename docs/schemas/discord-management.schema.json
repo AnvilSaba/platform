@@ -168,7 +168,8 @@
         },
         "body": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Markdown本文。画像は ![代替テキスト](添付名) の独立行。同名画像を入力全体で最大8件共有。描画後のText Display合計4000文字、40コンポーネント以内（意味検証）。"
         }
       },
       "additionalProperties": false,
@@ -1013,7 +1014,11 @@
               ]
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "required": [
+            "channel",
+            "body"
+          ]
         },
         {
           "type": "object",

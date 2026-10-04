@@ -1,0 +1,42 @@
+#:schema ../schemas/discord-management.schema.json
+schema_version = 1
+
+# この Channel は preview では作成されない。実構成と state は維持される。
+[channels.rules]
+type = "text"
+name = "ルール"
+
+[message_sets.guidelines]
+channel = "rules"
+
+[[message_sets.guidelines.body]]
+id = "basic"
+body = '''
+# 基本ルール
+互いを尊重してください。
+![案内図](guide.png)
+画像の後にも本文を配置できます。
+メンション表記 @everyone は残り、通知は抑制されます。
+'''
+
+[[message_sets.guidelines.body]]
+id = "questions"
+body = '''
+## 質問について
+同じ添付画像を再利用できます。
+![案内図の再表示](guide.png)
+'''
+
+[threads.details]
+channel = "rules"
+name = "基本ルールの補足"
+
+[[threads.details.body]]
+id = "example"
+body = '''
+補足本文も一度だけプレビューします。
+![補足図](guide.png)
+```
+![コード内の例示](添付不要.png)
+```
+'''
