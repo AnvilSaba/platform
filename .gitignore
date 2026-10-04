@@ -8,10 +8,6 @@ app.toml
 # Rust
 target/
 
-# Gradle / Kotlin
-.gradle/
-**/build/
-
 # IDE / OS
 .idea/
 .vscode/*

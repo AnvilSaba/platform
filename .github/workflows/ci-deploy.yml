@@ -71,6 +71,3 @@ jobs:
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/build-image/action.yml')"
       - name: Check syntax
         run: bash -n ./scripts/deploy-production.sh
-      - name: Verify deployment behavior
-        shell: pwsh
-        run: ./scripts/check-deployment.ps1

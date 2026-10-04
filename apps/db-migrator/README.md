@@ -12,4 +12,4 @@ cargo run --locked -p db-migrator
 
 通常のアプリデプロイでは Job の実行・正常完了待機を自動で行う。失敗した場合はアプリを更新しない。DB 変更がなく、全 migration が適用済みでも正常終了する。
 
-配置・ロール・初回セットアップは [独立デプロイ手順](../../docs/independent-deployment.md)、リリースと互換性の方針は [リリース手順](../../docs/releases.md) を参照する。
+配置・ロール・初回セットアップは [本番デプロイ手順](../../docs/deployment.md#initial-setup)、リリースと互換性の方針は [リリース手順](../../docs/releases.md) を参照する。

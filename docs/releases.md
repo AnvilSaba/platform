@@ -28,7 +28,7 @@ Workflow は次を自動実行します。
 
 アプリ image は従来どおり `vX.Y.Z` でデプロイします。Migrator image はチェックアウトしたコミットから生成した `sha-<完全な40桁のGit SHA>` を使い、SemVer タグは付けません。各アプリのビルド Workflow は SHA を入力として受け取る必要がなく、同じリリースタグをチェックアウトすることで revision を揃えます。複数アプリの同じ SemVer が Migrator のタグで衝突することはありません。後日の手動デプロイも、指定したアプリの Git tag から SHA を解決し、対応する Migrator を使います。Migrator の SHA が一致しない指定はデプロイ前に拒否します。
 
-この方式の導入前に公開したリリースには、対応する完全な SHA タグの Migrator が必要です。同じ revision から Migrator を公開するか、新しいアプリリリースを作成してから使用します。初期の DB・ロール・Secret の準備は[独立デプロイ手順](independent-deployment.md#配置順序)を参照してください。
+この方式の導入前に公開したリリースには、対応する完全な SHA タグの Migrator が必要です。同じ revision から Migrator を公開するか、新しいアプリリリースを作成してから使用します。初期の DB・ロール・Secret の準備は[本番デプロイ手順](deployment.md#initial-setup)を参照してください。
 
 ## ローカルでリリース内容を確認する
 
