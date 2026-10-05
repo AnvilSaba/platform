@@ -20,7 +20,7 @@ Use the default triage roles, mapped to readable GitHub labels with spaces. See 
 
 ### Domain docs
 
-This is a single-context repo using root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+This is a single-context repo using root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
 
 ### Stacked pull requests
 
