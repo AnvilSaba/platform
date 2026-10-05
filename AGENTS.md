@@ -5,7 +5,7 @@
 
 ## Development
 
-- Before completing or committing Rust code, dependency, toolchain, or formatting changes, follow the verification steps in `docs/agents/development.md`.
+- Before completing or committing Rust code, SQL, database schema, dependency, toolchain, or formatting changes, follow the applicable steps in `docs/agents/development.md`.
 - For Git writes with read-only sandbox access to `.git`, follow the execution guidance in `docs/agents/development.md`.
 
 ## Commit and PR titles

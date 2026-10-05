@@ -51,6 +51,20 @@ mise run db:test:down
 Bot は `apps/bot/config.toml` に開発用設定が必要です。
 `mise -E podman run up`／`mise -E docker run up` で DB の起動先を切り替えられます。
 
+### マイグレーションの追加と SQL の検証
+
+追加は `mise exec -- sqlx migrate add -r migration_name` で行い、生成された up/down を編集します。`migration_name` は変更内容に合う名前に置き換えてください。適用済みのファイルは変更しません。
+
+SQL・スキーマ変更後は、リポジトリルートで次を実行し、更新された `.sqlx/` もコミットします。DB 起動・マイグレーションは自動です。
+
+```powershell
+mise run sqlx:prepare
+mise run sqlx:check
+```
+
+適用だけなら `mise run db:migrate` を使います。互換性・切り戻しは [リリース手順](releases.md#migration-の互換性) を参照してください。
+`mise exec -- sqlx migrate revert` は空の開発用 DB でのみ使用し、`DATABASE_URL` をその DB のマイグレーション専用ユーザーに設定します。初期 down はスキーマと保存データを削除するため、データを保持する切り戻しには使いません。
+
 ## 2. 個別テスト
 
 ### 2.1 Rust

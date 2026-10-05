@@ -130,6 +130,10 @@ kubectl -n anvilsaba create secret generic postgres-db-credentials \
 | public-api-db-credentials | platform_public_api |
 | db-migrator-db-credentials | platform_db_migrator |
 
+共有 DB は `platform` です。Helm は接続先を `DATABASE_URL`、各 Secret の `password` を `DATABASE_PASSWORD` として渡します。後者は URL 内のパスワードより優先します。
+
+ロール作成は `bootstrap.sql` が行います。アプリには runtime ロール経由で必要なテーブル・列の権限だけを与え、DB 所有権・スキーマ作成権限・マイグレーションロール・将来のテーブルへのデフォルト権限は与えません。DB・スキーマの作成権限は Migrator に与えますが、`CREATEROLE` は不要です。
+
 <a id="initial-setup"></a>
 
 ### 初回の DB 準備と配置順序
@@ -175,8 +179,8 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
   --set cloudflared.replicas=1 --timeout 10m
 ```
 
-DB ロールと権限は [DB 手順](database.md)、更新時の互換性と切り戻しは [リリース手順](releases.md) を参照してください。
-アプリ自身はスキーマ変更を実行せず、起動時に必要なマイグレーションの ID・成功状態・チェックサムを確認します。
+更新時の互換性と切り戻しは [リリース手順](releases.md) を参照してください。
+アプリは起動時に必要なマイグレーション履歴だけを読み取り、定義・適用履歴の不足、適用失敗、チェックサム不一致では起動を拒否します。スキーマ変更と DB 全体の履歴の整合性は Migrator Job が管理します。
 
 ### 2.5 Cloudflare Tunnel
 
@@ -291,6 +295,12 @@ Discord接続のREADY後、コンソールがコマンドを受け付けるよ�
 - `mc-link-server` Service が本番の `25600/TCP` をコンテナ内の `25565/TCP` へ転送している
 - PostgreSQL再起動後もデータが残る
 - Secretの実値がGitやログに含まれていない
+
+## 監査配送の再開
+
+送信失敗は60秒後から自動再試行し、待機時間を倍増します（上限1時間）。Discord の403・404では再試行を停止します。
+
+設定・権限を修正後、対象サーバーのモデレーターロールを持つ管理者が `/audit_retry event_id:<イベントID>` で1件、`/audit_retry` で停止中の全件を再試行待ちに戻します。
 
 ## Pod 起動直後の外向き通信
 
