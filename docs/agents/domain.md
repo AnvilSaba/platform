@@ -11,8 +11,8 @@ This repository uses a single-context domain documentation layout.
 
 When naming domain concepts in issue titles, refactor proposals, hypotheses, or tests, use the vocabulary defined in `GLOSSARY.md`. If an existing ADR conflicts with proposed work, surface the conflict explicitly rather than silently overriding it.
 
-## 文書の配置
+## Document locations
 
-- ドメイン用語はルートの `GLOSSARY.md`、長期的な設計判断と理由は `docs/adr/` に記録する。
-- API・ライブラリ・既存コードの根拠を確認する際は `docs/research/` を参照する。
-- 機能仕様と受け入れ条件は GitHub Issue を正本とし、Grill の草案や質問履歴を恒久 docs に重複保存しない。
+- Record domain terms in root `GLOSSARY.md` and long-term design decisions and their rationale in `docs/adr/`.
+- Consult `docs/research/` for evidence about APIs, libraries, and existing code.
+- Treat GitHub Issues as the source of truth for feature specifications and acceptance criteria; keep grilling drafts and question history out of permanent docs.

@@ -3,6 +3,11 @@
 - Write user-facing plain text in Japanese.
 - Always run `gh` commands outside the sandbox. Do not retry `gh` inside the sandbox after a network or authentication failure.
 
+## Development
+
+- Before completing or committing Rust code, dependency, toolchain, or formatting changes, follow the verification steps in `docs/agents/development.md`.
+- For Git writes with read-only sandbox access to `.git`, follow the execution guidance in `docs/agents/development.md`.
+
 ## Commit and PR titles
 
 - Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for commit messages and PR titles, using previous commits and PRs as examples.
