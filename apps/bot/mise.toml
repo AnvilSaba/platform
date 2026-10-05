@@ -1,0 +1,15 @@
+[tasks.check]
+description = "bot の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p bot"
+
+[tasks.test]
+description = "bot をテストする"
+depends = ["//:db:test:up"]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p bot"
+
+[tasks.run]
+description = "開発用 DB を準備して Bot を起動する"
+depends = ["//:db:migrate"]
+env.DATABASE_URL = "postgres://platform_bot:bot-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p bot"

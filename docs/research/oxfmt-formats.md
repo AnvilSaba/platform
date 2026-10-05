@@ -39,7 +39,7 @@ oxfmt 0.71.0 と Taplo 0.10.0 で、空・入れ子・複数行の配列、イ�
 
 `mise install` の postinstall hook は、ツールが導入済みでも実行される（[公式 Hooks](https://mise.jdx.dev/hooks.html#preinstall-postinstall-hook)）。
 
-`[deps.npm]` の `auto = true` と `run = "npm ci"` を設定し、postinstall から `mise deps` を呼ぶ。入力が変わった場合や出力がなくなった場合だけ導入し、`mise run`・`mise exec` の前にも確認する。現在 experimental のため、その設定を有効にしている（[公式 Deps](https://mise.jdx.dev/dev-tools/deps.html)）。
+`[deps.npm]` の `auto = true` と `run = "npm ci"` を設定し、postinstall から `mise deps` を呼ぶ。入力が変わった場合や出力がなくなった場合だけ導入し、mise によるタスク実行・`mise exec` の前にも確認する。現在 experimental のため、その設定を有効にしている（[公式 Deps](https://mise.jdx.dev/dev-tools/deps.html)）。
 
 Windows の oxfmt LSP がネイティブファイルを使用中だったため、毎回の `npm ci` は EPERM になった。破損した依存ディレクトリを `target/oxfmt-locked-node-modules` に保管し、再導入した。通常の再実行では依存管理の更新判定により不要な再導入を省く。
 

@@ -1,0 +1,15 @@
+[tasks.check]
+description = "public-api の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p public-api"
+
+[tasks.test]
+description = "public-api をテストする"
+depends = ["//:db:test:up"]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p public-api"
+
+[tasks.run]
+description = "開発用 DB を準備して公開 API を起動する"
+depends = ["//:db:migrate"]
+env.DATABASE_URL = "postgres://platform_public_api:api-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p public-api"

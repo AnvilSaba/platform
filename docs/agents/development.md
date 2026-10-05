@@ -2,7 +2,7 @@
 
 ## Verification
 
-After changing files supported by rustfmt or Oxfmt, run `mise run fmt` and then `mise run fmt:check` from the repository root before completing or committing the task. Run `mise install` to install tools and npm dependencies. mise also checks npm dependencies before `mise run` and `mise exec`.
+After changing files supported by rustfmt or Oxfmt, run `mise :fmt` and then `mise :fmt:check` from the repository root before completing or committing the task. Run `mise install` to install tools and npm dependencies. Invoke tasks directly as `mise :<task>` or `mise //<path>:<task>`. mise also checks npm dependencies before task execution and `mise exec`.
 
 For Rust code, Rust dependencies, the Rust toolchain, or formatting settings, also run:
 
@@ -15,7 +15,7 @@ Fix failures before completing the task. If a check cannot run, report it as unv
 ## Database changes
 
 - Add migrations; leave applied files unchanged. Preserve running and rollback compatibility; see `docs/releases.md`.
-- After SQL or schema changes, run `mise run sqlx:prepare` and `mise run sqlx:check`; commit `.sqlx/` updates.
+- After SQL or schema changes, run `mise :sqlx:prepare` and `mise :sqlx:check`; commit `.sqlx/` updates.
 - Update each affected app's required migration IDs, including transitive dependencies; verify the list during review.
 - Grant runtime roles only required table and column privileges, without database ownership or schema creation rights. Reserve schema changes for the Migrator Job.
 

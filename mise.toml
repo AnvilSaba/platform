@@ -1,3 +1,8 @@
+monorepo_root = true
+
+[monorepo]
+config_roots = ["apps/*", "crates/*", "deploy/helm/platform"]
+
 [settings]
 experimental = true
 idiomatic_version_file_enable_tools = ["node", "rust"]
@@ -19,6 +24,7 @@ run = "npm ci"
 postinstall = "mise deps"
 
 [task_config]
+cascade = true
 shell = "{% if os() == 'windows' %}cmd /d /c{% else %}sh -c{% endif %}"
 
 [vars]
@@ -47,41 +53,6 @@ run = "cargo build --locked"
 description = "Rust ワークスペースの全ターゲットを検査する"
 run = "cargo check --locked --all-targets"
 
-[tasks."check:bot"]
-description = "bot の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p bot"
-
-[tasks."check:bot-macros"]
-description = "bot-macros の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p bot-macros"
-
-[tasks."check:db-migrator"]
-description = "db-migrator の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p db-migrator"
-
-[tasks."check:helm"]
-description = "Helm Chart の lint とテンプレート生成を検査する"
-run = [
-  "helm lint deploy/helm/platform --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test",
-  "helm template platform deploy/helm/platform --namespace anvilsaba --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test >{{ vars.null }}",
-]
-
-[tasks."check:mc-link-server"]
-description = "mc-link-server の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p mc-link-server"
-
-[tasks."check:platform-database"]
-description = "platform-database の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p platform-database"
-
-[tasks."check:platform-signal"]
-description = "platform-signal の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p platform-signal"
-
-[tasks."check:public-api"]
-description = "public-api の全ターゲットを検査する"
-run = "cargo check --locked --all-targets -p public-api"
-
 # Tests
 
 [tasks.test]
@@ -90,70 +61,15 @@ depends = ["db:test:up"]
 env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
 run = "cargo test --locked"
 
-[tasks."test:bot"]
-description = "bot をテストする"
-depends = ["db:test:up"]
-env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
-run = "cargo test --locked -p bot"
-
-[tasks."test:bot-macros"]
-description = "bot-macros をテストする"
-run = "cargo test --locked -p bot-macros"
-
-[tasks."test:db-migrator"]
-description = "db-migrator をテストする"
-run = "cargo test --locked -p db-migrator"
-
-[tasks."test:mc-link-server"]
-description = "mc-link-server をテストする"
-depends = ["db:test:up"]
-env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
-run = "cargo test --locked -p mc-link-server"
-
-[tasks."test:platform-database"]
-description = "platform-database をテストする"
-depends = ["db:test:up"]
-env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
-run = "cargo test --locked -p platform-database"
-
-[tasks."test:platform-signal"]
-description = "platform-signal をテストする"
-run = "cargo test --locked -p platform-signal"
-
-[tasks."test:public-api"]
-description = "public-api をテストする"
-depends = ["db:test:up"]
-env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
-run = "cargo test --locked -p public-api"
-
 # Applications
 
 [tasks.up]
 description = "開発用 DB を準備し、全アプリを並列起動する"
-depends = ["run:bot", "run:mc-link-server", "run:public-api"]
+depends = ["//apps/...:run"]
 
 [tasks.down]
 description = "開発用 DB を停止する（データは保持）"
 depends = ["db:down"]
-
-[tasks."run:bot"]
-description = "開発用 DB を準備して Bot を起動する"
-depends = ["db:migrate"]
-dir = "apps/bot"
-env.DATABASE_URL = "postgres://platform_bot:bot-dev-password@127.0.0.1:55432/platform"
-run = "cargo run --locked -p bot"
-
-[tasks."run:mc-link-server"]
-description = "開発用 DB を準備して MC Link Server を起動する"
-depends = ["db:migrate"]
-env.DATABASE_URL = "postgres://platform_mc_link_server:mc-dev-password@127.0.0.1:55432/platform"
-run = "cargo run --locked -p mc-link-server"
-
-[tasks."run:public-api"]
-description = "開発用 DB を準備して公開 API を起動する"
-depends = ["db:migrate"]
-env.DATABASE_URL = "postgres://platform_public_api:api-dev-password@127.0.0.1:55432/platform"
-run = "cargo run --locked -p public-api"
 
 # Development database
 

@@ -1,0 +1,7 @@
+[tasks.check]
+description = "platform-signal の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p platform-signal"
+
+[tasks.test]
+description = "platform-signal をテストする"
+run = "cargo test --locked -p platform-signal"

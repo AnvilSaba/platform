@@ -13,4 +13,4 @@ jobs:
       - uses: ./.github/actions/setup-mise
         with:
           install-args: node rust npm:oxfmt
-      - run: mise run fmt:check
+      - run: mise :fmt:check

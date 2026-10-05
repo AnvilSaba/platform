@@ -35,23 +35,23 @@ mise trust
 mise install
 ```
 
-`mise run fmt` で Rust とその他の対応ファイルを整形し、`mise run fmt:check` で検査します。
+`mise :fmt` で Rust とその他の対応ファイルを整形し、`mise :fmt:check` で検査します。
 
 DB は WSL Container CLI／Podman／Docker の `run`・`start`・`exec` を直接使用して管理します。
 既定は `wslc` を使用します。引数で Podman／Docker に切り替えられます。
 
 ```powershell
-mise run test                 # WSL Container CLI（既定）
-mise -E podman run test        # Podman
-mise -E docker run test        # Docker
-mise run run:public-api
-mise run db:test:down
+mise :test                 # WSL Container CLI（既定）
+mise -E podman :test        # Podman
+mise -E docker :test        # Docker
+mise //apps/public-api:run
+mise :db:test:down
 ```
 
-`mise run up` で開発用 DB の起動・マイグレーション後、3アプリを並列実行します。
-実行中はログが流れ続けます。Ctrl+C でアプリを終了し、`mise run down` で DB を停止します。
+`mise :up` で開発用 DB の起動・マイグレーション後、3アプリを並列実行します。
+実行中はログが流れ続けます。Ctrl+C でアプリを終了し、`mise :down` で DB を停止します。
 Bot は `apps/bot/config.toml` に開発用設定が必要です。
-`mise -E podman run up`／`mise -E docker run up` で DB の起動先を切り替えられます。
+`mise -E podman :up`／`mise -E docker :up` で DB の起動先を切り替えられます。
 
 ### マイグレーションの追加と SQL の検証
 
@@ -60,31 +60,53 @@ Bot は `apps/bot/config.toml` に開発用設定が必要です。
 SQL・スキーマ変更後は、リポジトリルートで次を実行し、更新された `.sqlx/` もコミットします。DB 起動・マイグレーションは自動です。
 
 ```powershell
-mise run sqlx:prepare
-mise run sqlx:check
+mise :sqlx:prepare
+mise :sqlx:check
 ```
 
-適用だけなら `mise run db:migrate` を使います。互換性・切り戻しは [リリース手順](releases.md#migration-の互換性) を参照してください。
+適用だけなら `mise :db:migrate` を使います。互換性・切り戻しは [リリース手順](releases.md#migration-の互換性) を参照してください。
 `mise exec -- sqlx migrate revert` は空の開発用 DB でのみ使用し、`DATABASE_URL` をその DB のマイグレーション専用ユーザーに設定します。初期 down はスキーマと保存データを削除するため、データを保持する切り戻しには使いません。
 
 ## 2. 個別テスト
 
 ### 2.1 Rust
 
-リポジトリルートで実行します。`check`／`test` はワークスペース全体、`check:<クレート名>`／`test:<クレート名>` は個別のアプリ・クレートを対象にします。
+ルートの `mise.toml` は monorepo モードを有効にし、共通ツール・DB 管理・ワークスペース全体のタスクを定義します。
+個別タスクは `apps/*`、`crates/*`、`deploy/helm/platform` の `mise.toml` に定義します。
+`check`／`test` はルートで実行するとワークスペース全体を対象にします。
+個別のアプリ・クレートには `//<ディレクトリ>:check`／`//<ディレクトリ>:test` を使用します。
 
-一覧は `mise tasks ls` で確認できます。DB が必要なテストはテスト用 DB を自動起動し、`DATABASE_URL` を設定します。
+全体の一覧は `mise tasks ls --all`、現在のディレクトリのタスクは `mise tasks ls` で確認できます。
+DB が必要なテストはルートの `//:db:test:up` に依存し、テスト用 DB を自動起動して `DATABASE_URL` を設定します。
 テスト名や `--test` などの Cargo 引数は `--` の後に渡せます。
 
 ```powershell
-mise run check:bot
-mise -E podman run test:public-api -- --test whitelist
+mise //apps/bot:check
+mise -E podman //apps/public-api:test -- --test whitelist
+mise //crates/platform-signal:test
+```
+
+アプリ・クレートのディレクトリやその配下では、`:check`／`:test`／`:run` でそのプロジェクトのタスクを実行できます。
+ルートのタスクを指定する場合は `//:fmt:check` のように書きます。
+
+```powershell
+cd apps/public-api
+mise :check
+mise -E docker :test -- --test whitelist
+mise //:fmt:check
+```
+
+パスの `...` は配下のプロジェクトに一致します。次の例は、リポジトリ内のどのディレクトリからでも実行できます。
+
+```powershell
+mise //apps/...:check
+mise //crates/...:test
 ```
 
 ### 2.2 Helm Chart
 
 ```powershell
-mise run check:helm
+mise //deploy/helm/platform:check
 ```
 
 ### 2.3 コンテナイメージ

@@ -4,9 +4,10 @@
 
 ## ドキュメント
 
-`mise run test` で DB 起動とテストをまとめて実行します。
-`mise run up` で DB を準備して全アプリを並列起動します。Ctrl+C でアプリを終了し、`mise run down` で DB を停止します。
+`mise :test` で DB 起動とテストをまとめて実行します。
+`mise :up` で DB を準備して全アプリを並列起動します。Ctrl+C でアプリを終了し、`mise :down` で DB を停止します。
 前提ツールと設定方法は [開発手順](docs/development-and-integration-testing.md#ローカル開発) を参照してください。
+個別タスクは `mise //apps/bot:check` のように指定します。全体の一覧は `mise tasks ls --all` で確認できます。
 
 - [開発・個別テスト・統合テスト手順](docs/development-and-integration-testing.md)
 - [本番デプロイ手順](docs/deployment.md)

@@ -1,0 +1,7 @@
+[tasks.check]
+description = "bot-macros の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p bot-macros"
+
+[tasks.test]
+description = "bot-macros をテストする"
+run = "cargo test --locked -p bot-macros"

@@ -1,0 +1,9 @@
+[tasks.check]
+description = "db-migrator の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p db-migrator"
+
+[tasks.test]
+description = "db-migrator をテストする"
+depends = ["//:db:test:up"]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p db-migrator"

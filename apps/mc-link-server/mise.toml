@@ -1,0 +1,15 @@
+[tasks.check]
+description = "mc-link-server の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p mc-link-server"
+
+[tasks.test]
+description = "mc-link-server をテストする"
+depends = ["//:db:test:up"]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p mc-link-server"
+
+[tasks.run]
+description = "開発用 DB を準備して MC Link Server を起動する"
+depends = ["//:db:migrate"]
+env.DATABASE_URL = "postgres://platform_mc_link_server:mc-dev-password@127.0.0.1:55432/platform"
+run = "cargo run --locked -p mc-link-server"

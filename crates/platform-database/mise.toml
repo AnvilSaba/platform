@@ -1,0 +1,9 @@
+[tasks.check]
+description = "platform-database の全ターゲットを検査する"
+run = "cargo check --locked --all-targets -p platform-database"
+
+[tasks.test]
+description = "platform-database をテストする"
+depends = ["//:db:test:up"]
+env.DATABASE_URL = "postgres://postgres:test-password@127.0.0.1:55433/platform_test"
+run = "cargo test --locked -p platform-database"
