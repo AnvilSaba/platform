@@ -1,32 +1,61 @@
 #[cfg(test)]
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use aes::{Aes128, cipher::KeyIvInit};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 type Encryptor = cfb8::Encryptor<Aes128>;
 type Decryptor = cfb8::Decryptor<Aes128>;
 
-pub(crate) struct StreamEncryptor(Encryptor);
+pub(crate) struct CryptoStream<S> {
+    pub(super) inner: S,
+    encryptor: Option<Encryptor>,
+    decryptor: Option<Decryptor>,
+}
 
-impl StreamEncryptor {
-    pub(crate) fn new(key: &[u8; 16]) -> Self {
-        Self(Encryptor::new(key.into(), key.into()))
+impl<S> CryptoStream<S> {
+    pub(crate) fn new(inner: S) -> Self {
+        Self {
+            inner,
+            encryptor: None,
+            decryptor: None,
+        }
     }
 
-    pub(crate) fn apply(&mut self, bytes: &mut [u8]) {
-        self.0.encrypt(bytes);
+    pub(crate) fn encrypt(&mut self, key: &[u8; 16]) {
+        self.encryptor = Some(Encryptor::new(key.into(), key.into()));
+    }
+
+    pub(crate) fn decrypt(&mut self, key: &[u8; 16]) {
+        self.decryptor = Some(Decryptor::new(key.into(), key.into()));
     }
 }
 
-pub(crate) struct StreamDecryptor(Decryptor);
-
-impl StreamDecryptor {
-    pub(crate) fn new(key: &[u8; 16]) -> Self {
-        Self(Decryptor::new(key.into(), key.into()))
+impl<S: AsyncRead + Unpin> AsyncRead for CryptoStream<S> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = &result
+            && let Some(cipher) = &mut self.decryptor
+        {
+            cipher.decrypt(&mut buf.filled_mut()[before..]);
+        }
+        result
     }
+}
 
-    pub(crate) fn apply(&mut self, bytes: &mut [u8]) {
-        self.0.decrypt(bytes);
+impl<S: AsyncWrite + Unpin> CryptoStream<S> {
+    pub(crate) async fn write_all(&mut self, bytes: &mut [u8]) -> io::Result<()> {
+        if let Some(cipher) = &mut self.encryptor {
+            cipher.encrypt(bytes);
+        }
+        // Encrypt once; write_all handles Pending and partial writes without advancing the cipher again.
+        self.inner.write_all(bytes).await
     }
 }
 

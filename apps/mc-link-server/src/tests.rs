@@ -296,3 +296,43 @@ impl SessionVerifier for TestVerifier {
 fn test_server() -> LinkServer<TestVerifier, TestLinker> {
     LinkServer::new(TestVerifier, TestLinker)
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_encrypted_packet_survives_keepalive() {
+    const SECRET: [u8; 16] = [0x42; 16];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut connection = Connection::new(listener.accept().await.unwrap().0).unwrap();
+        connection.encrypt(&SECRET);
+        connection
+            .read_until(tokio::time::Instant::now() + Duration::from_secs(15))
+            .await
+            .unwrap()
+    });
+    let client = TcpStream::connect(address).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    let mut reader = Cfb8Reader::new(client.try_clone().unwrap(), &SECRET);
+    let mut writer = Cfb8Writer::new(client, &SECRET);
+    let mut bytes = Vec::new();
+    packet_from(&ConfigurationKeepAliveResponse { id: 123 })
+        .unwrap()
+        .write_sync(&mut bytes)
+        .unwrap();
+    writer.write_all(&bytes[..2]).unwrap();
+    let keepalive = RawPacket::read_sync(&mut reader).unwrap().as_uncompressed().unwrap();
+    assert_eq!(keepalive.packet_id, ConfigurationKeepAlive::PACKET_ID);
+    assert_eq!(
+        decode_exact::<ConfigurationKeepAlive>(&keepalive.payload).unwrap().id,
+        0
+    );
+    writer.write_all(&bytes[2..]).unwrap();
+    let packet = server.await.unwrap();
+    assert_eq!(packet.packet_id, ConfigurationKeepAliveResponse::PACKET_ID);
+    assert_eq!(
+        decode_exact::<ConfigurationKeepAliveResponse>(&packet.payload)
+            .unwrap()
+            .id,
+        123
+    );
+}

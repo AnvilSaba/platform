@@ -4,7 +4,7 @@ use std::{
 };
 
 use mc_protocol::{
-    packet::{MAX_PACKET_LENGTH, PacketError, PacketId, RawPacket, UncompressedPacket},
+    packet::{PacketError, PacketId, RawPacket, UncompressedPacket},
     ser::{Deserialize, Serialize},
     varint::VarIntError,
 };
@@ -17,10 +17,7 @@ use tokio::{
     time::{Instant, interval, sleep_until, timeout},
 };
 
-use super::{
-    crypto::{StreamDecryptor, StreamEncryptor},
-    packets::ConfigurationKeepAlive,
-};
+use super::{crypto::CryptoStream, packets::ConfigurationKeepAlive};
 use crate::{AppResult, invalid};
 
 pub(crate) fn decode_exact<T: Deserialize>(payload: &[u8]) -> AppResult<T> {
@@ -43,61 +40,9 @@ fn packet_io_error(error: PacketError) -> io::Error {
     }
 }
 
-struct Reader {
-    stream: OwnedReadHalf,
-    cipher: Option<StreamDecryptor>,
-}
-
-impl Reader {
-    async fn read_exact(&mut self, bytes: &mut [u8]) -> io::Result<()> {
-        self.stream.read_exact(bytes).await?;
-        if let Some(cipher) = &mut self.cipher {
-            cipher.apply(bytes);
-        }
-        Ok(())
-    }
-
-    async fn packet(&mut self) -> io::Result<UncompressedPacket> {
-        let mut length = 0_usize;
-        for shift in [0, 7, 14] {
-            let mut byte = [0_u8; 1];
-            self.read_exact(&mut byte).await?;
-            length |= ((byte[0] & 0x7f) as usize) << shift;
-            if byte[0] & 0x80 == 0 {
-                if length > MAX_PACKET_LENGTH {
-                    return Err(io::Error::new(ErrorKind::InvalidData, "packet too long"));
-                }
-                let mut data = vec![0_u8; length];
-                self.read_exact(&mut data).await?;
-                return RawPacket::new(data).as_uncompressed().map_err(packet_io_error);
-            }
-        }
-        Err(io::Error::new(ErrorKind::InvalidData, "packet length VarInt too long"))
-    }
-}
-
-struct Writer {
-    stream: OwnedWriteHalf,
-    cipher: Option<StreamEncryptor>,
-}
-
-impl Writer {
-    async fn send<P: PacketId + Serialize>(&mut self, packet: &P) -> io::Result<()> {
-        let mut bytes = Vec::new();
-        packet_from(packet)
-            .map_err(io::Error::other)?
-            .write_sync(&mut bytes)
-            .map_err(io::Error::other)?;
-        if let Some(cipher) = &mut self.cipher {
-            cipher.apply(&mut bytes);
-        }
-        self.stream.write_all(&bytes).await
-    }
-}
-
 pub(crate) struct Connection {
-    reader: Reader,
-    writer: Writer,
+    reader: CryptoStream<OwnedReadHalf>,
+    writer: CryptoStream<OwnedWriteHalf>,
 }
 
 impl Connection {
@@ -105,39 +50,35 @@ impl Connection {
         stream.set_nodelay(true)?;
         let (reader, writer) = stream.into_split();
         Ok(Self {
-            reader: Reader {
-                stream: reader,
-                cipher: None,
-            },
-            writer: Writer {
-                stream: writer,
-                cipher: None,
-            },
+            reader: CryptoStream::new(reader),
+            writer: CryptoStream::new(writer),
         })
     }
 
     async fn read(&mut self) -> io::Result<UncompressedPacket> {
-        timeout(Duration::from_secs(30), self.reader.packet())
+        timeout(Duration::from_secs(30), RawPacket::read_async(&mut self.reader))
             .await
             .map_err(|_| io::Error::new(ErrorKind::TimedOut, "packet read timed out"))?
+            .and_then(|packet| packet.as_uncompressed())
+            .map_err(packet_io_error)
     }
 
     pub(crate) async fn read_until(&mut self, deadline: Instant) -> io::Result<UncompressedPacket> {
         let mut keepalive = interval(Duration::from_secs(10));
         keepalive.tick().await;
-        let packet = self.reader.packet();
+        let packet = RawPacket::read_async(&mut self.reader);
         tokio::pin!(packet);
         loop {
             tokio::select! {
-                result = &mut packet => return result,
-                _ = keepalive.tick() => self.writer.send(&ConfigurationKeepAlive { id: 0 }).await?,
+                result = &mut packet => return result.and_then(|packet| packet.as_uncompressed()).map_err(packet_io_error),
+                _ = keepalive.tick() => send_packet(&mut self.writer, &ConfigurationKeepAlive { id: 0 }).await?,
                 _ = sleep_until(deadline) => return Err(io::Error::new(ErrorKind::TimedOut, "code input timed out")),
             }
         }
     }
 
     pub(crate) async fn send<P: PacketId + Serialize>(&mut self, packet: &P) -> io::Result<()> {
-        self.writer.send(packet).await
+        send_packet(&mut self.writer, packet).await
     }
 
     pub(crate) async fn receive<P: Deserialize>(&mut self, id: i32) -> AppResult<P> {
@@ -149,18 +90,18 @@ impl Connection {
     }
 
     pub(crate) fn encrypt(&mut self, key: &[u8; 16]) {
-        self.reader.cipher = Some(StreamDecryptor::new(key));
-        self.writer.cipher = Some(StreamEncryptor::new(key));
+        self.reader.decrypt(key);
+        self.writer.encrypt(key);
     }
 
     pub(crate) async fn close_after_send(&mut self) -> io::Result<()> {
-        self.writer.stream.shutdown().await?;
+        self.writer.inner.shutdown().await?;
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut buffer = [0_u8; 1024];
         loop {
             match timeout(
                 deadline.saturating_duration_since(Instant::now()),
-                self.reader.stream.read(&mut buffer),
+                self.reader.inner.read(&mut buffer),
             )
             .await
             {
@@ -173,4 +114,13 @@ impl Connection {
             }
         }
     }
+}
+
+async fn send_packet<P: PacketId + Serialize>(writer: &mut CryptoStream<OwnedWriteHalf>, packet: &P) -> io::Result<()> {
+    let mut bytes = Vec::new();
+    packet_from(packet)
+        .map_err(io::Error::other)?
+        .write_sync(&mut bytes)
+        .map_err(packet_io_error)?;
+    writer.write_all(&mut bytes).await
 }

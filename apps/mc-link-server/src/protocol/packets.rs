@@ -6,10 +6,7 @@ use std::{
 use fastnbt::{DeOpts, SerOpts};
 use mc_protocol::{
     Packet,
-    ser::{
-        Deserialize, MAX_STRING_LENGTH, SerializationError, Serialize, deserialize_string_with_max,
-        serialize_string_with_max,
-    },
+    ser::{Deserialize, SerializationError, Serialize},
     varint::VarInt,
 };
 use uuid::Uuid;
@@ -18,13 +15,13 @@ use crate::identity::Name;
 
 impl Serialize for Name {
     fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
-        serialize_string_with_max(self.as_ref(), writer, MAX_STRING_LENGTH)
+        self.as_ref().serialize(writer)
     }
 }
 
 impl Deserialize for Name {
     fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
-        Ok(Name::try_new(deserialize_string_with_max(reader, MAX_STRING_LENGTH)?).map_err(StdIOError::other)?)
+        Ok(Name::try_new(&String::deserialize(reader)?).map_err(StdIOError::other)?)
     }
 }
 
@@ -72,20 +69,15 @@ impl<'a> TextComponent<'a> {
 
 impl Serialize for TextComponent<'_> {
     fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
-        serialize_string_with_max(
-            &serde_json::to_string(&self).map_err(StdIOError::other)?,
-            writer,
-            MAX_STRING_LENGTH,
-        )
+        serde_json::to_string(&self)
+            .map_err(StdIOError::other)?
+            .serialize(writer)
     }
 }
 
 impl Deserialize for TextComponent<'_> {
     fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
-        Ok(
-            serde_json::from_str::<Self>(&deserialize_string_with_max(reader, MAX_STRING_LENGTH)?)
-                .map_err(StdIOError::other)?,
-        )
+        Ok(serde_json::from_str::<Self>(&String::deserialize(reader)?).map_err(StdIOError::other)?)
     }
 }
 
@@ -168,20 +160,15 @@ impl<'a> Status<'a> {
 
 impl Serialize for Status<'_> {
     fn serialize<W: Write + Unpin>(&self, writer: &mut W) -> Result<(), SerializationError> {
-        serialize_string_with_max(
-            &serde_json::to_string(&self).map_err(StdIOError::other)?,
-            writer,
-            MAX_STRING_LENGTH,
-        )
+        serde_json::to_string(&self)
+            .map_err(StdIOError::other)?
+            .serialize(writer)
     }
 }
 
 impl Deserialize for Status<'_> {
     fn deserialize<R: Read + Unpin>(reader: &mut R) -> Result<Self, SerializationError> {
-        Ok(
-            serde_json::from_str::<Self>(&deserialize_string_with_max(reader, MAX_STRING_LENGTH)?)
-                .map_err(StdIOError::other)?,
-        )
+        Ok(serde_json::from_str::<Self>(&String::deserialize(reader)?).map_err(StdIOError::other)?)
     }
 }
 

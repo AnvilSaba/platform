@@ -9,7 +9,7 @@ publish = false
 aes = { workspace = true }
 cfb8 = { workspace = true }
 fastnbt = { workspace = true }
-mc_protocol = { workspace = true }
+mc_protocol = { workspace = true, features = [ "async" ] }
 nutype = { workspace = true, features = [ "serde" ] }
 reqwest = { workspace = true, features = [ "json", "query" ] }
 rsa = { workspace = true, features = [ "getrandom" ] }

@@ -1811,6 +1811,7 @@ checksum = "876deb619b5a12a93f74736ad7e025fbc3d7becf526f87d18cfbe1244e8e775a"
 dependencies = [
  "mc_protocol_derive",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -3546,6 +3547,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
