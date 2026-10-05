@@ -2,7 +2,21 @@ name: db-migrator image
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "deploy/rust/**", ".github/actions/build-image/**", "apps/db-migrator/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/image-db-migrator.yml"]
+    paths:
+      [
+        "LICENSE",
+        "deploy/rust/**",
+        ".github/actions/build-image/**",
+        "apps/db-migrator/**",
+        "crates/**",
+        "migrations/**",
+        ".sqlx/**",
+        ".cargo/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".github/workflows/image-db-migrator.yml",
+      ]
   workflow_call:
     inputs:
       release_ref:

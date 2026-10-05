@@ -2924,7 +2924,7 @@ dependencies = [
 [[package]]
 name = "serenity"
 version = "0.12.5"
-source = "git+https://github.com/serenity-rs/serenity?branch=next#ad216ee1669a61c0d5c052fa7e2080b7f65951e0"
+source = "git+https://github.com/serenity-rs/serenity?branch=next#f2b6648837e03ba3bf9d43bd7cad116db87b29c7"
 replace = "serenity 0.12.5 (git+https://github.com/serenity-rs/serenity?rev=37b9f433ada8b9ccc5f93f04826403b175855f86)"
 
 [[package]]

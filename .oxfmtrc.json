@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/oxfmt_v0.71.0/npm/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "tabWidth": 2,
+  "ignorePatterns": [
+    "target/**",
+    ".sqlx/**",
+    "package-lock.json",
+    "**/CHANGELOG.md",
+    "deploy/helm/platform/templates/**",
+    "deploy/rust/about.hbs"
+  ]
+}

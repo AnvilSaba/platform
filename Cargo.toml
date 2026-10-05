@@ -1,13 +1,13 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/mc-link-server",
-    "apps/public-api",
-    "apps/db-migrator",
-    "apps/bot",
-    "crates/bot-macros",
-    "crates/platform-database",
-    "crates/platform-signal",
+  "apps/mc-link-server",
+  "apps/public-api",
+  "apps/db-migrator",
+  "apps/bot",
+  "crates/bot-macros",
+  "crates/platform-database",
+  "crates/platform-signal",
 ]
 
 [workspace.dependencies]

@@ -9,14 +9,23 @@ publish = false
 axum = { workspace = true }
 chrono = { workspace = true }
 httpdate = { workspace = true }
-platform-database = { path = "../../crates/platform-database" }
-platform-signal = { path = "../../crates/platform-signal" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "uuid", "chrono"] }
+sqlx = { workspace = true, features = [
+  "runtime-tokio",
+  "tls-rustls-ring",
+  "postgres",
+  "migrate",
+  "macros",
+  "uuid",
+  "chrono",
+] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 uuid = { workspace = true, features = ["serde"] }
+
+platform-database = { path = "../../crates/platform-database" }
+platform-signal = { path = "../../crates/platform-signal" }
 
 [dev-dependencies]
 http-body-util = { workspace = true }

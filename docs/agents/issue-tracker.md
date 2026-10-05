@@ -18,6 +18,7 @@ Infer the repository from the GitHub remote; `gh` does this automatically inside
 **PRs as a request surface: no.**
 
 When a skill says **publish to the issue tracker**, create a GitHub issue. When it says **fetch the relevant ticket**, run `gh issue view <number> --comments`.
+
 ## Specs and implementation tickets
 
 - The issue published by `to-spec` is the parent specification.

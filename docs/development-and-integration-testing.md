@@ -35,6 +35,8 @@ mise trust
 mise install
 ```
 
+`mise run fmt` で Rust とその他の対応ファイルを整形し、`mise run fmt:check` で検査します。
+
 DB は WSL Container CLI／Podman／Docker の `run`・`start`・`exec` を直接使用して管理します。
 既定は `wslc` を使用します。引数で Podman／Docker に切り替えられます。
 

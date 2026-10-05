@@ -8,6 +8,9 @@ app.toml
 # Rust
 target/
 
+# Node.js
+node_modules/
+
 # IDE / OS
 .idea/
 .vscode/*

@@ -123,12 +123,12 @@ kubectl -n anvilsaba create secret generic postgres-db-credentials \
 
 アプリ・Migrator の接続資格情報は次のように分け、DB ロールのパスワードと対応する Secret の値を揃えます。
 
-| Secret | DB ロール |
-|---|---|
-| bot-db-credentials | platform_bot |
+| Secret                        | DB ロール               |
+| ----------------------------- | ----------------------- |
+| bot-db-credentials            | platform_bot            |
 | mc-link-server-db-credentials | platform_mc_link_server |
-| public-api-db-credentials | platform_public_api |
-| db-migrator-db-credentials | platform_db_migrator |
+| public-api-db-credentials     | platform_public_api     |
+| db-migrator-db-credentials    | platform_db_migrator    |
 
 共有 DB は `platform` です。Helm は接続先を `DATABASE_URL`、各 Secret の `password` を `DATABASE_PASSWORD` として渡します。後者は URL 内のパスワードより優先します。
 
@@ -214,13 +214,13 @@ environment: production/${{ inputs.target }}
 
 デプロイ用の共通資格情報は、既存のリポジトリ secrets/variablesを使用します。
 
-| 名前 | 内容 |
-| --- | --- |
-| `DEPLOY_SSH_HOST` | 本番サーバーのホスト名またはIPアドレス（repository secret） |
-| `DEPLOY_SSH_USER` | k3sを操作できるデプロイ用ユーザー（repository secret） |
-| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵（repository secret） |
-| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵（repository secret） |
-| `DEPLOY_SSH_PORT` | SSHポート（repository variable、未設定時は22） |
+| 名前                     | 内容                                                        |
+| ------------------------ | ----------------------------------------------------------- |
+| `DEPLOY_SSH_HOST`        | 本番サーバーのホスト名またはIPアドレス（repository secret） |
+| `DEPLOY_SSH_USER`        | k3sを操作できるデプロイ用ユーザー（repository secret）      |
+| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵（repository secret）                  |
+| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵（repository secret）     |
+| `DEPLOY_SSH_PORT`        | SSHポート（repository variable、未設定時は22）              |
 
 各Environmentへ同じ値を複製する必要はありません。対象ごとに設定を変える場合は、そのEnvironmentに同名のsecretまたはvariableを登録します。[Secretsの優先順位](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)、[Variablesの優先順位](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence)
 
@@ -237,6 +237,7 @@ environment: production/${{ inputs.target }}
 各Environmentは共通のHelm release（`platform`）を更新するため、workflowの共通concurrencyとサーバー側の`flock`による排他を維持します。Environmentを分けても、同一releaseへの同時更新を許可しません。
 
 ## 3. GitHub Actions からデプロイ
+
 Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。対象に応じて`production/bot`、`production/mc-link-server`、`production/public-api`、`production/chart`のEnvironmentを参照します。アプリでは、指定した Git tag と同じ revision の Migrator Job を先行実行し、成功後にのみアプリを更新します。Job は最後に無効な通常状態へ戻します。
 
 GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
@@ -244,6 +245,7 @@ GitHub の Actions 画面で **Production deployment** を選び、**Run workflo
 ## 4. デプロイ後の確認
 
 動いてる Pod のイメージ確認
+
 ```bash
 kubectl get pods -n anvilsaba \
   -o custom-columns='POD:.metadata.name,IMAGE:.status.containerStatuses[*].image,IMAGE_ID:.status.containerStatuses[*].imageID'

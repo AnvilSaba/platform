@@ -10,14 +10,22 @@ aes = { workspace = true }
 cfb8 = { workspace = true }
 fastnbt = { workspace = true }
 mc_protocol = { workspace = true }
-nutype = { workspace = true, features = [ "serde" ] }
-reqwest = { workspace = true, features = [ "json", "query" ] }
-rsa = { workspace = true, features = [ "getrandom" ] }
-serde = { workspace = true, features = [ "derive" ] }
+nutype = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true, features = ["json", "query"] }
+rsa = { workspace = true, features = ["getrandom"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
-uuid = { workspace = true, features = [ "serde", "v4" ] }
-sqlx = { workspace = true, features = [ "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros", "uuid" ] }
-tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "net", "io-util", "time", "sync" ] }
+sqlx = { workspace = true, features = [
+  "runtime-tokio",
+  "tls-rustls-aws-lc-rs",
+  "postgres",
+  "migrate",
+  "macros",
+  "uuid",
+] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
+
 platform-database = { path = "../../crates/platform-database" }
 platform-signal = { path = "../../crates/platform-signal" }

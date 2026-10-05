@@ -2,10 +2,11 @@
 
 ## Verification
 
-Before reporting completion or committing changes to Rust code, dependencies, the toolchain, or formatting settings, run these commands from the repository root:
+After changing files supported by rustfmt or Oxfmt, run `mise run fmt` and then `mise run fmt:check` from the repository root before completing or committing the task. Run `mise install` to install tools and npm dependencies. mise also checks npm dependencies before `mise run` and `mise exec`.
+
+For Rust code, Rust dependencies, the Rust toolchain, or formatting settings, also run:
 
 ```powershell
-cargo fmt --all -- --check
 cargo clippy --workspace --locked --all-targets -- -D warnings
 ```
 

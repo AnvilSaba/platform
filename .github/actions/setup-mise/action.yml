@@ -1,0 +1,13 @@
+name: Setup mise
+description: mise と開発ツールの導入設定を共通化する。
+inputs:
+  install-args:
+    description: 導入するツール（省略時はすべて）
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+      with:
+        minimum_release_age: 7d
+        install_args: ${{ inputs.install-args }}

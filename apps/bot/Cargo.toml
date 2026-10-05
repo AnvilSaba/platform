@@ -8,48 +8,45 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 async-stream = { workspace = true }
-bot-macros = { path = "../../crates/bot-macros" }
-platform-signal = { path = "../../crates/platform-signal" }
-bpaf = { workspace = true, features = [ "derive" ] }
+bpaf = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 duration-str = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 nutype = { workspace = true }
-platform-database = { path = "../../crates/platform-database" }
+poise = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 rustyline = { workspace = true }
-serde = { workspace = true, features = [ "derive" ] }
+serde = { workspace = true, features = ["derive"] }
 serde_with = { workspace = true }
+serenity = { workspace = true }
 similar = { workspace = true }
 sqlx = { workspace = true, features = [
-    "runtime-tokio",
-    "tls-rustls-aws-lc-rs",
-    "postgres",
-    "migrate",
-    "macros",
-    "chrono",
-    "uuid",
+  "runtime-tokio",
+  "tls-rustls-aws-lc-rs",
+  "postgres",
+  "migrate",
+  "macros",
+  "chrono",
+  "uuid",
 ] }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "signal", "sync" ] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync"] }
 toml = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
-uuid = { workspace = true, features = [ "serde" ] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid = { workspace = true, features = ["serde"] }
 
-[dependencies.serenity]
-workspace = true
-
-[dependencies.poise]
-workspace = true
+bot-macros = { path = "../../crates/bot-macros" }
+platform-database = { path = "../../crates/platform-database" }
+platform-signal = { path = "../../crates/platform-signal" }
 
 [dev-dependencies]
 axum = { workspace = true }
 http-body-util = { workspace = true }
 public-api = { path = "../public-api" }
 serde_json = { workspace = true }
-tower = { workspace = true, features = [ "util" ] }
+tower = { workspace = true, features = ["util"] }

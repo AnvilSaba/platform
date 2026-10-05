@@ -2,9 +2,45 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "mise.toml", ".github/workflows/ci-rust.yml"]
+    paths:
+      [
+        "LICENSE",
+        "apps/bot/**",
+        "apps/public-api/**",
+        "apps/db-migrator/**",
+        "apps/mc-link-server/**",
+        "crates/**",
+        "migrations/**",
+        ".sqlx/**",
+        ".cargo/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "rustfmt.toml",
+        "mise.toml",
+        ".github/workflows/ci-rust.yml",
+        ".github/actions/setup-mise/**",
+      ]
   pull_request:
-    paths: ["LICENSE", "apps/bot/**", "apps/public-api/**", "apps/db-migrator/**", "apps/mc-link-server/**", "crates/**", "migrations/**", ".sqlx/**", ".cargo/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "mise.toml", ".github/workflows/ci-rust.yml"]
+    paths:
+      [
+        "LICENSE",
+        "apps/bot/**",
+        "apps/public-api/**",
+        "apps/db-migrator/**",
+        "apps/mc-link-server/**",
+        "crates/**",
+        "migrations/**",
+        ".sqlx/**",
+        ".cargo/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "rustfmt.toml",
+        "mise.toml",
+        ".github/workflows/ci-rust.yml",
+        ".github/actions/setup-mise/**",
+      ]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -25,8 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
-      - run: cargo fmt --all -- --check
+      - uses: ./.github/actions/setup-mise
       - name: Verify database role bootstrap
         run: |
           docker exec '${{ job.services.postgres.id }}' createdb -U postgres platform
