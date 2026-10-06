@@ -1,12 +1,14 @@
 ## Language and execution environment
 
 - Write user-facing plain text in Japanese.
+- Write agent-facing documentation in English.
 - Always run `gh` commands outside the sandbox. Do not retry `gh` inside the sandbox after a network or authentication failure.
 
 ## Development
 
 - Before completing or committing code, configuration, documentation, dependency, or toolchain changes, follow the applicable steps in `docs/agents/development.md`.
 - For Git writes with read-only sandbox access to `.git`, follow the execution guidance in `docs/agents/development.md`.
+- GitHub Actions dependencies are managed with `gh-actions-lock`. When changing workflows or composite actions, consult the [official README](https://raw.githubusercontent.com/github/gh-actions-lock/refs/heads/main/README.md).
 
 ## Commit and PR titles
 

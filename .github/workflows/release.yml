@@ -1,3 +1,5 @@
+# This workflow is managed by gh actions-lock.
+
 name: Release
 
 run-name: Release ${{ inputs.app }}${{ inputs.dry_run && ' [DryRun]' || '' }}
@@ -48,11 +50,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
+      - uses: taiki-e/install-action@v2.62.40
         with:
           tool: git-cliff@2.14.2
       - name: Prepare release
@@ -78,11 +80,11 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: main
-      - uses: taiki-e/install-action@41ef8c65f4034ff24ab1cc2cef52f3000bcf9523 # v2.62.40
+      - uses: taiki-e/install-action@v2.62.40
         with:
           tool: git-cliff@2.14.2
       - name: Prepare release
@@ -179,10 +181,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.release.outputs.tag }}
-      - uses: ./.github/actions/deploy-production
+      - uses: $/.github/actions/deploy-production
         with:
           target: ${{ inputs.app }}
           release-ref: ${{ needs.release.outputs.tag }}

@@ -1,3 +1,5 @@
+# This workflow is managed by gh actions-lock.
+
 name: db-migrator image
 on:
   push:
@@ -36,10 +38,10 @@ jobs:
     outputs:
       image_tag: ${{ steps.image.outputs.sha-tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.release_ref || github.ref }}
-      - uses: ./.github/actions/build-image
+      - uses: $/.github/actions/build-image
         id: image
         with:
           image: ghcr.io/anvilsaba/db-migrator

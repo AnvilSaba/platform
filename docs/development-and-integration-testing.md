@@ -53,6 +53,18 @@ mise :db:test:down
 Bot は `apps/bot/config.toml` に開発用設定が必要です。
 `mise -E podman :up`／`mise -E docker :up` で DB の起動先を切り替えられます。
 
+### GitHub Actions の依存関係
+
+[gh-actions-lock](https://github.com/github/gh-actions-lock) で、外部アクションのコミット SHA とリポジトリの識別情報を `.github/workflows/actions.lock` に固定します。ワークフローと composite action ではバージョンタグを指定し、同じリポジトリのアクションは `$/` 形式で参照します。
+
+```powershell
+gh extension install github/gh-actions-lock --pin v0.1.6
+gh actions-lock
+gh actions-lock --verify-local
+```
+
+ワークフローやアクションの `uses` を変更したら `gh actions-lock` を再実行し、生成されたロックファイルも変更に含めます。ロックファイルは手で編集しません。既存のブランチ・部分バージョン参照を最新コミットへ更新する場合は `gh actions-lock --relock`、上流との整合性を再検証する場合は `gh actions-lock --verify` を使用します。Formatting CI でも `--verify-local` で依存関係の網羅を検査します。
+
 ### マイグレーションの追加と SQL の検証
 
 追加は `mise exec -- sqlx migrate add -r migration_name` で行い、生成された up/down を編集します。`migration_name` は変更内容に合う名前に置き換えてください。適用済みのファイルは変更しません。

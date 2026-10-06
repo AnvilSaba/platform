@@ -1,3 +1,5 @@
+# This workflow is managed by gh actions-lock.
+
 name: Rust CI
 on:
   push:
@@ -59,9 +61,9 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:test-password@localhost:5432/platform_test
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: ./.github/actions/setup-mise
+      - uses: actions/checkout@v7.0.1
+      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: $/.github/actions/setup-mise
       - name: Verify database role bootstrap
         run: |
           docker exec '${{ job.services.postgres.id }}' createdb -U postgres platform

@@ -1,3 +1,5 @@
+# This workflow is managed by gh actions-lock.
+
 name: Deploy CI
 
 on:
@@ -36,7 +38,7 @@ jobs:
           - values.prod.yaml
           - values.integration.yaml
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Lint chart
         run: >-
           helm lint ./deploy/helm/platform
@@ -57,14 +59,14 @@ jobs:
   k3s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Parse config
         run: ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml')"
 
   deployment-script:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Parse deployment action
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/deploy-production/action.yml')"
       - name: Parse image action
