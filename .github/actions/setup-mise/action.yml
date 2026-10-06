@@ -10,4 +10,15 @@ runs:
     - uses: jdx/mise-action@v5.0.1
       with:
         minimum_release_age: 7d
+        install: false
+        cache: false
+        env: false
+    - name: CI 用の Rust プロファイルを設定
+      shell: bash
+      run: |
+        MISE_NO_HOOKS=1 mise use --env ci --tool-option profile=minimal "rust@$(mise current rust)"
+        echo "MISE_ENV=ci" >> "$GITHUB_ENV"
+    - uses: jdx/mise-action@v5.0.1
+      with:
+        minimum_release_age: 7d
         install_args: ${{ inputs.install-args }}

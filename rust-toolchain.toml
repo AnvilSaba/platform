@@ -3,3 +3,5 @@
 # group_imports 設定 (StdExternalCrate) を利用するため。
 [toolchain]
 channel = "nightly-2026-09-25"
+profile = "default"
+components = ["rustfmt", "clippy"]
