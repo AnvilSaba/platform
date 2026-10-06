@@ -7,6 +7,8 @@ on:
     branches: [main]
     paths:
       - "deploy/**"
+      - "mise.toml"
+      - ".github/actions/setup-mise/**"
       - "scripts/deploy-production.sh"
       - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
@@ -17,6 +19,8 @@ on:
   pull_request:
     paths:
       - "deploy/**"
+      - "mise.toml"
+      - ".github/actions/setup-mise/**"
       - "scripts/deploy-production.sh"
       - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
@@ -39,6 +43,9 @@ jobs:
           - values.integration.yaml
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: $/.github/actions/setup-mise
+        with:
+          install-args: helm
       - name: Lint chart
         run: >-
           helm lint ./deploy/helm/platform

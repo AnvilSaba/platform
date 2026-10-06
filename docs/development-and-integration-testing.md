@@ -1,30 +1,15 @@
 # 開発・個別テスト・統合テスト手順
 
-Bot・MC Link Server・公開 API の開発と検証を説明します。通常のローカル開発は mise、クラスタの統合テストは k3d を使います。
+Bot・MC Link Server・公開 API の開発と検証を説明します。当面は `mise :up` による擬似的な統合テストを使います。
 
 ## 1. 開発環境に必要なもの
 
-開発時はWindows上で各アプリを個別に検証し、全体の統合テストではDocker DesktopまたはPodman上のk3dを使用します。
+ローカルで各アプリを個別に検証し、全体の動作確認では mise で DB とアプリを起動します。
 
-- WSL Container CLI（切り替え可）
-- Docker DesktopまたはPodman（切り替え・k3d 統合テストに使用）
-- Helm
-- kubectl
-- k3d（Kubernetes統合テストを行う場合）
+- [mise](https://mise.jdx.dev/getting-started.html)
+- WSL Container CLI(切り替え可)
+- Docker Desktop または Podman(DB の起動先を切り替える場合)
 - Git
-
-本番用のDiscord token、Cloudflare Tunnel token、データベースの本番passwordは開発環境へ持ち込まないでください。
-
-### Rust ツールチェーン
-
-workspace は SQLx `0.9` を指定し、ライブラリと CLI を `0.9.0` に揃えます。
-各利用クレートの `build.rs` は `cargo:rerun-if-changed=../../migrations` を出力し、
-Rust ソースを変更せずに新しいマイグレーションを追加した場合も再ビルドします。
-これは [SQLx 0.9.0 の公式資料](https://docs.rs/sqlx/0.9.0/sqlx/macro.migrate.html#stable-rust-cargo-build-script)
-にある Stable Rust の Cargo build script による検知方法です。
-
-Nightly は、ReFS の増分コンパイル修正、Cargo の `min-publish-age`、rustfmt の `group_imports` も利用するため固定しています。
-GitHub Actions の SQLx CLI も `mise.toml` から導入するため、CLI のバージョン指定は `mise.toml` に集約します。
 
 ### ローカル開発
 
@@ -35,13 +20,13 @@ mise trust
 mise install
 ```
 
-`mise :fmt` で Rust とその他の対応ファイルを整形し、`mise :fmt:check` で検査します。
+`mise :fmt` で 対応ファイルを整形し、`mise :fmt:check` で検査します。
 
-DB は WSL Container CLI／Podman／Docker の `run`・`start`・`exec` を直接使用して管理します。
-既定は `wslc` を使用します。引数で Podman／Docker に切り替えられます。
+DB は WSL Container CLI/Podman/Docker の `run`・`start`・`exec` を直接使用して管理します。
+既定は `wslc` を使用します。引数で Podman/Docker に切り替えられます。
 
 ```powershell
-mise :test                 # WSL Container CLI（既定）
+mise :test                  # WSL Container CLI(既定)
 mise -E podman :test        # Podman
 mise -E docker :test        # Docker
 mise //apps/public-api:run
@@ -50,17 +35,16 @@ mise :db:test:down
 
 `mise :up` で開発用 DB の起動・マイグレーション後、3アプリを並列実行します。
 実行中はログが流れ続けます。Ctrl+C でアプリを終了し、`mise :down` で DB を停止します。
-Bot は `apps/bot/config.toml` に開発用設定が必要です。
-`mise -E podman :up`／`mise -E docker :up` で DB の起動先を切り替えられます。
+Bot は `apps/bot/config.sample.toml` を `apps/bot/config.toml` にコピーして開発用設定を用意します。
 
 ### GitHub Actions の依存関係
 
-[gh-actions-lock](https://github.com/github/gh-actions-lock) で、外部アクションのコミット SHA とリポジトリの識別情報を `.github/workflows/actions.lock` に固定します。ワークフローと composite action ではバージョンタグを指定し、同じリポジトリのアクションは `$/` 形式で参照します。
+[gh-actions-lock](https://github.com/github/gh-actions-lock) で依存関係を固定します。ワークフローと composite action ではバージョンタグを指定し、同じリポジトリのアクションは `$/` 形式で参照します。
 
 ```powershell
-gh extension install github/gh-actions-lock --pin v0.1.6
-gh actions-lock
-gh actions-lock --verify-local
+mise exec -- gh extension install github/gh-actions-lock --pin v0.1.6
+mise exec -- gh actions-lock
+mise exec -- gh actions-lock --verify-local
 ```
 
 ワークフローやアクションの `uses` を変更したら `gh actions-lock` を再実行し、生成されたロックファイルも変更に含めます。ロックファイルは手で編集しません。既存のブランチ・部分バージョン参照を最新コミットへ更新する場合は `gh actions-lock --relock`、上流との整合性を再検証する場合は `gh actions-lock --verify` を使用します。Formatting CI でも `--verify-local` で依存関係の網羅を検査します。
@@ -76,20 +60,17 @@ mise :sqlx:prepare
 mise :sqlx:check
 ```
 
-適用だけなら `mise :db:migrate` を使います。互換性・切り戻しは [リリース手順](releases.md#migration-の互換性) を参照してください。
+適用だけなら `mise :db:migrate` を使います。互換性・切り戻しは [リリース手順](releases.md#マイグレーションの互換性) を参照してください。
 `mise exec -- sqlx migrate revert` は空の開発用 DB でのみ使用し、`DATABASE_URL` をその DB のマイグレーション専用ユーザーに設定します。初期 down はスキーマと保存データを削除するため、データを保持する切り戻しには使いません。
 
 ## 2. 個別テスト
 
 ### 2.1 Rust
 
-ルートの `mise.toml` は monorepo モードを有効にし、共通ツール・DB 管理・ワークスペース全体のタスクを定義します。
-個別タスクは `apps/*`、`crates/*`、`deploy/helm/platform` の `mise.toml` に定義します。
-`check`／`test` はルートで実行するとワークスペース全体を対象にします。
-個別のアプリ・クレートには `//<ディレクトリ>:check`／`//<ディレクトリ>:test` を使用します。
+`check`/`test` はルートで実行するとワークスペース全体を対象にします。
+個別のアプリ・クレートには `//<ディレクトリ>:check`/`//<ディレクトリ>:test` を使用します。
 
 全体の一覧は `mise tasks ls --all`、現在のディレクトリのタスクは `mise tasks ls` で確認できます。
-DB が必要なテストはルートの `//:db:test:up` に依存し、テスト用 DB を自動起動して `DATABASE_URL` を設定します。
 テスト名や `--test` などの Cargo 引数は `--` の後に渡せます。
 
 ```powershell
@@ -98,7 +79,7 @@ mise -E podman //apps/public-api:test -- --test whitelist
 mise //crates/platform-signal:test
 ```
 
-アプリ・クレートのディレクトリやその配下では、`:check`／`:test`／`:run` でそのプロジェクトのタスクを実行できます。
+アプリ・クレートのディレクトリやその配下では、`:check`/`:test`/`:run` でそのプロジェクトのタスクを実行できます。
 ルートのタスクを指定する場合は `//:fmt:check` のように書きます。
 
 ```powershell
@@ -121,112 +102,24 @@ mise //crates/...:test
 mise //deploy/helm/platform:check
 ```
 
-### 2.3 コンテナイメージ
+## 3. 擬似的な統合テスト
 
-Rust アプリは共通の Dockerfile でビルドします。
-
-```powershell
-podman machine start
-foreach ($package in @('bot', 'mc-link-server', 'public-api', 'db-migrator')) {
-  podman build --file deploy/rust/Dockerfile --build-arg TARGETARCH=amd64 `
-    --build-arg "PACKAGE=$package" --build-arg "BINARY=$package" `
-    --build-arg "SOURCE_DIR=apps/$package" --tag "localhost/anvilsaba/${package}:test" .
-  if ($LASTEXITCODE -ne 0) { throw "$package のビルドに失敗しました" }
-}
-```
-
-Bot の設定構文を確認します。
+開発用 DB と 3 アプリを起動し、アプリ間の連携を確認します。Kubernetes 上のデプロイや Cloudflare Tunnel は検証対象に含みません。
 
 ```powershell
-podman run --rm `
-  --env DATABASE_URL=postgres://platform_bot:bot-dev-password@postgres:5432/platform `
-  --volume "${PWD}/apps/bot/config.sample.toml:/app/config.toml:ro" `
-  localhost/anvilsaba/bot:test --check-config
+mise :up
 ```
 
-## 3. 統合テスト環境のセットアップ
+- Bot・MC Link Server・公開 API が正常起動し、Bot が開発用 Discord サーバーへ接続できる
+- Discord でコードを発行し、Minecraft から `localhost:25565` へ接続して紐付けできる
+- `http://localhost:8080/whitelist.json` に紐付けが反映される
+- DB とアプリの再起動後も、紐付け・ブロック・未使用コードが保持される
 
-k3d はコンテナ内で k3s を動かす開発用ツールです。Windows では Docker Desktop または Podman を使用します。
-
-```powershell
-k3d cluster create anvilsaba
-kubectl config current-context
-kubectl get nodes
-kubectl create namespace anvilsaba --dry-run=client -o yaml | kubectl apply -f -
-```
-
-以降は context が `k3d-anvilsaba` になっている状態で実行します。
-通常の統合環境では `values.integration.yaml` を使い、Bot と Cloudflare Tunnel は停止します。
-
-```powershell
-k3d image import localhost/anvilsaba/mc-link-server:test localhost/anvilsaba/public-api:test localhost/anvilsaba/db-migrator:test -c anvilsaba
-kubectl -n anvilsaba create secret generic postgres-db-credentials `
-  --from-literal=password=dev-password --dry-run=client -o yaml | kubectl apply -f -
-helm upgrade --install platform deploy/helm/platform -n anvilsaba `
-  -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 `
-  --set publicApi.replicas=0 --set dbMigrator.enabled=false --timeout 10m
-kubectl rollout status statefulset/postgres -n anvilsaba --timeout=5m
-Get-Content deploy/postgres/bootstrap.sql -Raw | kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
-Get-Content deploy/postgres/local-passwords.sql -Raw | kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_admin -d platform -v ON_ERROR_STOP=1
-```
-
-`local-passwords.sql` は開発専用です。新規のテスト DB だけに適用し、本番には使用しません。
-DB ロールと同じパスワードをアプリ・Migrator ごとの Secret に登録します。
-
-```powershell
-$databaseSecrets = @{
-  'bot-db-credentials' = 'bot-dev-password'
-  'mc-link-server-db-credentials' = 'mc-dev-password'
-  'public-api-db-credentials' = 'api-dev-password'
-  'db-migrator-db-credentials' = 'migrator-dev-password'
-}
-foreach ($secret in $databaseSecrets.GetEnumerator()) {
-  kubectl -n anvilsaba create secret generic $secret.Key `
-    --from-literal="password=$($secret.Value)" --dry-run=client -o yaml | kubectl apply -f -
-}
-helm upgrade platform deploy/helm/platform -n anvilsaba `
-  -f deploy/helm/platform/values.integration.yaml --set mcLinkServer.replicas=0 `
-  --set publicApi.replicas=0 --set dbMigrator.enabled=true --timeout 10m
-kubectl logs -n anvilsaba job/db-migrator
-```
-
-Helm が Migrator の正常完了を確認した後にアプリを起動します。Job が失敗した場合は起動へ進まず、ログと DB 履歴を確認します。
-
-```powershell
-helm upgrade platform deploy/helm/platform -n anvilsaba `
-  -f deploy/helm/platform/values.integration.yaml --set dbMigrator.enabled=false --timeout 10m
-kubectl rollout status deployment/mc-link-server -n anvilsaba --timeout=5m
-kubectl rollout status deployment/public-api -n anvilsaba --timeout=5m
-```
-
-実 Discord の確認時のみ、開発専用設定を `bot-config` Secret の `config.toml` キーへ登録します。
-Bot イメージを `k3d image import localhost/anvilsaba/bot:test -c anvilsaba` で読み込み、Helm upgrade に `--set bot.image.repository=localhost/anvilsaba/bot --set bot.replicas=1` を追加します。
-
-## 4. 統合テスト手順
-
-```powershell
-kubectl get pods,deploy,statefulset,service,pvc -n anvilsaba
-kubectl get events -n anvilsaba --sort-by=.lastTimestamp
-kubectl logs -n anvilsaba deployment/mc-link-server --tail=100
-kubectl logs -n anvilsaba deployment/public-api --tail=100
-kubectl run curl-test -n anvilsaba --rm --restart=Never -i `
-  --image=curlimages/curl:8.15.0 `
-  -- http://public-api:8080/whitelist.json
-```
-
-起動対象の Pod が Ready になり、継続的な再起動がないことを確認します。
-公開 API は ClusterIP を維持し、通常はクラスタ内部から検証します。
-PostgreSQL と各アプリの再起動後も、紐付け・ブロック・未使用コードが保持されることを確認します。
-テスト環境で PostgreSQL を一時停止し、公開 API の503と復旧後の200も確認します。
 実 Minecraft 接続は [MC Link Server の確認項目](../apps/mc-link-server/README.md) に従います。
-開発専用 Tunnel を確認する場合は、専用 token を `cloudflare-tunnel` Secret の `token` キーへ登録し、`--set cloudflared.replicas=1` で起動します。
-Cloudflare の Service URL を `http://public-api:8080` に設定し、開発用 hostname から `/whitelist.json` の200と既存 JSON 形式を確認します。
-Minecraft 接続には開発用 `mc-link-server` Service の公開アドレスと `25565/TCP` を使用します。
+開発用 DB を停止したときの公開 API の 503 と、再起動後の 200 も確認します。
 
-## 5. テスト環境の削除
-
-開発用クラスタは必要なときに削除して作り直せます。
+Ctrl+C でアプリを終了し、DB を停止します。データは保持されます。
 
 ```powershell
-k3d cluster delete anvilsaba
+mise :down
 ```

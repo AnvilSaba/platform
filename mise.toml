@@ -9,6 +9,9 @@ idiomatic_version_file_enable_tools = ["node", "rust"]
 minimum_release_age = "7d"
 
 [tools]
+gh = "2.100.0"
+git-cliff = "2.14.2"
+helm = "4.2.4"
 "npm:oxfmt" = "0.71.0"
 
 [tools."cargo:sqlx-cli"]

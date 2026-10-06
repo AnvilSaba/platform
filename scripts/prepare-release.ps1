@@ -14,7 +14,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repositoryRoot
 
 if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
-    throw "git-cliff が見つかりません。https://git-cliff.org/docs/installation/ を参照してインストールしてください。"
+    throw "git-cliff が見つかりません。mise install を実行し、mise exec -- pwsh -File ./scripts/prepare-release.ps1 で実行してください。"
 }
 
 $releaseConfig = Import-PowerShellDataFile (Join-Path $PSScriptRoot "release-config.psd1")

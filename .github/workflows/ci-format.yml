@@ -12,13 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: $/.github/actions/setup-mise
+        with:
+          install-args: gh node rust npm:oxfmt
       - name: Verify Actions lockfile
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh extension install github/gh-actions-lock --pin v0.1.6
           gh actions-lock --verify-local
-      - uses: $/.github/actions/setup-mise
-        with:
-          install-args: node rust npm:oxfmt
       - run: mise :fmt:check

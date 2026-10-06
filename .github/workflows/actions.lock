@@ -5,8 +5,10 @@ version: 'v0.0.2'
 workflows:
     '.github/workflows/chart-platform.yml':
         - 'actions/checkout@v7.0.1'
+        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/ci-deploy.yml':
         - 'actions/checkout@v7.0.1'
+        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/ci-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'jdx/mise-action@v5.0.1'
@@ -42,7 +44,7 @@ workflows:
         - 'docker/setup-buildx-action@v4.3.0'
     '.github/workflows/release.yml':
         - 'actions/checkout@v7.0.1'
-        - 'taiki-e/install-action@v2.62.40'
+        - 'jdx/mise-action@v5.0.1'
 dependencies:
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
@@ -79,8 +81,3 @@ dependencies:
         commit: 'sha1-6323deb102c322ba6fcbdcafc7e3dddab59af2b6'
         owner_id: 580492
         repo_id: 298565987
-    'taiki-e/install-action@v2.62.40':
-        ref: 'v2.62.40'
-        commit: 'sha1-41ef8c65f4034ff24ab1cc2cef52f3000bcf9523'
-        owner_id: 43724913
-        repo_id: 442947557

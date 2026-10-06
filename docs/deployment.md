@@ -2,38 +2,26 @@
 
 Rust アプリと PostgreSQL を k3s へ配置します。初回セットアップでは DB・Secret を準備し、Migrator の正常完了後にアプリを起動します。
 
-## 1. デプロイ構成
+## 1. デプロイ環境のセットアップ
 
-本番はLinuxサーバー上のk3sへ、GHCRのDockerイメージをHelmでデプロイします。アプリケーションのソースコード全体は本番サーバーに不要です。
+### 1.1 Linux サーバー
 
-- Botイメージ：`ghcr.io/anvilsaba/bot:<tag>`
-- MC Link Serverイメージ：`ghcr.io/anvilsaba/mc-link-server:<tag>`
-- 公開 APIイメージ：`ghcr.io/anvilsaba/public-api:<tag>`
-- DB Migratorイメージ：`ghcr.io/anvilsaba/db-migrator:sha-<完全なGit SHA>`
-- Helm Chart：`oci://ghcr.io/anvilsaba/charts/platform`
-- namespace：`anvilsaba`
-- release：`platform`
-
-## 2. デプロイ環境のセットアップ
-
-### 2.1 Linuxサーバー
-
-UbuntuまたはDebianなどのLinuxサーバーを用意します。k3sはWindowsへネイティブインストールできないため、本番ではLinuxを使用します。
+Ubuntu または Debian などの Linux サーバーを用意します。
 
 必要なものは次のとおりです。
 
 - k3s
 - kubectl
 - Helm
-- flock（通常は`util-linux`に含まれます）
-- GHCRからイメージを取得する権限
-- Cloudflare remotely-managed Tunnelとtoken
+- flock(通常は `util-linux` に含まれます)
+- GHCR からイメージを取得する権限
+- Cloudflare remotely-managed Tunnel とトークン
 - Bot の本番設定
 - PostgreSQL の初期化ユーザーとアプリ・Migrator ごとの DB ロールのパスワード
 
-### 2.2 k3s
+### 1.2 k3s
 
-`deploy/k3s/config.yaml`をサーバー上の次の場所へ配置してからk3sを起動します。
+`deploy/k3s/config.yaml` をサーバー上の次の場所へ配置してから k3s を起動します。
 
 ```text
 /etc/rancher/k3s/config.yaml
@@ -53,7 +41,7 @@ sudo kubectl get nodes
 sudo kubectl get storageclass
 ```
 
-以降は`sudo`なしで実行するため、kubeconfigを設定します。
+以降は `sudo` なしで実行するため、kubeconfig を設定します。
 
 ```bash
 mkdir -p ~/.kube
@@ -65,27 +53,9 @@ source ~/.zshrc
 kubectl get nodes
 ```
 
-別の管理端末から接続する場合は、kubeconfig内の`127.0.0.1`をk3sサーバーのIPまたはDNS名へ変更し、API Serverの`6443/TCP`へ到達できるようにします。kubeconfigは秘密情報として扱います。
+### 1.3 Secret と設定
 
-### 2.3 Helm Chart
-
-ChartはOCI形式でGHCRから取得するため、本番サーバーへリポジトリやChartを配置する必要はありません。Chartがprivateの場合は、デプロイ用ユーザーでGHCRへログインします。
-
-```bash
-echo '<GITHUB PAT>' | helm registry login ghcr.io \
-  --username '<GITHUB USERNAME>' \
-  --password-stdin
-```
-
-PATには対象パッケージの`read:packages`権限が必要です。取得できることを確認します。
-
-```bash
-helm show chart oci://ghcr.io/anvilsaba/charts/platform --version '<CHART_VERSION>'
-```
-
-### 2.4 Secretと設定
-
-本番設定はリポジトリ外に置き、Gitへ追加しません。
+本番設定はリポジトリ外に置き、Git へ追加しません。
 Bot の設定は `apps/bot/config.sample.toml` を基に用意し、Secret 登録元のファイルは root 管理領域に配置します。
 MC Link Server と公開 API は設定ファイルを使用しません。
 
@@ -130,10 +100,6 @@ kubectl -n anvilsaba create secret generic postgres-db-credentials \
 | public-api-db-credentials     | platform_public_api     |
 | db-migrator-db-credentials    | platform_db_migrator    |
 
-共有 DB は `platform` です。Helm は接続先を `DATABASE_URL`、各 Secret の `password` を `DATABASE_PASSWORD` として渡します。後者は URL 内のパスワードより優先します。
-
-ロール作成は `bootstrap.sql` が行います。アプリには runtime ロール経由で必要なテーブル・列の権限だけを与え、DB 所有権・スキーマ作成権限・マイグレーションロール・将来のテーブルへのデフォルト権限は与えません。DB・スキーマの作成権限は Migrator に与えますが、`CREATEROLE` は不要です。
-
 <a id="initial-setup"></a>
 
 ### 初回の DB 準備と配置順序
@@ -169,7 +135,7 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
 kubectl logs -n anvilsaba job/db-migrator
 ```
 
-Migrator はアプリのリリースと同じ revision のイメージを使います。Helm は Job の正常完了まで待機します。
+Migrator はアプリのリリースと同じリビジョンのイメージを使います。Helm は Job の正常完了まで待機します。
 失敗時はアプリを起動せず Job のログと DB 履歴を確認します。成功後にアプリと cloudflared を起動し、Job を無効に戻します。
 
 ```bash
@@ -182,7 +148,7 @@ helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
 更新時の互換性と切り戻しは [リリース手順](releases.md) を参照してください。
 アプリは起動時に必要なマイグレーション履歴だけを読み取り、定義・適用履歴の不足、適用失敗、チェックサム不一致では起動を拒否します。スキーマ変更と DB 全体の履歴の整合性は Migrator Job が管理します。
 
-### 2.5 Cloudflare Tunnel
+### 1.4 Cloudflare Tunnel
 
 Cloudflare 側の Published application の Service URL を次に設定します。
 
@@ -190,61 +156,32 @@ Cloudflare 側の Published application の Service URL を次に設定します
 http://public-api:8080
 ```
 
-これは cloudflared と公開 API が同じ namespace にある場合の宛先です。
-別 namespace からは `http://public-api.anvilsaba.svc.cluster.local:8080` を使います。`publicApi.port` は Service 側のポートだけを変更するため、変更時は Tunnel の転送先ポートも合わせます。
-Helm のリリースだけでは Cloudflare 側の転送先は変更されません。
+### 1.5 GitHub Actions の本番環境
 
-### 2.6 GitHub Actionsの本番環境
+デプロイ用の共通資格情報は、既存のリポジトリのシークレット・変数を使用します。
 
-デプロイ対象ごとに、次の4つのEnvironmentを作成します。
+| 名前                     | 種別         | 内容                                     |
+| ------------------------ | ------------ | ---------------------------------------- |
+| `DEPLOY_SSH_HOST`        | シークレット | 本番サーバーのホスト名または IP アドレス |
+| `DEPLOY_SSH_USER`        | シークレット | k3s を操作できるデプロイ用ユーザー       |
+| `DEPLOY_SSH_PRIVATE_KEY` | シークレット | デプロイ専用 SSH 秘密鍵                  |
+| `DEPLOY_SSH_KNOWN_HOSTS` | シークレット | 検証済みの本番サーバー公開ホスト鍵       |
+| `DEPLOY_SSH_PORT`        | 変数         | SSH ポート                               |
 
-```text
-production/bot
-production/mc-link-server
-production/public-api
-production/chart
-```
-
-手動デプロイでは次の指定で対象別の環境を使い、Releaseでは`inputs.app`を使います。[GitHubのWorkflow構文](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idenvironment)
-migration はデプロイ対象アプリの Environment 内で自動実行します。
-
-```yaml
-environment: production/${{ inputs.target }}
-```
-
-デプロイ用の共通資格情報は、既存のリポジトリ secrets/variablesを使用します。
-
-| 名前                     | 内容                                                        |
-| ------------------------ | ----------------------------------------------------------- |
-| `DEPLOY_SSH_HOST`        | 本番サーバーのホスト名またはIPアドレス（repository secret） |
-| `DEPLOY_SSH_USER`        | k3sを操作できるデプロイ用ユーザー（repository secret）      |
-| `DEPLOY_SSH_PRIVATE_KEY` | デプロイ専用SSH秘密鍵（repository secret）                  |
-| `DEPLOY_SSH_KNOWN_HOSTS` | 検証済みの本番サーバー公開ホスト鍵（repository secret）     |
-| `DEPLOY_SSH_PORT`        | SSHポート（repository variable、未設定時は22）              |
-
-各Environmentへ同じ値を複製する必要はありません。対象ごとに設定を変える場合は、そのEnvironmentに同名のsecretまたはvariableを登録します。[Secretsの優先順位](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)、[Variablesの優先順位](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#configuration-variable-precedence)
-
-承認を必須にする場合は、各EnvironmentにRequired reviewersを設定します。[Environmentの管理](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
-
-`DEPLOY_SSH_KNOWN_HOSTS`には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵fingerprintと一致することを確認してください。
+`DEPLOY_SSH_KNOWN_HOSTS` には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵のフィンガープリントと一致することを確認してください。
 
 デプロイ用ユーザーには次の準備が必要です。
 
-- SSH公開鍵を`authorized_keys`へ登録する
-- `kubectl`と`helm`がsudoなしでk3sを操作できるようにする
-- 2.3の`helm registry login`を同じユーザーで実行する
+- SSH 公開鍵を `authorized_keys` へ登録する
+- `kubectl` と `helm` が sudo なしで k3s を操作できるようにする
 
-各Environmentは共通のHelm release（`platform`）を更新するため、workflowの共通concurrencyとサーバー側の`flock`による排他を維持します。Environmentを分けても、同一releaseへの同時更新を許可しません。
+## 2. GitHub Actions からデプロイ
 
-## 3. GitHub Actions からデプロイ
+GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git タグを指定します。
 
-Action は初期セットアップ済みの Helm release の値を引き継ぎ、指定した対象のタグだけを更新します。対象に応じて`production/bot`、`production/mc-link-server`、`production/public-api`、`production/chart`のEnvironmentを参照します。アプリでは、指定した Git tag と同じ revision の Migrator Job を先行実行し、成功後にのみアプリを更新します。Job は最後に無効な通常状態へ戻します。
+## 3. デプロイ後の確認
 
-GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git Tag を指定します。
-
-## 4. デプロイ後の確認
-
-動いてる Pod のイメージ確認
+稼働中の Pod のイメージを確認します。
 
 ```bash
 kubectl get pods -n anvilsaba \
@@ -257,7 +194,7 @@ kubectl get pods,deploy,statefulset,service,pvc -n anvilsaba
 kubectl get events -n anvilsaba --sort-by=.lastTimestamp
 ```
 
-各WorkloadがReadyになることを確認します。
+各ワークロードが Ready になることを確認します。
 
 ```bash
 kubectl rollout status deployment/bot -n anvilsaba --timeout=5m
@@ -277,41 +214,34 @@ kubectl logs -n anvilsaba deployment/cloudflared --tail=100
 kubectl logs -n anvilsaba statefulset/postgres --tail=100
 ```
 
-BotのDiscordアプリケーションコマンドは、実行中のPodにTTY付きで接続して操作します。
+Bot の Discord アプリケーションコマンドは、実行中の Pod に TTY 付きで接続して操作します。
 
 ```bash
 kubectl attach -n anvilsaba -it --detach-keys=ctrl-c deployment/bot
 ```
 
-Discord接続のREADY後、コンソールがコマンドを受け付けるようになります。
+Discord 接続の READY 後、コンソールがコマンドを受け付けるようになります。
 利用可能なコマンドは `help` で確認可能です。
-上記の接続では Ctrl+C で接続だけが終了し、Botは稼働を続けます。`--detach-keys` を省略した場合の切断キーはCtrl+P、続けてCtrl+Qです。
+上記の接続では Ctrl+C で接続だけが終了し、Bot は稼働を続けます。`--detach-keys` を省略した場合の切断キーは Ctrl+P、続けて Ctrl+Q です。
 
 次を確認して完了とします。
 
 - Bot・MC Link Server・公開 API が正常起動し、Bot が Discord へ接続できる
-- cloudflaredがTunnelへ接続している
-- Cluster内から`/whitelist.json`を取得できる
-- Cloudflare経由で`/whitelist.json`を取得できる
-- `public-api`がClusterIPで、HTTPが直接公開されていない
+- Cloudflare 経由で `/whitelist.json` を取得できる
 - `mc-link-server` Service が本番の `25600/TCP` をコンテナ内の `25565/TCP` へ転送している
-- PostgreSQL再起動後もデータが残る
-- Secretの実値がGitやログに含まれていない
+- PostgreSQL 再起動後もデータが残る
+- Secret の実値が Git やログに含まれていない
 
-## 監査配送の再開
+## 4. メモ
 
-送信失敗は60秒後から自動再試行し、待機時間を倍増します（上限1時間）。Discord の403・404では再試行を停止します。
+### Oracle Cloud Infrastructure Ubuntu での Pod 起動直後の外向き通信
 
-設定・権限を修正後、対象サーバーのモデレーターロールを持つ管理者が `/audit_retry event_id:<イベントID>` で1件、`/audit_retry` で停止中の全件を再試行待ちに戻します。
+OCI Ubuntu のホストファイアウォールでは `FORWARD` に catch-all `REJECT` が存在します。
 
-## Pod 起動直後の外向き通信
+k3s の kube-router NetworkPolicy コントローラーが新規 Pod 用のファイアウォールルールを作成するまでに短い遅延があるため、Pod 作成直後の外向き通信が一時的に `Host is unreachable` となる場合があります。
 
-OCI Ubuntu のホスト firewall では `FORWARD` に catch-all `REJECT` が存在する。
+現在の環境では約 0.1 秒後には正常に通信できることを確認しています。
 
-k3s の kube-router NetworkPolicy controller が新規 Pod 用の firewall rule を作成するまでに短い遅延があるため、Pod 作成直後の外向き通信が一時的に `Host is unreachable` となる場合がある。
+Discord Bot では Serenity の Gateway URL 取得がこの期間に失敗すると警告が出ますが、既定の `wss://gateway.discord.gg` へフォールバックし、その後正常に接続することを確認しています。
 
-現在の環境では約 0.1 秒後には正常に通信できることを確認している。
-
-Discord Bot では Serenity の Gateway URL 取得がこの期間に失敗すると警告が出るが、既定の `wss://gateway.discord.gg` へフォールバックし、その後正常に接続することを確認している。
-
-現時点では実害がないため、ホスト側の `FORWARD` ルールは変更しない。
+現時点では実害がないため、ホスト側の `FORWARD` ルールは変更しません。

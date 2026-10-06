@@ -14,6 +14,7 @@ runs:
         cache: false
         env: false
     - name: CI 用の Rust プロファイルを設定
+      if: inputs.install-args == '' || contains(format(' {0} ', inputs.install-args), ' rust ')
       shell: bash
       run: |
         MISE_NO_HOOKS=1 mise use --env ci --tool-option profile=minimal "rust@$(mise current rust)"

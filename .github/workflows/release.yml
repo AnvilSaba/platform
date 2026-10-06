@@ -54,9 +54,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - uses: taiki-e/install-action@v2.62.40
+      - uses: $/.github/actions/setup-mise
         with:
-          tool: git-cliff@2.14.2
+          install-args: git-cliff
       - name: Prepare release
         shell: pwsh
         run: |
@@ -84,9 +84,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-      - uses: taiki-e/install-action@v2.62.40
+      - uses: $/.github/actions/setup-mise
         with:
-          tool: git-cliff@2.14.2
+          install-args: git-cliff
       - name: Prepare release
         id: release
         shell: pwsh
