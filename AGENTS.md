@@ -6,7 +6,7 @@
 
 ## Development
 
-- Run project-managed tools (`gh`, `git-cliff`, `helm`, `sqlx`, `oxfmt`, `node`, `npm`, `cargo`, `rustc`, and `rustfmt`) through mise tasks or `mise exec -- <command>`. Apply this rule to documentation examples and skill commands even when they omit the wrapper. Git is a system prerequisite and can be invoked directly.
+- Run project-managed tools through mise tasks or `mise exec -- <command>`. Apply this rule to documentation examples and skill commands even when they omit the wrapper. Git is a system prerequisite and can be invoked directly.
 
 - Before completing or committing code, configuration, documentation, dependency, or toolchain changes, follow the applicable steps in `docs/agents/development.md`.
 - For Git writes with read-only sandbox access to `.git`, follow the execution guidance in `docs/agents/development.md`.
