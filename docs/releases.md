@@ -28,32 +28,65 @@ GitHub の Actions 画面で **Release** を選び、**Run workflow** からリ�
 
 ## ローカルでリリース内容を確認する
 
-`mise install` で管理対象の `git-cliff` を導入し、リポジトリルートから実行します。
+`mise install` で管理対象の Rust と `git-cliff` を導入し、リポジトリルートから実行します。
+スクリプトは [Cargo の単一ファイルパッケージ機能](https://doc.rust-lang.org/cargo/reference/unstable.html#script)を使います。リポジトリで固定した nightly を使用するため、別の `cargo-script` ツールの導入は不要です。
 
 ```powershell
-mise exec -- pwsh -File ./scripts/prepare-release.ps1 -App bot -Bump auto
-mise exec -- pwsh -File ./scripts/prepare-release.ps1 -App mc-link-server -Bump auto
-mise exec -- pwsh -File ./scripts/prepare-release.ps1 -App public-api -Bump auto
-mise exec -- pwsh -File ./scripts/prepare-release.ps1 -App chart -Bump auto
+mise :release prepare --app bot --bump auto --dry-run
+mise :release prepare --app mc-link-server --bump auto --dry-run
+mise :release prepare --app public-api --bump auto --dry-run
+mise :release prepare --app chart --bump auto --dry-run
 ```
 
-`major`、`minor`、`patch` を明示することもできます。
+`major`、`minor`、`patch` を明示することもできます。実際にバージョンファイルと CHANGELOG を更新する場合は `--dry-run` を外します。ローカルのスクリプトはコミット・タグ作成・プッシュを行いません。
+
+`mise :release prepare --help` で引数を確認できます。task は引数をそのまま Rust スクリプトへ渡すため、対象名や引数の定義を mise 側に重複させません。
+
+## shebang と Windows での起動
+
+`scripts/release.rs` に `#!/usr/bin/env -S mise exec -- cargo -Zscript` を指定しています。Unix 系でファイルを直接実行する場合は `chmod +x scripts/release.rs` で実行権限を付けると、shebang 経由でも mise 管理のツールを使用できます。
+
+[Windows 自体は shebang を解釈しません](https://mise.jdx.dev/tasks/file-tasks.html#windows)。Windows でも同じ `mise :release ...` を使用します。task の `file` は Rust スクリプトを指し、`shell = "cargo -Zscript"` で共通の `task_config.shell` を上書きして Cargo を起動します。この方法なら `.rs` のファイル関連付けや Windows 用のラッパーは不要です。
 
 ## 変更履歴だけを生成する
 
-リリース済みの履歴と現在の未リリース変更をまとめて再生成します。各アプリの基準タグの親から `HEAD` までが対象です。
+リリース済みの履歴と現在の未リリース変更をまとめて再生成します。`full_history = true` の対象は全履歴、それ以外は基準タグより後から `HEAD` までが対象です。
 
 ```powershell
-mise exec -- pwsh -File ./scripts/generate-changelog.ps1 -App bot
-mise exec -- pwsh -File ./scripts/generate-changelog.ps1 -App mc-link-server
-mise exec -- pwsh -File ./scripts/generate-changelog.ps1 -App public-api
-mise exec -- pwsh -File ./scripts/generate-changelog.ps1 -App chart
+mise :release changelog --app bot
+mise :release changelog --app mc-link-server
+mise :release changelog --app public-api
+mise :release changelog --app chart
 ```
 
-リリース対象ごとのバージョンファイル、変更ログ出力先、対象パス、基準タグは `scripts/release-config.psd1` で一元管理します。
+`--tag <対象>/vX.Y.Z` でリリースタグを指定でき、`--output <パス>` で出力先を変更できます。相対パスはリポジトリルートから解決します。
+
+`--output -` はファイルを作成せず、変更履歴の本文だけを標準出力へ出します。`-` を標準入出力として扱うのは CLI の慣習で、このスクリプトが明示的に解釈します。省略時は設定の CHANGELOG に書き込みます。mise の task 接頭辞を本文に混ぜないよう、標準出力を使う場合は `--output interleave` を指定します。
+
+```powershell
+mise run --output interleave release changelog --app bot --output -
+mise run --output interleave release changelog --app bot --output - > changelog-preview.md
+```
+
+前者の `--output interleave` は mise の表示設定、後者の `--output -` はスクリプトの出力先です。`>` によるファイルへのリダイレクトはシェルが行います。
+
+GitHub Actions で `prepare` の標準出力からタグを取得する場合は、`mise run --output interleave release prepare ...` を使います。task 名の接頭辞を標準出力に付けず、タグだけを取得できます。
+
+## スクリプトの実装方針
+
+PowerShell 版の方針を引き継ぎ、リリース対象ごとのバージョンファイル、変更ログ出力先、対象パス、基準タグ、表示名、全履歴を含めるかどうかは `scripts/release-config.toml` で一元管理します。対象名は TOML のテーブル名から取得し、Rust の列挙型や条件分岐にプロジェクト名をハードコードしません。対象追加は設定に記述します（公開・デプロイ先を追加する場合は対応するワークフローも変更します）。
+
+設定は serde で型付きで読み込み、未知のフィールドはエラーにします。引数解析は既存アプリと同じ bpaf を使います。設定は実行時に読むため、設定だけの変更でスクリプトを再コンパイルする必要はありません。
+
 Migrator とマイグレーション SQL の変更は、各アプリの履歴と自動 bump の対象に含めます。
 ルートの `Cargo.toml`・`Cargo.lock` は変更履歴と自動 bump の対象パスから除外します。共通依存だけの更新をリリースする場合は bump を明示してください。全差分は各バージョン見出しの GitHub リンクから確認できます。
-バージョンの解析・更新形式は `VersionFile` のファイル名で判定します。`Cargo.toml` は `Cargo.lock` の対象パッケージも更新し、`Chart.yaml` は Chart のバージョンを更新します。
+バージョンの解析・更新形式は `version_file` のファイル名で判定します。`Cargo.toml` は toml_edit でコメントや既存の配置を保持し、`Cargo.lock` の対象ローカルパッケージも更新します。パッケージ名はマニフェストから取得し、同名のレジストリ依存は更新しません。`Chart.yaml` は Chart の `version` のみを更新し、`appVersion` は保持します。
+
+`full_history = false` の対象は `baseline_tag` が必須で、基準タグより前の変更は旧コミット履歴へのリンクで案内します。リンク先のリポジトリ名は `cliff.toml` の `remote.github` から取得します。
+
+初回リリースはバージョンファイルの値を使い、明示的な bump を拒否します。既存タグの重複や外部コマンドの失敗はエラーにします。CHANGELOG の生成とバージョンの検証を済ませてからファイルを更新します。dry-run はプレビューを標準エラーと GitHub Actions のジョブ概要に表示し、バージョンファイル・ロックファイル・CHANGELOG を変更しません。`prepare` の標準出力は次のタグだけなので、ワークフローで直接取得できます。
+
+スクリプトはワークスペース外の単一ファイルパッケージなので、`mise :fmt`・`mise :fmt:check` に個別の rustfmt を含め、`mise :release:check` で Clippy とテストを実行します。Rust CI でもこの検証を実行します。
 
 ## マイグレーションの互換性
 

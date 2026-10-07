@@ -11,5 +11,6 @@
   "rust-analyzer.server.extraEnv": {
     "SQLX_OFFLINE": "true",
     "SQLX_OFFLINE_DIR": "${workspaceFolder}/.sqlx"
-  }
+  },
+  "rust-analyzer.linkedProjects": ["${workspaceFolder}/scripts/release.rs"]
 }

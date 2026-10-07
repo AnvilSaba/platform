@@ -1,0 +1,55 @@
+[bot]
+version_file = "apps/bot/Cargo.toml"
+changelog = "apps/bot/CHANGELOG.md"
+paths = [
+  "apps/bot/**",
+  "apps/db-migrator/**",
+  "deploy/rust/**",
+  "crates/bot-macros/**",
+  "crates/platform-database/**",
+  "migrations/**",
+  ".sqlx/**",
+  ".cargo/**",
+  # Include unreleased changes from before the monorepo migration.
+  "src/**",
+  "macros/**",
+]
+baseline_tag = "bot/v3.5.0"
+display_name = "Bot"
+
+[mc-link-server]
+version_file = "apps/mc-link-server/Cargo.toml"
+changelog = "apps/mc-link-server/CHANGELOG.md"
+paths = [
+  "apps/mc-link-server/**",
+  "apps/db-migrator/**",
+  "crates/platform-database/**",
+  "migrations/**",
+  ".sqlx/**",
+  ".cargo/**",
+  "deploy/rust/**",
+]
+full_history = true
+display_name = "mc-link-server"
+
+[public-api]
+version_file = "apps/public-api/Cargo.toml"
+changelog = "apps/public-api/CHANGELOG.md"
+paths = [
+  "apps/public-api/**",
+  "apps/db-migrator/**",
+  "crates/platform-database/**",
+  "migrations/**",
+  ".sqlx/**",
+  ".cargo/**",
+  "deploy/rust/**",
+]
+full_history = true
+display_name = "public-api"
+
+[chart]
+version_file = "deploy/helm/platform/Chart.yaml"
+changelog = "deploy/helm/platform/CHANGELOG.md"
+paths = ["deploy/helm/platform/**"]
+full_history = true
+display_name = "Platform Helm Chart"
