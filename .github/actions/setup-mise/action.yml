@@ -20,6 +20,15 @@ runs:
         MISE_NO_HOOKS=1 mise use --env ci --tool-option profile=minimal "rust@$(mise current rust)"
         echo "MISE_ENV=ci" >> "$GITHUB_ENV"
     - uses: jdx/mise-action@v5.0.1
+      env:
+        MISE_NO_HOOKS: ${{ inputs.install-args != '' && !contains(format(' {0} ', inputs.install-args), ' node ') && '1' || '0' }}
       with:
         minimum_release_age: 7d
         install_args: ${{ inputs.install-args }}
+    - name: セットアップ後の自動導入を無効化
+      shell: bash
+      run: |
+        touch mise.ci.toml
+        mise config set --file mise.ci.toml settings.auto_install false
+        mise config set --file mise.ci.toml deps.npm.auto false
+        echo "MISE_ENV=ci" >> "$GITHUB_ENV"

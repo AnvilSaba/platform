@@ -38,11 +38,11 @@ null = "{% if os() == 'windows' %}NUL{% else %}/dev/null{% endif %}"
 
 [tasks.fmt]
 description = "Rust とその他の対応ファイルを整形する"
-run = ["cargo fmt --all", "mise exec -- oxfmt"]
+run = ["cargo fmt --all", "rustfmt --edition 2024 scripts/release.rs", "mise exec -- oxfmt"]
 
 [tasks."fmt:check"]
 description = "Rust とその他の対応ファイルの整形を検査する"
-run = ["cargo fmt --all -- --check", "mise exec -- oxfmt --check"]
+run = ["cargo fmt --all -- --check", "rustfmt --edition 2024 --check scripts/release.rs", "mise exec -- oxfmt --check"]
 
 # Build
 
@@ -55,6 +55,21 @@ run = "cargo build --locked"
 [tasks.check]
 description = "Rust ワークスペースの全ターゲットを検査する"
 run = "cargo check --locked --all-targets"
+
+# Release
+
+[tasks.release]
+description = "リリース準備・変更履歴の生成（prepare / changelog）"
+file = "scripts/release.rs"
+shell = "cargo -Zscript"
+raw_args = true
+
+[tasks."release:check"]
+description = "リリーススクリプトの静的解析とテストを実行する"
+run = [
+  "cargo clippy -Zscript --manifest-path scripts/release.rs --all-targets -- -D warnings",
+  "cargo test -Zscript --manifest-path scripts/release.rs",
+]
 
 # Tests
 

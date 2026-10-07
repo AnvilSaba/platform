@@ -12,6 +12,7 @@ on:
         "apps/db-migrator/**",
         "apps/mc-link-server/**",
         "crates/**",
+        "scripts/**",
         "migrations/**",
         ".sqlx/**",
         ".cargo/**",
@@ -32,6 +33,7 @@ on:
         "apps/db-migrator/**",
         "apps/mc-link-server/**",
         "crates/**",
+        "scripts/**",
         "migrations/**",
         ".sqlx/**",
         ".cargo/**",
@@ -71,4 +73,5 @@ jobs:
       - run: sqlx migrate run
       - run: cargo sqlx prepare --check --workspace -- --all-targets --locked
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - run: mise :release:check
       - run: cargo test --workspace --locked

@@ -56,11 +56,10 @@ jobs:
           ref: ${{ github.sha }}
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: git-cliff
+          install-args: git-cliff rust
       - name: Prepare release
-        shell: pwsh
         run: |
-          ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' -DryRun
+          mise run --output interleave release prepare --app '${{ inputs.app }}' --bump '${{ inputs.bump }}' --dry-run
 
   reject-release:
     if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
@@ -86,13 +85,12 @@ jobs:
           ref: main
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: git-cliff
+          install-args: git-cliff rust
       - name: Prepare release
         id: release
-        shell: pwsh
         run: |
-          $tag = ./scripts/prepare-release.ps1 -App '${{ inputs.app }}' -Bump '${{ inputs.bump }}' | Select-Object -Last 1
-          "tag=$tag" >> $env:GITHUB_OUTPUT
+          tag=$(mise run --output interleave release prepare --app '${{ inputs.app }}' --bump '${{ inputs.bump }}')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Commit and tag
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
