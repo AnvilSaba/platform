@@ -61,16 +61,7 @@ mise :release changelog --app chart
 
 `--tag <対象>/vX.Y.Z` でリリースタグを指定でき、`--output <パス>` で出力先を変更できます。相対パスはリポジトリルートから解決します。
 
-`--output -` はファイルを作成せず、変更履歴の本文だけを標準出力へ出します。`-` を標準入出力として扱うのは CLI の慣習で、このスクリプトが明示的に解釈します。省略時は設定の CHANGELOG に書き込みます。mise の task 接頭辞を本文に混ぜないよう、標準出力を使う場合は `--output interleave` を指定します。
-
-```powershell
-mise run --output interleave release changelog --app bot --output -
-mise run --output interleave release changelog --app bot --output - > changelog-preview.md
-```
-
-前者の `--output interleave` は mise の表示設定、後者の `--output -` はスクリプトの出力先です。`>` によるファイルへのリダイレクトはシェルが行います。
-
-GitHub Actions で `prepare` の標準出力からタグを取得する場合は、`mise run --output interleave release prepare ...` を使います。task 名の接頭辞を標準出力に付けず、タグだけを取得できます。
+`--output -` はファイルを作成せず、変更履歴の本文だけを標準出力へ出します。
 
 ## スクリプトの実装方針
 
