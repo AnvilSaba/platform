@@ -1,9 +1,9 @@
 [bot]
-token = "TOKEN.PLACEHOLDER.NOT_A_REAL_SECRET"
 owners = ["000000000000000000"]
 
-# 共有 DB の接続先は必須の環境変数 DATABASE_URL に設定する。
-# 例: postgres://platform_bot:CHANGE_ME@postgres:5432/platform
+# Discord Bot Token は環境変数 DISCORD_BOT_TOKEN に設定する。
+# DB の接続先は DATABASE_URL、パスワードは DATABASE_PASSWORD に設定する。
+# 例: postgres://platform_bot@postgres:5432/platform
 
 [mcguildlink]
 guild_id = "000000000000000000"
@@ -18,8 +18,6 @@ audit_channel_id = "000000000000000000"
 log_channel_id = "000000000000000000"
 # 認証後に付与するロールID
 role_id = "000000000000000000"
-# マッチしたら認証成功とする正規表現
-keyword = "あいことば"
 # モーダルのデフォルト値にランダムに選択させるダミーのキーワード郡
 dummy_keywords = ["ダミー", "dummy"]
 

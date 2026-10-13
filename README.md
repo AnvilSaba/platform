@@ -12,6 +12,7 @@
 
 - [開発・個別テスト・統合テスト手順](docs/development-and-integration-testing.md)
 - [本番デプロイ手順](docs/deployment.md)
+- [Secret / Config の準備と運用](docs/secret-config.md)
 - [変更履歴とリリース手順](docs/releases.md)
 
 ## ライセンス

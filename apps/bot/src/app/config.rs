@@ -11,7 +11,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer};
 use serde_with::{DisplayFromStr, serde_as};
 use serenity::{
-    all::{ChannelId, ForumTagId, GuildId, RoleId, Token, UserId},
+    all::{ChannelId, ForumTagId, GuildId, RoleId, UserId},
     model::id::GenericChannelId,
 };
 use tokio::fs::read_to_string;
@@ -37,7 +37,12 @@ impl AppConfig {
         let text = read_to_string(path)
             .await
             .with_context(|| format!("Failed to read config file: {path}"))?;
-        toml::from_str(&text).with_context(|| format!("Failed to parse config file: {path}"))
+        toml::from_str(&text)
+            .map_err(|mut error: toml::de::Error| {
+                error.set_input(None);
+                error
+            })
+            .with_context(|| format!("Failed to parse config file: {path}"))
     }
 }
 
@@ -50,17 +55,17 @@ pub struct McGuildLinkConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BotConfig {
-    pub token: Token,
     pub owners: HashSet<UserId>,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub log_channel_id: ChannelId,
     pub role_id: RoleId,
-    pub keyword: String,
     pub dummy_keywords: Vec<String>,
 }
 

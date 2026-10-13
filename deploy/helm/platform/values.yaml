@@ -6,9 +6,9 @@ bot:
     repository: ghcr.io/anvilsaba/bot
     tag: ""
     pullPolicy: IfNotPresent
-  configSecretName: bot-config
+  configMapName: bot
+  secretName: bot
   databaseUsername: platform_bot
-  databaseSecretName: bot-db-credentials
 
 mcLinkServer:
   replicas: 1
@@ -17,7 +17,7 @@ mcLinkServer:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_mc_link_server
-  databaseSecretName: mc-link-server-db-credentials
+  secretName: mc-link-server
   # Service 側のポート。コンテナ内は25565固定。
   port: 25565
 
@@ -28,7 +28,7 @@ publicApi:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_public_api
-  databaseSecretName: public-api-db-credentials
+  secretName: public-api
   # Service 側のポート。コンテナ内は8080固定。
   port: 8080
 
@@ -39,7 +39,7 @@ dbMigrator:
     tag: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_db_migrator
-  databaseSecretName: db-migrator-db-credentials
+  secretName: db-migrator
 
 postgres:
   replicas: 1
@@ -53,7 +53,7 @@ postgres:
   username: platform_admin
   storageSize: 10Gi
   storageClassName: ""
-  secretName: postgres-db-credentials
+  secretName: postgres
 
 cloudflared:
   replicas: 1
@@ -61,4 +61,4 @@ cloudflared:
     repository: cloudflare/cloudflared
     tag: "2026.8.2"
     pullPolicy: IfNotPresent
-  tokenSecretName: cloudflare-tunnel
+  secretName: cloudflared

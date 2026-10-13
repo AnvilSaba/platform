@@ -33,7 +33,7 @@ spec:
             - { name: POSTGRES_USER, value: {{ .Values.postgres.username | quote }} }
             - name: POSTGRES_PASSWORD
               valueFrom:
-                secretKeyRef: { name: {{ .Values.postgres.secretName }}, key: password }
+                secretKeyRef: { name: {{ .Values.postgres.secretName }}, key: databasePassword }
             - { name: PGDATA, value: /var/lib/postgresql/18/docker }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql }

@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use sqlx::PgPool;
 
 use crate::{
-    app::{AppCommand, config::AppConfig},
+    app::{AppCommand, AppError, config::AppConfig},
     core::BotEventHandlers,
     features::{
         auth::{AutoKickEventHandler, KeywordAuthEventHandler},
@@ -25,8 +25,8 @@ use crate::{
     },
 };
 
-pub fn event_handlers(config: &AppConfig, database: &PgPool) -> BotEventHandlers {
-    BotEventHandlers::new()
+pub fn event_handlers(config: &AppConfig, database: &PgPool) -> Result<BotEventHandlers, AppError> {
+    Ok(BotEventHandlers::new()
         .add(mcguildlink::LinkCodeEventHandler::new(database))
         .add(mcguildlink::AccountLinksEventHandler::new(database))
         .add(mcguildlink::GuildMembershipEventHandler::new(database))
@@ -34,9 +34,9 @@ pub fn event_handlers(config: &AppConfig, database: &PgPool) -> BotEventHandlers
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
         .add(handle_question_event)
-        .add(KeywordAuthEventHandler::new())
+        .add(KeywordAuthEventHandler::new()?)
         .add(AutoKickEventHandler::new())
-        .add(MessageCacheHandler::new(config.message_cache.disabled))
+        .add(MessageCacheHandler::new(config.message_cache.disabled)))
 }
 
 pub fn commands() -> Vec<AppCommand> {

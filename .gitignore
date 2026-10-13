@@ -4,6 +4,11 @@ config.toml
 app.toml
 *.secret
 .env
+.env.*
+!.env.example
+*.agekey
+*.plain.yaml
+*.plain.yml
 
 # Rust
 target/
