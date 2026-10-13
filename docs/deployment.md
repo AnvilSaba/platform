@@ -14,7 +14,7 @@ Ubuntu または Debian などの Linux サーバーを用意します。
 - kubectl
 - Helm
 - flock(通常は `util-linux` に含まれます)
-- GHCR からイメージを取得する権限
+- Public な GHCR イメージ
 - Cloudflare remotely-managed Tunnel とトークン
 - Bot の本番設定
 - PostgreSQL の初期化ユーザーとアプリ・Migrator ごとの DB ロールのパスワード
@@ -55,50 +55,11 @@ kubectl get nodes
 
 ### 1.3 Secret と設定
 
-本番設定はリポジトリ外に置き、Git へ追加しません。
-Bot の設定は `apps/bot/config.sample.toml` を基に用意し、Secret 登録元のファイルは root 管理領域に配置します。
-MC Link Server と公開 API は設定ファイルを使用しません。
-
-```bash
-scp ./config.toml <本番ユーザー>@<本番サーバー>:/tmp/bot-config.toml
-```
-
-本番サーバー上で配置・登録します。
-
-```bash
-sudo install -d -o root -g root -m 700 /etc/anvilsaba/secrets/bot
-sudo install -o root -g root -m 600 /tmp/bot-config.toml \
-  /etc/anvilsaba/secrets/bot/config.toml
-sudo rm /tmp/bot-config.toml
-kubectl create namespace anvilsaba --dry-run=client -o yaml | kubectl apply -f -
-sudo kubectl -n anvilsaba create secret generic bot-config \
-  --from-file=config.toml=/etc/anvilsaba/secrets/bot/config.toml \
-  --dry-run=client -o yaml | sudo kubectl apply -f -
-kubectl -n anvilsaba create secret generic cloudflare-tunnel \
-  --from-literal=token='<TUNNEL_TOKEN>' \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n anvilsaba create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io \
-  --docker-username='<GITHUB USERNAME>' \
-  --docker-password='<GITHUB PERSONAL ACCESS TOKEN>'
-```
-
-PostgreSQL 初期化ユーザーの Secret は `postgres-db-credentials` の `password` キーを使います。
-
-```bash
-kubectl -n anvilsaba create secret generic postgres-db-credentials \
-  --from-literal=password='<POSTGRES_PASSWORD>' \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-アプリ・Migrator の接続資格情報は次のように分け、DB ロールのパスワードと対応する Secret の値を揃えます。
-
-| Secret                        | DB ロール               |
-| ----------------------------- | ----------------------- |
-| bot-db-credentials            | platform_bot            |
-| mc-link-server-db-credentials | platform_mc_link_server |
-| public-api-db-credentials     | platform_public_api     |
-| db-migrator-db-credentials    | platform_db_migrator    |
+通常設定と Secret は [Secret / Config の準備と運用](secret-config.md) に従って用意します。
+Bot の通常設定は Git 管理の `deploy/config/production/bot.toml` から ConfigMap にし、Token は専用 Secret の環境変数で渡します。
+DB 資格情報はサービス別 Secret、Cloudflare Token は `cloudflared` を使用します。GHCR イメージは Public を前提とし、取得用 Secret は不要です。
+Secret は SOPS + age で暗号化したマニフェストだけを Git 管理し、ノードに平文の原本を配置しません。
+新規環境への適用と age 秘密鍵の配置は手順書に沿って行ってください。
 
 <a id="initial-setup"></a>
 
@@ -123,12 +84,9 @@ kubectl exec -it -n anvilsaba postgres-0 -- psql -U platform_admin -d platform
 ```
 
 psql 内で `\password platform_bot`、`\password platform_mc_link_server`、`\password platform_public_api`、`\password platform_db_migrator` を順に実行し、各ロールに別のパスワードを設定して `\q` で終了します。
-上の表の各 Secret を同じパスワードで登録します。次の例を Secret ごとに実行してください。
+[Secret の準備手順](secret-config.md) で暗号化・登録した各 Secret とパスワードを一致させます。
 
 ```bash
-kubectl -n anvilsaba create secret generic '<SECRET_NAME>' \
-  --from-literal=password='<ROLE_PASSWORD>' \
-  --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
   --version "$chartVersion" -n anvilsaba --reuse-values \
   --set dbMigrator.enabled=true --set-string dbMigrator.image.tag='sha-<RELEASE_SHA>' --timeout 10m

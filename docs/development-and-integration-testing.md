@@ -36,6 +36,15 @@ mise :db:test:down
 `mise :up` で開発用 DB の起動・マイグレーション後、3アプリを並列実行します。
 実行中はログが流れ続けます。Ctrl+C でアプリを終了し、`mise :down` で DB を停止します。
 Bot は `apps/bot/config.sample.toml` を `apps/bot/config.toml` にコピーして開発用設定を用意します。
+ローカル用 Token と認証の合言葉は `apps/bot/.env` に保存します。Bot の `run` タスクは mise の [dotenv 読み込み](https://mise.jdx.dev/environments/) で `DISCORD_BOT_TOKEN` と `AUTH_KEYWORD` を取得します。
+既存の `.env` がなければ次を実行し、`.env` の置換用文字列を開発用 Token と合言葉に変更してください。`.env` は Git とコンテナのビルド対象から除外しています。
+
+```powershell
+Copy-Item apps/bot/.env.example apps/bot/.env
+```
+
+本番用 Token と合言葉は SOPS で暗号化した Kubernetes Secret を使います。既存 `config.toml` の `bot.token` と `auth.keyword` は `.env` へ移して削除します。
+`apps/bot` で `mise exec -- cargo run --locked -p bot -- --check-config` を実行すると、Token・合言葉・DB 接続なしで通常設定だけを検証できます。
 
 ### GitHub Actions の依存関係
 

@@ -1,5 +1,2 @@
-imagePullSecrets:
-  - name: ghcr-pull
-
 mcLinkServer:
   port: 25600

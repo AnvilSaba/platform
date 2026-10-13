@@ -26,7 +26,7 @@ spec:
           env:
             - name: TUNNEL_TOKEN
               valueFrom:
-                secretKeyRef: { name: {{ .Values.cloudflared.tokenSecretName }}, key: token }
+                secretKeyRef: { name: {{ .Values.cloudflared.secretName }}, key: token }
           ports:
             - { name: metrics, containerPort: 2000 }
           livenessProbe:

@@ -29,14 +29,18 @@ const KEYWORD_INPUT_BUTTON_CUSTOM_ID: &str = "keyword_input:button";
 const FAILED_ATTEMPT_COOLDOWN: Duration = Duration::from_secs(60);
 
 pub struct KeywordAuthEventHandler {
+    keyword: String,
     cooldown_started_at: Arc<DashMap<UserId, Instant>>,
 }
 
 impl KeywordAuthEventHandler {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self, AppError> {
+        let keyword = std::env::var("AUTH_KEYWORD").context("AUTH_KEYWORD must be set")?;
+        anyhow::ensure!(!keyword.trim().is_empty(), "AUTH_KEYWORD must not be empty");
+        Ok(Self {
+            keyword,
             cooldown_started_at: Arc::new(DashMap::new()),
-        }
+        })
     }
 
     fn remove_expired_cooldowns(&self) {
@@ -155,7 +159,7 @@ impl KeywordAuthEventHandler {
         };
         let submitted_keyword = submitted_keyword.trim();
 
-        if config.keyword != submitted_keyword {
+        if self.keyword != submitted_keyword {
             interaction
                 .create_response(
                     ctx.http(),

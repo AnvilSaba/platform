@@ -24,5 +24,5 @@ securityContext:
   value: {{ printf "postgres://%s@%s:%v/%s" .service.databaseUsername .postgres.serviceName .postgres.port .postgres.database | quote }}
 - name: DATABASE_PASSWORD
   valueFrom:
-    secretKeyRef: { name: {{ .service.databaseSecretName }}, key: password }
+    secretKeyRef: { name: {{ .service.secretName }}, key: databasePassword }
 {{- end }}

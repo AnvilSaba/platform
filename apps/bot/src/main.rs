@@ -21,7 +21,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use bpaf::Bpaf;
 use poise::{Framework, FrameworkOptions, PrefixFrameworkOptions};
-use serenity::{cache::Settings as CacheSettings, prelude::*};
+use serenity::{cache::Settings as CacheSettings, prelude::*, secrets::Token};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -63,14 +63,15 @@ async fn main() -> Result<(), AppError> {
     init_tracing(output.clone());
 
     let config = AppConfig::from_file("config.toml").await?;
-    let database_config = platform_database::DatabaseConfig::from_env()?;
-
     let options = options().run();
 
     if options.check_config {
         println!("Config is valid");
         return Ok(());
     }
+
+    let token = Token::from_env("DISCORD_BOT_TOKEN").context("DISCORD_BOT_TOKEN must contain a valid Discord token")?;
+    let database_config = platform_database::DatabaseConfig::from_env()?;
 
     let framework = Framework::builder()
         .options(FrameworkOptions {
@@ -98,8 +99,7 @@ async fn main() -> Result<(), AppError> {
     let database = database_config.connect().await?;
     platform_database::check_migrations(&database, &MIGRATIONS, REQUIRED_MIGRATIONS).await?;
 
-    let token = config.bot.token.clone();
-    let handlers = event_handlers(&config, &database)
+    let handlers = event_handlers(&config, &database)?
         .add(MainEventHandler::new())
         .on_error(handle_event_error);
     let data = Arc::new(BotData::new(config, database));

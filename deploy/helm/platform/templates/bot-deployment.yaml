@@ -20,6 +20,12 @@ spec:
           tty: true
           workingDir: /app
           env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.bot.secretName }}, key: token }
+            - name: AUTH_KEYWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.bot.secretName }}, key: authKeyword }
             {{- include "platform.databaseEnv" (dict "service" .Values.bot "postgres" .Values.postgres) | nindent 12 }}
           securityContext:
             {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
@@ -30,5 +36,5 @@ spec:
               readOnly: true
       volumes:
         - name: config
-          secret:
-            secretName: {{ .Values.bot.configSecretName }}
+          configMap:
+            name: {{ .Values.bot.configMapName }}

@@ -1,0 +1,18 @@
+# Flux 導入後に適用する。GitRepository/platform と PQ 秘密鍵を持つ sops-age が必要。
+# PQ 復号の対応基準は kustomize-controller v1.9.0。
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-config
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./deploy/config/production
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: platform
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age

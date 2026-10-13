@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anvilsaba
+  annotations:
+    # Helm が管理するワークロードも存在する namespace は削除しない。
+    kustomize.toolkit.fluxcd.io/prune: disabled
