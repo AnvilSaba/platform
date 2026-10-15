@@ -8,6 +8,7 @@ on:
     paths:
       - "deploy/**"
       - "mise.toml"
+      - "scripts/chart.test.mjs"
       - ".github/actions/setup-mise/**"
       - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
@@ -20,6 +21,7 @@ on:
     paths:
       - "deploy/**"
       - "mise.toml"
+      - "scripts/chart.test.mjs"
       - ".github/actions/setup-mise/**"
       - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
@@ -45,7 +47,9 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: helm kubectl
+          install-args: helm kubectl node
+      - name: Test chart image references
+        run: mise exec -- node --test scripts/chart.test.mjs
       - name: Lint chart
         run: >-
           mise exec -- helm lint ./deploy/helm/platform

@@ -13,7 +13,7 @@ spec:
       {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: public-api
-          image: {{ printf "%s:%s" .Values.publicApi.image.repository (required "publicApi.image.tag is required" .Values.publicApi.image.tag) | quote }}
+          image: {{ include "platform.image" .Values.publicApi.image | quote }}
           imagePullPolicy: {{ .Values.publicApi.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
