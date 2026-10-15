@@ -1,0 +1,13 @@
+bot:
+  image:
+    tag: 4.0.0
+mcLinkServer:
+  image:
+    tag: 1.0.0
+publicApi:
+  image:
+    tag: 1.0.0
+dbMigrator:
+  enabled: true
+  image:
+    tag: sha-c976d4a1950777fb05911dc9be7498cfc1c97549

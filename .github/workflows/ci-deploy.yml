@@ -9,7 +9,7 @@ on:
       - "deploy/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
-      - "scripts/deploy-production.sh"
+      - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
@@ -21,7 +21,7 @@ on:
       - "deploy/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
-      - "scripts/deploy-production.sh"
+      - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
@@ -66,6 +66,17 @@ jobs:
         run: |
           mise exec -- kubectl kustomize deploy/postgres/cloudnativepg > /dev/null
           mise exec -- kubectl kustomize deploy/postgres/import > /dev/null
+          mise exec -- kubectl kustomize deploy/postgres/operator > /dev/null
+          mise exec -- kubectl kustomize deploy/postgres/roles > /dev/null
+          mise exec -- kubectl kustomize deploy/flux/production > /dev/null
+          mise exec -- kubectl kustomize deploy/flux/controllers > /dev/null
+          mise exec -- kubectl kustomize deploy/flux/apps > /dev/null
+      - name: Render GitOps release with migrations
+        run: >-
+          mise exec -- helm template platform ./deploy/helm/platform
+          -f deploy/helm/platform/values.prod.yaml
+          -f deploy/flux/apps/values.yaml
+          > /dev/null
 
   k3s:
     runs-on: ubuntu-latest
@@ -74,7 +85,7 @@ jobs:
       - name: Parse config
         run: >-
           ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml');
-          YAML.parse_stream(File.read('deploy/postgres/cloudnativepg/roles.yaml'))"
+          YAML.parse_stream(File.read('deploy/postgres/roles/roles.yaml'))"
 
   deployment-script:
     runs-on: ubuntu-latest
@@ -84,5 +95,3 @@ jobs:
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/deploy-production/action.yml')"
       - name: Parse image action
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/build-image/action.yml')"
-      - name: Check syntax
-        run: bash -n ./scripts/deploy-production.sh

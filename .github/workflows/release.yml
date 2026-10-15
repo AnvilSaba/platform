@@ -32,7 +32,7 @@ on:
         default: true
         type: boolean
       deploy:
-        description: リリース後に本番へデプロイ
+        description: 公開成功後に本番の GitOps 設定を更新
         required: true
         default: false
         type: boolean
@@ -177,19 +177,13 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: main
       - uses: $/.github/actions/deploy-production
         with:
           target: ${{ inputs.app }}
           release-ref: ${{ needs.release.outputs.tag }}
           migrator-image-tag: ${{ needs.build-db-migrator-image.outputs.image_tag }}
-        env:
-          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}

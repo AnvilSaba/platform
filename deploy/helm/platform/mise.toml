@@ -5,4 +5,10 @@ run = [
   "helm template platform . --namespace anvilsaba --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test >{{ vars.null }}",
   "kubectl kustomize ../../postgres/cloudnativepg >{{ vars.null }}",
   "kubectl kustomize ../../postgres/import >{{ vars.null }}",
+  "kubectl kustomize ../../postgres/operator >{{ vars.null }}",
+  "kubectl kustomize ../../postgres/roles >{{ vars.null }}",
+  "kubectl kustomize ../../flux/production >{{ vars.null }}",
+  "kubectl kustomize ../../flux/controllers >{{ vars.null }}",
+  "kubectl kustomize ../../flux/apps >{{ vars.null }}",
+  "helm template platform . --namespace anvilsaba -f values.prod.yaml -f ../../flux/apps/values.yaml >{{ vars.null }}",
 ]

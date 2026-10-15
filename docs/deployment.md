@@ -14,7 +14,6 @@ Ubuntu または Debian などの Linux サーバーを用意します。
 - k3s
 - kubectl
 - Helm
-- flock(通常は `util-linux` に含まれます)
 - Public な GHCR イメージ
 - Cloudflare remotely-managed Tunnel とトークン
 - Bot の本番設定
@@ -66,49 +65,11 @@ Secret は SOPS + age で暗号化したマニフェストだけを Git 管理�
 
 ### 初回の DB 準備と配置順序
 
-以下は新規環境向けです。Secret と namespace を準備した後、デプロイ先のリポジトリルートで実行します。デプロイ先には `kubectl` と `helm` を用意し、直接実行します。
-CloudNativePG 1.30.1 を導入し、DB の作成、初期権限の設定、Secret のパスワードとロール所属の反映まで自動で行います。アプリのテーブルは Migrator が作成します。
+[Flux の本番 GitOps 手順](flux.md) に従って、Flux の初回接続、Secret・Config、CloudNativePG、DB、ロール、アプリの順に引き継ぎます。デプロイ先では `kubectl` を直接実行し、mise は不要です。
 
-```bash
-kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/v1.30.1/releases/cnpg-1.30.1.yaml
-kubectl rollout status deployment/cnpg-controller-manager -n cnpg-system --timeout=5m
-kubectl apply -k deploy/postgres/cloudnativepg
-kubectl wait cluster/platform-db -n anvilsaba --for=condition=Ready --timeout=10m
-kubectl apply -f deploy/postgres/cloudnativepg/roles.yaml
-kubectl wait databaserole -n anvilsaba -l app.kubernetes.io/part-of=platform-database \
-  --for=jsonpath='{.status.applied}'=true --timeout=5m
-```
+Flux 本体・Operator・DB・ロール・Secret・Config・アプリを Git 管理します。初期状態では Config と DB、HelmRelease の同期を保留しています。既存 DB は先に [移行手順](cloudnativepg-migration.md) で旧 PVC の保護・バックアップ・書き込み停止を行い、新規環境だけ空の DB を作成するパスを選びます。
 
-既存 DB の移行では新規構築用の `deploy/postgres/cloudnativepg` を適用せず、[移行手順](cloudnativepg-migration.md) のインポート専用設定で新しい Cluster を作成します。
-Bot・MC Link Server・公開 API のタグは起動前も必須です。公開済みのタグを指定し、アプリと Job を止めた状態で Chart を配置します。
-
-```bash
-chartVersion='<CHART_VERSION>'
-helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$chartVersion" -n anvilsaba -f deploy/helm/platform/values.prod.yaml \
-  --set-string bot.image.tag='<BOT_IMAGE_TAG>' \
-  --set-string mcLinkServer.image.tag='<MC_IMAGE_TAG>' \
-  --set-string publicApi.image.tag='<API_IMAGE_TAG>' \
-  --set bot.replicas=0 --set mcLinkServer.replicas=0 --set publicApi.replicas=0 \
-  --set cloudflared.replicas=0 --set dbMigrator.enabled=false --timeout 10m
-```
-
-```bash
-helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$chartVersion" -n anvilsaba --reuse-values \
-  --set dbMigrator.enabled=true --set-string dbMigrator.image.tag='sha-<RELEASE_SHA>' --timeout 10m
-kubectl logs -n anvilsaba job/db-migrator
-```
-
-Migrator はアプリのリリースと同じリビジョンのイメージを使います。Helm は Job の正常完了まで待機します。
-失敗時はアプリを起動せず Job のログと DB 履歴を確認します。成功後にアプリと cloudflared を起動し、Job を無効に戻します。
-
-```bash
-helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$chartVersion" -n anvilsaba --reuse-values --set dbMigrator.enabled=false \
-  --set bot.replicas=1 --set mcLinkServer.replicas=1 --set publicApi.replicas=1 \
-  --set cloudflared.replicas=1 --timeout 10m
-```
+Migrator はアプリの配置・更新より前に実行し、正常完了するまでアプリを適用しません。アプリのタグと Migrator の完全な SHA タグ、公開済み Chart のバージョンは `deploy/flux/apps` で固定します。初回の引き継ぎ時は稼働中 release の設定と移行対応 Chart を確認してから同期を有効にします。
 
 更新時の互換性と切り戻しは [リリース手順](releases.md) を参照してください。
 アプリは起動時に必要なマイグレーション履歴だけを読み取り、定義・適用履歴の不足、適用失敗、チェックサム不一致では起動を拒否します。スキーマ変更と DB 全体の履歴の整合性は Migrator Job が管理します。
@@ -123,26 +84,13 @@ http://public-api:8080
 
 ### 1.5 GitHub Actions の本番環境
 
-デプロイ用の共通資格情報は、既存のリポジトリのシークレット・変数を使用します。
+`production/<対象>` の Environment を使用します。Actions はクラスタへの SSH 接続を行わず、公開済みリリースのバージョンを Git に記録します。従来の `DEPLOY_SSH_*` は不要です。
 
-| 名前                     | 種別         | 内容                                     |
-| ------------------------ | ------------ | ---------------------------------------- |
-| `DEPLOY_SSH_HOST`        | シークレット | 本番サーバーのホスト名または IP アドレス |
-| `DEPLOY_SSH_USER`        | シークレット | k3s を操作できるデプロイ用ユーザー       |
-| `DEPLOY_SSH_PRIVATE_KEY` | シークレット | デプロイ専用 SSH 秘密鍵                  |
-| `DEPLOY_SSH_KNOWN_HOSTS` | シークレット | 検証済みの本番サーバー公開ホスト鍵       |
-| `DEPLOY_SSH_PORT`        | 変数         | SSH ポート                               |
-
-`DEPLOY_SSH_KNOWN_HOSTS` には接続先とポートに対応する行を登録し、別経路で確認したホスト鍵のフィンガープリントと一致することを確認してください。
-
-デプロイ用ユーザーには次の準備が必要です。
-
-- SSH 公開鍵を `authorized_keys` へ登録する
-- `kubectl` と `helm` が sudo なしで k3s を操作できるようにする
+`GITHUB_TOKEN` の `contents: write` と、ブランチ保護設定が本番設定の更新コミットを許可することを確認します。書き込めない場合は担当者が同じ設定変更を PR で反映します。クラスタの読み取り用 Git 認証が必要な場合は、Actions の資格情報とは別に Flux 用の認証を用意します。
 
 ## 2. GitHub Actions からデプロイ
 
-GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と Git タグを指定します。
+GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と公開済み Git タグを指定します。Actions が本番設定の更新コミットを作成し、Flux が同期します。Actions の成功だけで配置完了とは判断せず、HelmRelease の Ready を確認します。
 
 ## 3. デプロイ後の確認
 
