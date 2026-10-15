@@ -45,30 +45,36 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: helm
+          install-args: helm kubectl
       - name: Lint chart
         run: >-
-          helm lint ./deploy/helm/platform
+          mise exec -- helm lint ./deploy/helm/platform
           -f ./deploy/helm/platform/${{ matrix.values }}
           --set-string bot.image.tag=ci
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
       - name: Render manifests
         run: >-
-          helm template platform ./deploy/helm/platform
+          mise exec -- helm template platform ./deploy/helm/platform
           --namespace anvilsaba
           -f ./deploy/helm/platform/${{ matrix.values }}
           --set-string bot.image.tag=ci
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
           > /dev/null
+      - name: Render database manifests
+        run: |
+          mise exec -- kubectl kustomize deploy/postgres/cloudnativepg > /dev/null
+          mise exec -- kubectl kustomize deploy/postgres/import > /dev/null
 
   k3s:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Parse config
-        run: ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml')"
+        run: >-
+          ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml');
+          YAML.parse_stream(File.read('deploy/postgres/cloudnativepg/roles.yaml'))"
 
   deployment-script:
     runs-on: ubuntu-latest

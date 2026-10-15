@@ -42,18 +42,9 @@ dbMigrator:
   secretName: db-migrator
 
 postgres:
-  replicas: 1
-  serviceName: postgres
+  serviceName: platform-db-rw
   port: 5432
-  image:
-    repository: postgres
-    tag: "18.6-trixie"
-    pullPolicy: IfNotPresent
   database: platform
-  username: platform_admin
-  storageSize: 10Gi
-  storageClassName: ""
-  secretName: postgres
 
 cloudflared:
   replicas: 1

@@ -1,6 +1,7 @@
 # 本番デプロイ手順
 
-Rust アプリと PostgreSQL を k3s へ配置します。初回セットアップでは DB・Secret を準備し、Migrator の正常完了後にアプリを起動します。
+Rust アプリと CloudNativePG 管理の PostgreSQL を k3s へ配置します。DB はアプリの Helm release と独立して管理します。初回セットアップでは DB・Secret を準備し、Migrator の正常完了後にアプリを起動します。
+従来の StatefulSet を使用している環境は、Chart を更新する前に [既存 DB の移行手順](cloudnativepg-migration.md) を実施してください。
 
 ## 1. デプロイ環境のセットアップ
 
@@ -17,7 +18,7 @@ Ubuntu または Debian などの Linux サーバーを用意します。
 - Public な GHCR イメージ
 - Cloudflare remotely-managed Tunnel とトークン
 - Bot の本番設定
-- PostgreSQL の初期化ユーザーとアプリ・Migrator ごとの DB ロールのパスワード
+- アプリ・Migrator ごとの DB ロールのパスワードを持つ Secret
 
 ### 1.2 k3s
 
@@ -65,8 +66,21 @@ Secret は SOPS + age で暗号化したマニフェストだけを Git 管理�
 
 ### 初回の DB 準備と配置順序
 
-以下は k3s に接続できる管理端末のリポジトリルートで実行します。既存 DB は再初期化せず、通常の更新を行います。
-Bot・MC Link Server・公開 API のタグは起動前も必須です。公開済みのタグを指定し、まずアプリと Job を止めた状態で PostgreSQL を配置します。
+以下は新規環境向けです。Secret と namespace を準備した後、デプロイ先のリポジトリルートで実行します。デプロイ先には `kubectl` と `helm` を用意し、直接実行します。
+CloudNativePG 1.30.1 を導入し、DB の作成、初期権限の設定、Secret のパスワードとロール所属の反映まで自動で行います。アプリのテーブルは Migrator が作成します。
+
+```bash
+kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/v1.30.1/releases/cnpg-1.30.1.yaml
+kubectl rollout status deployment/cnpg-controller-manager -n cnpg-system --timeout=5m
+kubectl apply -k deploy/postgres/cloudnativepg
+kubectl wait cluster/platform-db -n anvilsaba --for=condition=Ready --timeout=10m
+kubectl apply -f deploy/postgres/cloudnativepg/roles.yaml
+kubectl wait databaserole -n anvilsaba -l app.kubernetes.io/part-of=platform-database \
+  --for=jsonpath='{.status.applied}'=true --timeout=5m
+```
+
+既存 DB の移行では新規構築用の `deploy/postgres/cloudnativepg` を適用せず、[移行手順](cloudnativepg-migration.md) のインポート専用設定で新しい Cluster を作成します。
+Bot・MC Link Server・公開 API のタグは起動前も必須です。公開済みのタグを指定し、アプリと Job を止めた状態で Chart を配置します。
 
 ```bash
 chartVersion='<CHART_VERSION>'
@@ -77,14 +91,7 @@ helm upgrade --install platform oci://ghcr.io/anvilsaba/charts/platform \
   --set-string publicApi.image.tag='<API_IMAGE_TAG>' \
   --set bot.replicas=0 --set mcLinkServer.replicas=0 --set publicApi.replicas=0 \
   --set cloudflared.replicas=0 --set dbMigrator.enabled=false --timeout 10m
-kubectl rollout status statefulset/postgres -n anvilsaba --timeout=5m
-kubectl exec -i -n anvilsaba postgres-0 -- psql -U platform_admin -d platform \
-  -v ON_ERROR_STOP=1 < deploy/postgres/bootstrap.sql
-kubectl exec -it -n anvilsaba postgres-0 -- psql -U platform_admin -d platform
 ```
-
-psql 内で `\password platform_bot`、`\password platform_mc_link_server`、`\password platform_public_api`、`\password platform_db_migrator` を順に実行し、各ロールに別のパスワードを設定して `\q` で終了します。
-[Secret の準備手順](secret-config.md) で暗号化・登録した各 Secret とパスワードを一致させます。
 
 ```bash
 helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
@@ -159,7 +166,8 @@ kubectl rollout status deployment/bot -n anvilsaba --timeout=5m
 kubectl rollout status deployment/mc-link-server -n anvilsaba --timeout=5m
 kubectl rollout status deployment/public-api -n anvilsaba --timeout=5m
 kubectl rollout status deployment/cloudflared -n anvilsaba --timeout=5m
-kubectl rollout status statefulset/postgres -n anvilsaba --timeout=5m
+kubectl wait cluster/platform-db -n anvilsaba --for=condition=Ready --timeout=5m
+kubectl get databaserole -n anvilsaba
 ```
 
 ログを確認します。
@@ -169,7 +177,7 @@ kubectl logs -n anvilsaba deployment/bot --tail=100
 kubectl logs -n anvilsaba deployment/mc-link-server --tail=100
 kubectl logs -n anvilsaba deployment/public-api --tail=100
 kubectl logs -n anvilsaba deployment/cloudflared --tail=100
-kubectl logs -n anvilsaba statefulset/postgres --tail=100
+kubectl logs -n anvilsaba -l cnpg.io/cluster=platform-db --tail=100
 ```
 
 Bot の Discord アプリケーションコマンドは、実行中の Pod に TTY 付きで接続して操作します。
