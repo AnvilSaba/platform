@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../cloudnativepg
+patches:
+  - target:
+      group: postgresql.cnpg.io
+      version: v1
+      kind: Cluster
+      name: platform-db
+    patch: |-
+      - op: replace
+        path: /spec/bootstrap/initdb
+        value:
+          database: platform
+          owner: platform_admin
+          import:
+            type: monolith
+            databases: [platform]
+            roles:
+              - platform_admin
+              - platform_db_migrator
+              - platform_bot
+              - platform_mc_link_server
+              - platform_public_api
+              - platform_bot_runtime
+              - platform_mc_link_server_runtime
+              - platform_public_api_runtime
+            source:
+              externalCluster: legacy-postgres
+      - op: add
+        path: /spec/externalClusters
+        value:
+          - name: legacy-postgres
+            connectionParameters:
+              host: postgres.anvilsaba.svc
+              user: platform_admin
+              dbname: platform
+            password:
+              name: postgres
+              key: databasePassword

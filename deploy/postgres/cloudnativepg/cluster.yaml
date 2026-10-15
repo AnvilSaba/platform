@@ -1,0 +1,30 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: platform-db
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+  enableSuperuserAccess: false
+  storage:
+    storageClass: platform-db-retain
+    size: 10Gi
+  bootstrap:
+    initdb:
+      database: platform
+      owner: platform_admin
+      postInitApplicationSQL:
+        - CREATE ROLE platform_bot_runtime NOLOGIN
+        - CREATE ROLE platform_mc_link_server_runtime NOLOGIN
+        - CREATE ROLE platform_public_api_runtime NOLOGIN
+        - CREATE ROLE platform_db_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        - CREATE ROLE platform_bot LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        - CREATE ROLE platform_mc_link_server LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        - CREATE ROLE platform_public_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        - REVOKE CREATE ON SCHEMA public FROM PUBLIC
+        - REVOKE CREATE ON DATABASE platform FROM PUBLIC
+        - GRANT CONNECT, CREATE ON DATABASE platform TO platform_db_migrator
+        - GRANT USAGE, CREATE ON SCHEMA public TO platform_db_migrator
+        - GRANT CONNECT ON DATABASE platform TO platform_bot, platform_mc_link_server, platform_public_api

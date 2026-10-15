@@ -1,2 +1,5 @@
+postgres:
+  serviceName: platform-db-rw
+
 mcLinkServer:
   port: 25600

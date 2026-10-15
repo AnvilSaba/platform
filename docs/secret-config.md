@@ -4,17 +4,21 @@
 本番 Config、age 公開鍵、暗号化済み Secret は登録済みです。以下は新規環境の準備と設定更新の手順です。age 秘密鍵は Git 外で保持します。
 認証の合言葉は Bot 専用 Secret の `authKeyword` に保存し、環境変数 `AUTH_KEYWORD` で渡します。通常設定の `auth.keyword` は削除します。
 
-| 利用者         | 通常設定                         | Secret / キー                                                                                                       |
-| -------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Bot            | `bot` ConfigMap の `config.toml` | `bot/token` → `DISCORD_BOT_TOKEN`、`bot/databasePassword` → `DATABASE_PASSWORD`、`bot/authKeyword` → `AUTH_KEYWORD` |
-| MC Link Server | Helm values のポート等           | `mc-link-server/databasePassword`                                                                                   |
-| 公開 API       | Helm values のポート等           | `public-api/databasePassword`                                                                                       |
-| Migrator       | Helm values の DB 接続先等       | `db-migrator/databasePassword`                                                                                      |
-| PostgreSQL     | Helm values の DB 名等           | `postgres/databasePassword`                                                                                         |
-| cloudflared    | Helm values の起動引数等         | `cloudflared/token` → `TUNNEL_TOKEN`                                                                                |
+| 利用者                  | 通常設定                         | Secret / キー                                                                                                        |
+| ----------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Bot                     | `bot` ConfigMap の `config.toml` | `bot/token` → `DISCORD_BOT_TOKEN`、`bot-database/password` → `DATABASE_PASSWORD`、`bot/authKeyword` → `AUTH_KEYWORD` |
+| MC Link Server          | Helm values のポート等           | `mc-link-server-database/password` → `DATABASE_PASSWORD`                                                             |
+| 公開 API                | Helm values のポート等           | `public-api-database/password` → `DATABASE_PASSWORD`                                                                 |
+| Migrator                | Helm values の DB 接続先等       | `db-migrator-database/password` → `DATABASE_PASSWORD`                                                                |
+| 旧 PostgreSQL（移行元） | 旧 Chart の DB 名等              | `postgres/databasePassword`（インポートと切り戻し用）                                                                |
+| cloudflared             | Helm values の起動引数等         | `cloudflared/token` → `TUNNEL_TOKEN`                                                                                 |
 
-ConfigMap と Secret の名前はサービス名に揃えます。同じ namespace 内でも種別が異なるため、どちらも `bot` という名前にできます。
-Secret はサービスごとに 1 つにまとめ、Token は `token`、DB パスワードは `databasePassword`、認証の合言葉は `authKeyword` に揃えます。
+通常設定・サービス固有の Secret はサービス名、DB の資格情報は `<サービス名>-database` という専用 Secret に分けます。`bot` Secret は Opaque のまま Token と認証の合言葉だけを保持します。
+DB 専用 Secret の `username` は PostgreSQL ロール名、`password` はそのロールの DB パスワードです。アプリと DatabaseRole は同じ DB 専用 Secret を参照し、パスワードを二重管理しません。アプリには `DATABASE_PASSWORD` として渡します。
+DB ユーザー名は Helm values と DatabaseRole にも記載する公開設定なので、`username` は平文で管理します。`.sops.yaml` はファイル名でルールを分け、先に `*-database.sops.yaml` に一致するルールを置きます。DB 専用ファイルは `username` / `password` の2項目を保持し、`encrypted_regex: ^password$` でパスワードだけを暗号化します。秘密項目を追加する場合は暗号化対象も更新します。その他の Secret ファイルでは従来どおり `data` / `stringData` 全体を暗号化します。
+[CloudNativePG の入力形式](https://cloudnative-pg.io/docs/1.30/declarative_role_management/#password-management) は `kubernetes.io/basic-auth` の `username` / `password` ですが、Secret 名やサービス固有の資格情報の構成は変更できます。この構成では DB 専用 Secret に形式の制約を閉じ込め、サービス固有の Secret に汎用的な `password` キーを追加しません。
+DB 専用 Secret の `cnpg.io/reload: "true"` ラベルにより CloudNativePG が変更を検知し、DatabaseRole のパスワードを DB に反映します。
+`postgres` Secret は旧 DB の接続用です。新しい Cluster は外部からの superuser 接続を無効にし、この Secret を使用しません。
 DB 接続先はパスワードなしの `DATABASE_URL`、パスワードはサービスごとの Secret から渡します。
 GHCR イメージは Public とし、取得用の認証 Secret は使いません。
 Pod は `secretKeyRef` で必要なキーだけを受け取り、Kubernetes API の ServiceAccount Token は自動マウントしません。
@@ -22,7 +26,7 @@ Pod 用の Secret 読み取り RBAC は追加しません。
 
 ## 1. 鍵と公開設定を用意する
 
-管理端末に mise を導入し、リポジトリルートで `mise install` を実行します。
+この手順書の Secret 作成・復号・適用は管理端末で行います。管理端末に mise を導入し、リポジトリルートで `mise install` を実行します。デプロイ先サーバーへの mise 導入は不要です。
 以下の作成・暗号化例は PowerShell 7 用です。kubectl も mise で導入します。クラスタへの接続には kubeconfig を設定してください。
 管理端末は mise で固定した age 1.3.2 と SOPS 3.13.3 を使用します。どちらも PQ 鍵に対応しています。
 
@@ -72,16 +76,17 @@ SOPS は一時的に復号した内容をエディターで開き、保存後に
 必要に応じて `$env:SOPS_EDITOR = 'code --wait'` 等でエディターを指定します。
 平文を扱うのは管理端末の編集用一時ファイルだけです。ノードに平文の `.env` や Secret 原本を配置しません。
 
-暗号化した 6 ファイルを `deploy/config/production/secrets/kustomization.yaml` に登録します。
+暗号化した 7 ファイルを `deploy/config/production/secrets/kustomization.yaml` に登録します。
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - bot.sops.yaml
-  - mc-link-server.sops.yaml
-  - public-api.sops.yaml
-  - db-migrator.sops.yaml
+  - bot-database.sops.yaml
+  - mc-link-server-database.sops.yaml
+  - public-api-database.sops.yaml
+  - db-migrator-database.sops.yaml
   - postgres.sops.yaml
   - cloudflared.sops.yaml
 ```
@@ -123,11 +128,12 @@ mise exec -- kubectl -n anvilsaba create configmap bot `
 ```
 
 その後は [本番デプロイ手順](deployment.md#initial-setup) の DB 準備、Migrator、アプリ起動の順序を守ります。
-DB ロールのパスワードは対応する Secret の値と一致させます。既存 DB は再初期化しません。
+DatabaseRole が対応する Secret のパスワードを反映します。既存の StatefulSet 環境は [DB 移行手順](cloudnativepg-migration.md) に従い、再初期化しません。
 
 通常設定は固定名 ConfigMap を `subPath` でマウントするため、更新後は `mise exec -- kubectl -n anvilsaba rollout restart deployment/bot` が必要です。
 Secret の環境変数も自動更新されないため、更新した Secret を利用するワークロードだけを再起動します。
-PostgreSQL の Secret 更新だけでは既存 DB のパスワードは変わりません。DB ロールの変更と対応する Secret・Pod の更新を合わせて行います。
+パスワードの更新は対応するアプリを停止してから行い、DatabaseRole の `status.applied` が `true`、`status.secretResourceVersion` が対応する Secret の `metadata.resourceVersion` と一致することを確認して再起動します。反映前の `applied=true` だけで完了と判断しません。DB と Pod への反映には時間差があり、稼働したまま変更すると一時的に認証が失敗します。
+旧 StatefulSet の `postgres` Secret 更新では DB 内のパスワードは変わりません。
 
 ## 4. Flux に引き継ぐ
 
@@ -150,7 +156,7 @@ HelmRelease を後から導入する場合は Config の Kustomization への `d
 
 古い `config.toml` の `bot.token` を `DISCORD_BOT_TOKEN`、`auth.keyword` を `AUTH_KEYWORD` に移し、ファイルから削除します。開発用は Git 除外済みの `apps/bot/.env`、本番用は Bot 専用 Secret に保存します。古い項目を残すと起動・再読み込みは拒否されます。
 開発用の Git 除外済み `apps/bot/config.toml` も同じ移行が必要です。既存の `.env` や設定をサンプルで上書きしないでください。
-既存の DB 資格情報は各サービスの `<service>/databasePassword` に移します。Bot は Token、DB パスワード、認証の合言葉を同じ `bot` に入れます。DB 側のパスワードは変更せず、既存値と一致させます。
+DB パスワードは既存値を維持して DB 専用 Secret に移し、Bot の Token・合言葉は `bot` Secret に残しています。DB 専用 Secret は別名で新規作成するため、既存の Opaque Secret の型変更や削除・再作成は不要です。[DB 移行手順](cloudnativepg-migration.md) の順序を守り、先に新しい Chart を適用しないでください。
 新しい ConfigMap と Secret を先に用意し、対応する新しい Bot イメージと Chart を一緒に切り替えます。
 旧 Bot イメージは Token を設定ファイルに要求するため、新しい ConfigMap との組み合わせでは起動できません。
 切り戻し時もイメージ・Chart・設定方式の互換性を揃えてください。

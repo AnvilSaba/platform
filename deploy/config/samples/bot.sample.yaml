@@ -6,5 +6,4 @@ metadata:
 type: Opaque
 stringData:
   token: REPLACE_WITH_SECRET_VALUE
-  databasePassword: REPLACE_WITH_SECRET_VALUE
   authKeyword: REPLACE_WITH_SECRET_VALUE

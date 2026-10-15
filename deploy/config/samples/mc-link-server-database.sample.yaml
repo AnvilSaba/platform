@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mc-link-server-database
+  namespace: anvilsaba
+  labels:
+    cnpg.io/reload: "true"
+type: kubernetes.io/basic-auth
+stringData:
+  username: platform_mc_link_server
+  password: REPLACE_WITH_SECRET_VALUE

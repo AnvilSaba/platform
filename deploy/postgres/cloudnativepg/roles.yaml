@@ -1,0 +1,90 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-bot-runtime
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_bot_runtime
+  login: false
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-mc-link-server-runtime
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_mc_link_server_runtime
+  login: false
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-public-api-runtime
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_public_api_runtime
+  login: false
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-db-migrator
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_db_migrator
+  login: true
+  databaseRoleReclaimPolicy: retain
+  passwordSecret: { name: db-migrator-database }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-bot
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_bot
+  login: true
+  databaseRoleReclaimPolicy: retain
+  inRoles: [platform_bot_runtime]
+  passwordSecret: { name: bot-database }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-mc-link-server
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_mc_link_server
+  login: true
+  databaseRoleReclaimPolicy: retain
+  inRoles: [platform_mc_link_server_runtime]
+  passwordSecret: { name: mc-link-server-database }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: platform-public-api
+  namespace: anvilsaba
+  labels: { app.kubernetes.io/part-of: platform-database }
+spec:
+  cluster: { name: platform-db }
+  name: platform_public_api
+  login: true
+  databaseRoleReclaimPolicy: retain
+  inRoles: [platform_public_api_runtime]
+  passwordSecret: { name: public-api-database }
