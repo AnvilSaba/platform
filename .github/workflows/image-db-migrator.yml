@@ -9,6 +9,7 @@ on:
         "LICENSE",
         "deploy/rust/**",
         ".github/actions/build-image/**",
+        ".github/actions/notify-infrastructure/**",
         "apps/db-migrator/**",
         "crates/**",
         "migrations/**",
@@ -32,6 +33,10 @@ on:
 permissions:
   contents: read
   packages: write
+concurrency:
+  group: image-db-migrator-${{ inputs.release_ref || 'main' }}
+  cancel-in-progress: ${{ !inputs.release_ref }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,7 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: ${{ inputs.release_ref || github.sha }}
+      - uses: $/.github/actions/setup-mise
+        with:
+          install-args: gh
       - uses: $/.github/actions/build-image
         id: image
         with:
@@ -50,3 +58,13 @@ jobs:
             PACKAGE=db-migrator
             BINARY=db-migrator
             SOURCE_DIR=apps/db-migrator
+      - uses: $/.github/actions/notify-infrastructure
+        if: ${{ !inputs.release_ref && github.ref == 'refs/heads/main' }}
+        with:
+          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
+          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
+          component: db-migrator
+          repository: ghcr.io/anvilsaba/db-migrator
+          digest: ${{ steps.image.outputs.digest }}
+          revision: ${{ steps.image.outputs.revision }}
+          tag: ${{ steps.image.outputs.sha-tag }}
