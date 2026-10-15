@@ -4,6 +4,8 @@
 
 新しい Chart は PostgreSQL の StatefulSet・Service・PVC を含みません。**移行前に通常のデプロイを実行すると旧 DB のリソースが削除されます。** 自動デプロイと Config / Secret の自動同期を停止し、以下の順序で実施してください。新規環境は [本番デプロイ手順](deployment.md#initial-setup) を使用します。
 
+先に [Flux の初回接続](flux.md#初回の接続) を済ませ、Config・DB・HelmRelease の `suspend: true` は維持します。Operator の導入だけが先に進みます。
+
 ## 1. 事前確認と旧 PVC の保護
 
 Secret の準備を除くコマンド例は、デプロイ先の Bash で実行します。デプロイ先に `kubectl` と `helm` を用意し、リポジトリルートから直接実行して、接続先の context と namespace を確認します。Secret の復号・適用は age 秘密鍵を持つ管理端末で行います。
@@ -80,38 +82,27 @@ kubectl exec -i -n anvilsaba postgres-0 -- psql -XqAt -U platform_admin -d platf
 
 ## 3. DB 専用 Secret の準備
 
-`bot-database`、`mc-link-server-database`、`public-api-database`、`db-migrator-database` を新規作成します。DB の資格情報だけを持つ `kubernetes.io/basic-auth` の Secret で、旧パスワードの実値を維持しています。既存のサービス用 Secret の型を変更したり削除したりする必要はありません。旧 DB 用 `postgres` Secret も維持します。
+`bot-database`、`mc-link-server-database`、`public-api-database`、`db-migrator-database` は旧パスワードの実値を維持した DB 専用 Secret です。旧 DB の `postgres` Secret も維持します。
 
-以下は管理端末の PowerShell 7 で実行します。管理端末では mise で SOPS と kubectl を用意し、デプロイ先のクラスタに接続する kubeconfig と [Secret 手順](secret-config.md) の age 秘密鍵を設定します。途中で失敗した場合は停止を維持して復旧します。
+書き込み停止とバックアップの完了後に、`deploy/flux/production/config.yaml` の `spec.suspend` を Git で `false` に変更します。旧 Bot Secret の DB キーはこの同期で取り除かれるため、アプリを停止したまま進めます。
 
-```powershell
-foreach ($secretName in @('bot-database', 'mc-link-server-database', 'public-api-database', 'db-migrator-database')) {
-  $decrypted = mise exec -- sops decrypt "deploy/config/production/secrets/$secretName.sops.yaml"
-  if ($LASTEXITCODE -ne 0) { throw '復号に失敗しました' }
-  $decrypted | mise exec -- kubectl apply -f -
-  if ($LASTEXITCODE -ne 0) { throw 'DB 専用 Secret の作成に失敗しました' }
-  Remove-Variable decrypted
-}
+```bash
+kubectl wait kustomization/platform-config -n flux-system --for=condition=Ready --timeout=5m
 ```
 
 ## 4. インポートとロール反映
 
-デプロイ先の Bash に戻って実行します。
-
 ```bash
-kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/v1.30.1/releases/cnpg-1.30.1.yaml
-kubectl rollout status deployment/cnpg-controller-manager -n cnpg-system --timeout=5m
+kubectl wait kustomization/cnpg-operator -n flux-system --for=condition=Ready --timeout=5m
 kubectl get cluster/platform-db -n anvilsaba
 ```
 
-移行先 `platform-db` が未作成であることを確認します。既存 Cluster がある場合は進めず、作成経緯とデータを確認します。新規構築用の `deploy/postgres/cloudnativepg` を先に適用しないでください。
+移行先 `platform-db` が未作成であることを確認します。既存 Cluster がある場合は進めず、作成経緯とデータを確認します。
+`deploy/flux/production/database.yaml` の `platform-db` は `spec.path: ./deploy/postgres/import` のまま `spec.suspend: false` にして Git に反映します。新規構築用の base に変更しません。Flux がインポート完了後にロールを反映します。
 
 ```bash
-kubectl apply -k deploy/postgres/import
-kubectl wait cluster/platform-db -n anvilsaba --for=condition=Ready --timeout=30m
-kubectl apply -f deploy/postgres/cloudnativepg/roles.yaml
-kubectl wait databaserole -n anvilsaba -l app.kubernetes.io/part-of=platform-database \
-  --for=jsonpath='{.status.applied}'=true --timeout=5m
+kubectl wait kustomization/platform-db -n flux-system --for=condition=Ready --timeout=35m
+kubectl wait kustomization/platform-db-roles -n flux-system --for=condition=Ready --timeout=5m
 kubectl get databaserole -n anvilsaba \
   -o custom-columns='NAME:.metadata.name,APPLIED:.status.applied,SECRET_VERSION:.status.secretResourceVersion'
 ```
@@ -135,34 +126,29 @@ diff -u "$backupDir/source.jsonl" "$backupDir/target.jsonl"
 
 CloudNativePG は取り込んだ `platform_admin` の SUPERUSER を外します。この差だけは意図した変更で、比較 SQL の出力対象から除外しています。管理作業は primary Pod 内の `postgres` で行います。SECURITY DEFINER 関数の所有者と動作も確認してください。
 
-移行対応 Chart へ更新します。停止状態を維持し、DB のホストを明示して Migrator を先に実行します。既存イメージのタグを維持し、同時にアプリのリリースを変更しません。
+公開済みの移行対応 Chart のバージョンを `deploy/flux/apps/chart.yaml` の `spec.ref.tag` に設定します。`apps/values.yaml` は停止前のアプリのタグを維持し、同じリビジョンの Migrator を設定します。`bot`・`mcLinkServer`・`publicApi`・`cloudflared` に `replicas: 0` を記録して停止状態を維持し、`dbMigrator.enabled` は `true` にします。`apps/release.yaml` の `spec.suspend` を `false` にして Git に反映します。
+
+Flux は既存の `anvilsaba/platform` release を引き継ぎ、Migrator が完了するまでアプリを更新しません。
 
 ```bash
-newChartVersion='<MIGRATION_CHART_VERSION>'
-helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$newChartVersion" -n anvilsaba --reuse-values \
-  -f deploy/helm/platform/values.prod.yaml --set-string postgres.serviceName=platform-db-rw \
-  --set bot.replicas=0 --set mcLinkServer.replicas=0 --set publicApi.replicas=0 \
-  --set cloudflared.replicas=0 --set dbMigrator.enabled=true \
-  --set-string dbMigrator.image.tag='sha-<CURRENT_RELEASE_SHA>' --timeout 10m
+kubectl wait helmrelease/platform -n anvilsaba --for=condition=Ready --timeout=15m
 kubectl logs -n anvilsaba job/db-migrator
 kubectl get pvc/postgres-data -n anvilsaba
 ```
 
-旧 StatefulSet と Service はこの更新で削除されます。旧 PVC は前段で保存した keep により残ります。Migrator が正常完了し、旧 PVC が残っていることを確認してアプリを起動します。
+旧 StatefulSet と Service はこの更新で削除されます。旧 PVC は前段で保存した keep により残ります。Migrator が正常完了し旧 PVC が残っていることを確認して、Git の replica 数を停止前の値に戻します。Migrator は以後も有効にし、各 upgrade で適用済みマイグレーションをスキップします。
 
 ```bash
-helm upgrade platform oci://ghcr.io/anvilsaba/charts/platform \
-  --version "$newChartVersion" -n anvilsaba --reuse-values --set dbMigrator.enabled=false \
-  --set bot.replicas=1 --set mcLinkServer.replicas=1 --set publicApi.replicas=1 \
-  --set cloudflared.replicas=1 --timeout 10m
+kubectl wait helmrelease/platform -n anvilsaba --for=condition=Ready --timeout=15m
 ```
+
+Git 変更直後は前回の Ready が残ることがあります。`kubectl get kustomization -n flux-system` の `status.lastAppliedRevision` が対象コミットになり、HelmRelease の `status.observedGeneration` が `metadata.generation` に追いつき、`status.lastAttemptedConfigDigest` / `status.lastAttemptedRevision` が今回の設定を示していることも確認します。[Flux の確認手順](flux.md) を参照してください。
 
 各アプリのログ、Discord 連携、リンクコード発行 / 連携 / 解除、`/whitelist.json` と DB の identity 採番を確認します。必要な停止前の replica 数が 1 以外なら元の値に戻します。検証後に自動デプロイ・同期を再開します。
 
 ## 6. 切り戻しとデータ保持
 
-新 DB に書き込みを開始する前なら、アプリを停止したまま新 Cluster への接続を止め、バックアップした旧サービス用 Secret と keep 付きの旧 Chart / 値を再適用します。新しい DB 専用 Secret は旧 Chart が参照しません。`postgres` の起動と接続を確認してから旧アプリを再開します。Helm rollback だけでは外部管理の Secret は戻りません。
+旧 DB への切り戻しでは、先に親の Flux Kustomization `platform`、`platform-config`・`platform-db`・`platform-db-roles`・`platform-apps` と HelmRelease `platform` を停止し、自動同期が旧 Secret や旧 Chart を上書きしないようにします。新 DB に書き込みを開始する前なら、アプリを停止したまま新 Cluster への接続を止め、バックアップした旧サービス用 Secret と keep 付きの旧 Chart / 値を再適用します。新しい DB 専用 Secret は旧 Chart が参照しません。`postgres` の起動と接続を確認してから旧アプリを再開します。Helm rollback だけでは外部管理の Secret は戻りません。
 
 **新 DB への書き込み開始後は旧 DB が古くなるため、単純な接続先の切り戻しではデータを失います。** 再停止して新 DB のバックアップと差分の取り込み方針を決めてください。検証と保持期間が終わるまで旧 PVC・PV・バックアップを削除しません。
 

@@ -2,7 +2,7 @@
 
 name: Production deployment
 
-run-name: Deploy ${{ inputs.release_ref }} to production
+run-name: Promote ${{ inputs.release_ref }} to production GitOps
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
@@ -37,9 +37,3 @@ jobs:
         with:
           target: ${{ inputs.target }}
           release-ref: ${{ inputs.release_ref }}
-        env:
-          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}

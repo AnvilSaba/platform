@@ -99,9 +99,9 @@ Kustomize が生成できることを確認し、本番値・必要な Secret �
 SOPS の [公式手順](https://getsops.io/docs/usage/advanced/) に従い、変更時は `mise exec -- sops edit <ファイル>` を使います。
 名前や namespace を含む暗号化ファイルの平文部分も MAC の対象です。暗号文や SOPS メタデータを直接編集しません。
 
-## 3. Flux 導入前に適用する
+## 3. Flux を使わない事前適用（移行用）
 
-既存 Helm は Secret と ConfigMap を参照し、値を Helm release に保存しません。
+通常は次節の Flux で同期します。以下は移行中に Flux の同期を止めた場合の事前適用です。既存 Helm は Secret と ConfigMap を参照し、値を Helm release に保存しません。
 管理端末から以下を実行します。平文はパイプだけを通し、ノードのデプロイディレクトリには保存しません。
 SOPS 復号は Kustomize による namespace 変更より先に行います。
 
@@ -137,19 +137,19 @@ Secret の環境変数も自動更新されないため、更新した Secret �
 
 ## 4. Flux に引き継ぐ
 
-`deploy/flux/platform-config.sample.yaml` は同じ Kustomize ルートを参照する Flux Kustomization のサンプルです。
-Flux の `GitRepository/platform` を用意し、導入済みの `flux-system` に PQ 秘密鍵だけを渡します。
-PQ 鍵の復号には対応した kustomize-controller が必要です。この手順は [v1.9.0 の SOPS / age 依存関係](https://github.com/fluxcd/kustomize-controller/blob/v1.9.0/go.mod) を対応基準とします。管理端末の age を更新しても、controller 内蔵の復号処理は更新されません。
+`deploy/flux/production/config.yaml` が同じ Kustomize ルートを参照します。Flux の初回接続と適用順序は [本番 GitOps 手順](flux.md) を参照してください。
+PQ 鍵の復号には対応した kustomize-controller が必要です。[v1.9.0 の SOPS / age 依存関係](https://github.com/fluxcd/kustomize-controller/blob/v1.9.0/go.mod) を対応基準とし、本番設定は Flux 2.9.6 を使用します。管理端末の age を更新しても、controller 内蔵の復号処理は更新されません。
+
+管理端末で、導入済みの `flux-system` に PQ 秘密鍵を一度だけ渡します。
 
 ```powershell
 mise exec -- kubectl -n flux-system create secret generic sops-age `
   --from-file=identity.agekey=$ageKeyFile --dry-run=client -o yaml |
   mise exec -- kubectl apply -f -
-mise exec -- kubectl apply -f deploy/flux/platform-config.sample.yaml
 ```
 
 `.agekey` で終わるキー名と `decryption.secretRef` は [Flux の SOPS 復号仕様](https://fluxcd.io/flux/components/kustomize/kustomizations/#decryption) に対応しています。
-HelmRelease を後から導入する場合は Config の Kustomization への `dependsOn` を設定し、既存のマイグレーション順序を維持します。
+既存 DB の移行では書き込み停止後に `platform-config.spec.suspend` を Git で `false` にし、Ready を確認します。通常運用では暗号化済み Secret や通常設定の Git 変更が自動反映されます。
 固定名 ConfigMap と環境変数 Secret の更新後の再起動も同じです。Flux による Config / Secret の反映だけでは Pod は再起動しません。
 
 ## 5. 既存環境の移行

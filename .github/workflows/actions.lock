@@ -18,6 +18,7 @@ workflows:
         - 'swatinem/rust-cache@v2.9.2'
     '.github/workflows/deploy-production.yml':
         - 'actions/checkout@v7.0.1'
+        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-bot.yml':
         - 'actions/checkout@v7.0.1'
         - 'docker/build-push-action@v7.3.0'
