@@ -32,7 +32,7 @@ on:
         default: true
         type: boolean
       deploy:
-        description: 公開成功後に本番の GitOps 設定を更新
+        description: 必要な公開成功後に production 更新 PR を依頼（既定は無効）
         required: true
         default: false
         type: boolean
@@ -177,7 +177,8 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -186,4 +187,6 @@ jobs:
         with:
           target: ${{ inputs.app }}
           release-ref: ${{ needs.release.outputs.tag }}
-          migrator-image-tag: ${{ needs.build-db-migrator-image.outputs.image_tag }}
+          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
+          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
+          registry-token: ${{ secrets.GITHUB_TOKEN }}

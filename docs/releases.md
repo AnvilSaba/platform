@@ -22,11 +22,15 @@ GitHub の Actions 画面で **Release** を選び、**Run workflow** からリ�
 
 `dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。リリース・デプロイは行いません。
 
-`deploy` はデフォルトで無効です。有効にした実リリースだけが、イメージまたは Chart の公開成功後に `deploy/flux/apps` の固定バージョンを更新するコミットを `main` に作成します。Flux がその Git 変更を本番に反映します。Actions の成功は Git の更新完了を示し、デプロイ完了は HelmRelease の Ready で確認します。[Flux の運用手順](flux.md) を参照してください。
+`deploy` はデフォルトで無効です。有効にした実リリースだけが、必要な image/Migrator または Chart の公開成功後に
+infrastructure へ通知し、production 更新 PR を依頼します。人がレビューして merge した後に Flux が反映します。
+通知用 GitHub App の `GITOPS_NOTIFY_APP_ID` と `GITOPS_NOTIFY_APP_PRIVATE_KEY` を設定してください。
 
-本番設定の更新には `scripts/promote-production.rs` を使い、既存のリリーススクリプトと同じ `mise exec -- cargo -Zscript` で実行します。
-
-アプリのデプロイは、同じ Git リビジョンの Migrator Job を実行して正常完了を待ち、成功した場合のみ対象アプリを更新します。初回の Flux 引き継ぎを終えた後は **Release でアプリを選び、dry_run=false・deploy=true** を指定し、マイグレーションを個別に操作する必要はありません。DB 変更のないリリースでも常に Job を実行し、SQLx が適用済みマイグレーションをスキップします。Chart の固定バージョンはアプリのリリースでは変更せず、Chart のリリース・昇格で更新します。
+単独・複数 component の既存 release をまとめる場合は、infrastructure の **Production update PR** で
+component ごとの `component/vX.Y.Z` を指定します。digest・release tag・Git revision・共有 Migrator の検証は
+infrastructure の Cargo script が行います。未指定アプリを維持し、アプリ切り戻しでも Migrator は戻しません。
+[source 移管と本番更新の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md)を参照してください。
+source 移管前に更新 PR を merge しないでください。既存の desired state は引き継ぎ確認まで残します。
 
 ## ローカルでリリース内容を確認する
 

@@ -1,14 +1,14 @@
 # This workflow is managed by gh actions-lock.
 
-name: Production deployment
+name: Production update PR
 
-run-name: Promote ${{ inputs.release_ref }} to production GitOps
+run-name: Promote ${{ inputs.release_ref }} for production PR
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: デプロイする対象
+        description: PR に含める対象
         required: true
         type: choice
         options:
@@ -22,7 +22,8 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+  packages: read
 
 jobs:
   deploy:
@@ -37,3 +38,6 @@ jobs:
         with:
           target: ${{ inputs.target }}
           release-ref: ${{ inputs.release_ref }}
+          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
+          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
+          registry-token: ${{ secrets.GITHUB_TOKEN }}

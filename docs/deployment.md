@@ -84,13 +84,17 @@ http://public-api:8080
 
 ### 1.5 GitHub Actions の本番環境
 
-`production/<対象>` の Environment を使用します。Actions はクラスタへの SSH 接続を行わず、公開済みリリースのバージョンを Git に記録します。従来の `DEPLOY_SSH_*` は不要です。
+`production/<対象>` の Environment を使用します。通知用 GitHub App の資格情報を設定し、
+platform の **Production update PR** から公開済み release を infrastructure へ通知します。
+複数 component をまとめる場合は infrastructure 側の同名 workflow を使います。
+通知と更新には用途別の App を使い、作成した PR で CI が動くことを確認してください。
 
-`GITHUB_TOKEN` の `contents: write` と、ブランチ保護設定が本番設定の更新コミットを許可することを確認します。書き込めない場合は担当者が同じ設定変更を PR で反映します。クラスタの読み取り用 Git 認証が必要な場合は、Actions の資格情報とは別に Flux 用の認証を用意します。
+## 2. GitHub Actions から更新 PR を作成
 
-## 2. GitHub Actions からデプロイ
-
-GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と公開済み Git タグを指定します。Actions が本番設定の更新コミットを作成し、Flux が同期します。Actions の成功だけで配置完了とは判断せず、HelmRelease の Ready を確認します。
+公開成功後の通知で、infrastructure が digest・source revision と Migrator の整合性を検証し、
+production 更新 PR を作ります。レビューと merge を経て Flux が反映します。
+source 移管完了前は PR を merge せず、移管と新版 Chart/image の導入を分けます。
+Actions の成功だけでは配置完了とせず、HelmRelease の Ready と疎通を確認します。
 
 ## 3. デプロイ後の確認
 

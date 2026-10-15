@@ -73,7 +73,7 @@ kubectl logs -n anvilsaba job/db-migrator
 
 ## リリースと切り戻し
 
-**Release** の `deploy=true` または **Production deployment** により、対象の公開済みタグから `values.yaml` / `chart.yaml` を更新するコミットを `main` に作成します。アプリの変更では対象アプリと同じリビジョンの Migrator だけを更新し、他のアプリと Chart の固定値を維持します。Chart 更新では Chart の固定値だけを更新します。
+**Release** の `deploy=true` または **Production update PR** は infrastructure に公開済み成果物を通知し、更新 PR を依頼します。人のレビュー・merge 後に反映します。既存の `deploy/` 定義は source 引き継ぎ確認まで維持し、移管前に更新 PR を merge しません。
 
 GitHub Actions の `GITHUB_TOKEN` に `contents: write` が必要です。ブランチ保護などで Actions から `main` に書き込めない場合は更新を拒否し、クラスタを直接変更しません。担当者が同じ設定変更を PR として反映してください。Actions の成功は Git への記録完了を示します。デプロイ完了は HelmRelease の Ready と各 Pod のログで確認します。
 
