@@ -23,7 +23,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   deploy:
@@ -40,4 +39,3 @@ jobs:
           release-ref: ${{ inputs.release_ref }}
           app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
           private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
-          registry-token: ${{ secrets.GITHUB_TOKEN }}

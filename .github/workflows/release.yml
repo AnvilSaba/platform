@@ -178,7 +178,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -189,4 +188,3 @@ jobs:
           release-ref: ${{ needs.release.outputs.tag }}
           app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
           private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
-          registry-token: ${{ secrets.GITHUB_TOKEN }}

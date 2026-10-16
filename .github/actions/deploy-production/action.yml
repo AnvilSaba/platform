@@ -13,9 +13,6 @@ inputs:
   private-key:
     description: 通知専用 GitHub App private key
     required: true
-  registry-token:
-    description: GHCR read token
-    required: true
 runs:
   using: composite
   steps:
@@ -32,8 +29,6 @@ runs:
       env:
         COMPONENT: ${{ inputs.target }}
         RELEASE_REF: ${{ inputs.release-ref }}
-        REGISTRY_TOKEN: ${{ inputs.registry-token }}
-        REGISTRY_USER: ${{ github.actor }}
       run: |
         case "$COMPONENT" in bot|mc-link-server|public-api|chart) ;; *) exit 1 ;; esac
         [[ "$RELEASE_REF" =~ ^$COMPONENT/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -41,7 +36,7 @@ runs:
         repository="anvilsaba/$COMPONENT"
         tag="${RELEASE_REF#*/}"
         if [ "$COMPONENT" = chart ]; then repository=anvilsaba/charts/platform; tag="${RELEASE_REF#chart/v}"; fi
-        token=$(curl --fail --silent --show-error --get --user "$REGISTRY_USER:$REGISTRY_TOKEN" \
+        token=$(curl --fail --silent --show-error --get \
           --data-urlencode service=ghcr.io --data-urlencode "scope=repository:$repository:pull" https://ghcr.io/token | jq -er .token)
         curl --fail --silent --show-error -H "Authorization: Bearer $token" \
           -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
