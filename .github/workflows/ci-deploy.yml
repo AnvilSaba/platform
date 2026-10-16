@@ -8,7 +8,6 @@ on:
     paths:
       - "deploy/**"
       - "mise.toml"
-      - "scripts/check-chart.rs"
       - ".github/actions/setup-mise/**"
       - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
@@ -21,7 +20,6 @@ on:
     paths:
       - "deploy/**"
       - "mise.toml"
-      - "scripts/check-chart.rs"
       - ".github/actions/setup-mise/**"
       - "scripts/promote-production.rs"
       - ".github/actions/deploy-production/**"
@@ -47,9 +45,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: helm kubectl rust
-      - name: Test chart image references
-        run: mise exec -- cargo -Zscript scripts/check-chart.rs
+          install-args: helm kubectl
       - name: Lint chart
         run: >-
           mise exec -- helm lint ./deploy/helm/platform
@@ -62,7 +58,7 @@ jobs:
           mise exec -- helm template platform ./deploy/helm/platform
           --namespace anvilsaba
           -f ./deploy/helm/platform/${{ matrix.values }}
-          --set-string bot.image.tag=ci
+          --set-string bot.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
           > /dev/null

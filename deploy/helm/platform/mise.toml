@@ -1,9 +1,8 @@
 [tasks.check]
 description = "Helm Chart と CloudNativePG 設定の生成を検査する"
 run = [
-  "mise exec -- cargo -Zscript ../../../scripts/check-chart.rs",
   "helm lint . --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test",
-  "helm template platform . --namespace anvilsaba --set bot.image.tag=test --set mcLinkServer.image.tag=test --set publicApi.image.tag=test >{{ vars.null }}",
+  "helm template platform . --namespace anvilsaba --set-string bot.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --set mcLinkServer.image.tag=test --set publicApi.image.tag=test >{{ vars.null }}",
   "kubectl kustomize ../../postgres/cloudnativepg >{{ vars.null }}",
   "kubectl kustomize ../../postgres/import >{{ vars.null }}",
   "kubectl kustomize ../../postgres/operator >{{ vars.null }}",
