@@ -28,18 +28,23 @@ on:
 permissions:
   contents: read
   packages: write
+concurrency:
+  group: image-mc-link-server-${{ inputs.release_ref || 'main' }}
+  cancel-in-progress: ${{ !inputs.release_ref }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: ${{ inputs.release_ref || github.sha }}
       - uses: $/.github/actions/build-image
         with:
           image: ghcr.io/anvilsaba/mc-link-server
           token: ${{ secrets.GITHUB_TOKEN }}
           release-ref: ${{ inputs.release_ref }}
+          channel: ${{ !inputs.release_ref && 'main' || '' }}
           build-args: |
             PACKAGE=mc-link-server
             BINARY=mc-link-server

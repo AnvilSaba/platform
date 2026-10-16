@@ -32,6 +32,10 @@ on:
 permissions:
   contents: read
   packages: write
+concurrency:
+  group: image-db-migrator-${{ inputs.release_ref || 'main' }}
+  cancel-in-progress: ${{ !inputs.release_ref }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,12 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: ${{ inputs.release_ref || github.sha }}
       - uses: $/.github/actions/build-image
         id: image
         with:
           image: ghcr.io/anvilsaba/db-migrator
           token: ${{ secrets.GITHUB_TOKEN }}
+          channel: ${{ inputs.release_ref && 'release' || 'main' }}
           build-args: |
             PACKAGE=db-migrator
             BINARY=db-migrator
