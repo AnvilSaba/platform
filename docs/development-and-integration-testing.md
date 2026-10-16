@@ -24,6 +24,17 @@ mise install
 
 DB は WSL Container CLI/Podman/Docker の `run`・`start`・`exec` を直接使用して管理します。
 既定は `wslc` を使用します。引数で Podman/Docker に切り替えられます。
+ローカル DB の初期化 SQL は `dev/postgres/` にまとめています。
+`bootstrap.sql` でロールと権限を用意し、`passwords.sql` で開発用パスワードを設定します。
+
+旧 `deploy/postgres/` をマウントした開発用コンテナがある場合は、アプリを停止して次を実行します。
+データ用 volume は保持し、SQL の参照元パスを更新するためにコンテナだけを再作成します。以下は既定の `wslc` の例です。
+
+```powershell
+mise :down
+mise exec -- wslc rm platform-local-postgres
+mise :db:up
+```
 
 ```powershell
 mise :test                  # WSL Container CLI(既定)
