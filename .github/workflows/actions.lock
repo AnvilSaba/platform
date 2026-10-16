@@ -16,10 +16,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'jdx/mise-action@v5.0.1'
         - 'swatinem/rust-cache@v2.9.2'
-    '.github/workflows/deploy-production.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
-        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-bot.yml':
         - 'actions/checkout@v7.0.1'
         - 'docker/build-push-action@v7.3.0'
@@ -46,7 +42,6 @@ workflows:
         - 'docker/setup-buildx-action@v4.3.0'
     '.github/workflows/release.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'jdx/mise-action@v5.0.1'
 dependencies:
     'actions/checkout@v7.0.1':

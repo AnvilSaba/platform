@@ -82,19 +82,18 @@ Cloudflare 側の Published application の Service URL を次に設定します
 http://public-api:8080
 ```
 
-### 1.5 GitHub Actions の本番環境
+### 1.5 Flux による成果物の更新
 
-`production/<対象>` の Environment を使用します。通知用 GitHub App の資格情報を設定し、
-platform の **Production update PR** から公開済み release を infrastructure へ通知します。
-複数 component をまとめる場合は infrastructure 側の同名 workflow を使います。
-通知と更新には用途別の App を使い、作成した PR で CI が動くことを確認してください。
+platform は GHCR への成果物公開を担当し、配置の更新は infrastructure の Flux が担当します。
+Git 更新用 App と PR 作成用 App の設定は infrastructure 側に置き、platform の通知用資格情報は不要です。
 
-## 2. GitHub Actions から更新 PR を作成
+## 2. production 更新 PR
 
-公開成功後の通知で、infrastructure が digest・source revision と Migrator の整合性を検証し、
-production 更新 PR を作ります。レビューと merge を経て Flux が反映します。
+production クラスタの Flux が公開済みアプリ・Chart の安定版と Migrator の `release` を監視し、
+digest を固定した更新ブランチを push します。infrastructure の GitHub Actions が PR を作成し、
+レビューと merge を経て各クラスタの Flux が反映します。
 source 移管完了前は PR を merge せず、移管と新版 Chart/image の導入を分けます。
-Actions の成功だけでは配置完了とせず、HelmRelease の Ready と疎通を確認します。
+Git 更新の成功だけでは配置完了とせず、HelmRelease の Ready と疎通を確認します。
 
 ## 3. デプロイ後の確認
 

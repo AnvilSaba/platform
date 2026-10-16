@@ -22,13 +22,19 @@ GitHub の Actions 画面で **Release** を選び、**Run workflow** からリ�
 
 `dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。リリース・デプロイは行いません。
 
-`deploy` はデフォルトで無効です。有効にした実リリースだけが、必要な image/Migrator または Chart の公開成功後に
-infrastructure へ通知し、production 更新 PR を依頼します。人がレビューして merge した後に Flux が反映します。
-通知用 GitHub App の `GITOPS_NOTIFY_APP_ID` と `GITOPS_NOTIFY_APP_PRIVATE_KEY` を設定してください。
+公開済み成果物は infrastructure 側の Flux が監視します。アプリと Chart は安定版 SemVer、
+Migrator はアプリ release のビルドで更新する可変タグ `release` が更新候補になります。
+Flux が digest を固定した production 更新ブランチを push し、infrastructure の GitHub Actions が PR を作成します。
+人がレビューして merge するまで production の配置は変わりません。
+`deploy` 入力、platform の Production update PR workflow、通知用 App は使用しません。
 
-単独・複数 component の既存 release をまとめる場合は、infrastructure の **Production update PR** で
-component ごとの `component/vX.Y.Z` を指定します。digest・release tag・Git revision・共有 Migrator の検証は
-infrastructure の Cargo script が行います。未指定アプリを維持し、アプリ切り戻しでも Migrator は戻しません。
+main のビルドでは image と Chart の可変タグ `main` を更新し、staging 用の Flux が digest の変更を追います。
+Migrator の release ビルドは staging の `main` を動かしません。
+Chart の開発版は固定バージョン `0.0.0-main` と別名 `main` を使い、時刻や連番のタグは増やしません。
+
+アプリは起動時に必須 migration の適用・成功・checksum を確認します。
+更新スクリプトで Git 祖先や SQL の一致を再判定せず、staging の実行結果と PR レビューで互換性を確認します。
+アプリ切り戻しでは Migrator を維持し、自動更新の選択範囲も固定します。
 [source 移管と本番更新の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md)を参照してください。
 source 移管前に更新 PR を merge しないでください。既存の desired state は引き継ぎ確認まで残します。
 
