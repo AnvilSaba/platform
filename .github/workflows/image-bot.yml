@@ -9,7 +9,6 @@ on:
         "LICENSE",
         "deploy/rust/**",
         ".github/actions/build-image/**",
-        ".github/actions/notify-infrastructure/**",
         "apps/bot/**",
         "crates/**",
         "migrations/**",
@@ -49,17 +48,8 @@ jobs:
           image: ghcr.io/anvilsaba/bot
           token: ${{ secrets.GITHUB_TOKEN }}
           release-ref: ${{ inputs.release_ref }}
+          channel: ${{ !inputs.release_ref && 'main' || '' }}
           build-args: |
             PACKAGE=bot
             BINARY=bot
             SOURCE_DIR=apps/bot
-      - uses: $/.github/actions/notify-infrastructure
-        if: ${{ !inputs.release_ref && github.ref == 'refs/heads/main' }}
-        with:
-          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
-          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
-          component: bot
-          repository: ghcr.io/anvilsaba/bot
-          digest: ${{ steps.image.outputs.digest }}
-          revision: ${{ steps.image.outputs.revision }}
-          tag: ${{ steps.image.outputs.sha-tag }}

@@ -10,6 +10,9 @@ inputs:
   release-ref:
     description: リリースタグ（空の場合は SHA のみ）
     default: ""
+  channel:
+    description: 同じ成果物を指す可変タグ
+    default: ""
   dockerfile:
     description: 使用する Dockerfile
     default: deploy/rust/Dockerfile
@@ -54,6 +57,7 @@ runs:
         images: ${{ inputs.image }}
         tags: |
           type=raw,value=${{ steps.release.outputs.sha_tag }}
+          type=raw,value=${{ inputs.channel }},enable=${{ inputs.channel != '' }}
           type=raw,value=${{ steps.release.outputs.image_tag }},enable=${{ steps.release.outputs.image_tag != '' }}
         labels: |
           org.opencontainers.image.revision=${{ steps.release.outputs.revision }}

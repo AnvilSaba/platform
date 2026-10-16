@@ -9,7 +9,6 @@ on:
         "LICENSE",
         "deploy/rust/**",
         ".github/actions/build-image/**",
-        ".github/actions/notify-infrastructure/**",
         "apps/db-migrator/**",
         "crates/**",
         "migrations/**",
@@ -54,17 +53,8 @@ jobs:
         with:
           image: ghcr.io/anvilsaba/db-migrator
           token: ${{ secrets.GITHUB_TOKEN }}
+          channel: ${{ inputs.release_ref && 'release' || 'main' }}
           build-args: |
             PACKAGE=db-migrator
             BINARY=db-migrator
             SOURCE_DIR=apps/db-migrator
-      - uses: $/.github/actions/notify-infrastructure
-        if: ${{ !inputs.release_ref && github.ref == 'refs/heads/main' }}
-        with:
-          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
-          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
-          component: db-migrator
-          repository: ghcr.io/anvilsaba/db-migrator
-          digest: ${{ steps.image.outputs.digest }}
-          revision: ${{ steps.image.outputs.revision }}
-          tag: ${{ steps.image.outputs.sha-tag }}

@@ -5,7 +5,6 @@ version: 'v0.0.2'
 workflows:
     '.github/workflows/chart-platform.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'jdx/mise-action@v5.0.1'
     '.github/workflows/ci-deploy.yml':
         - 'actions/checkout@v7.0.1'
@@ -22,7 +21,6 @@ workflows:
         - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-bot.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
@@ -30,7 +28,6 @@ workflows:
         - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-db-migrator.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
@@ -38,7 +35,6 @@ workflows:
         - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-mc-link-server.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
@@ -46,7 +42,6 @@ workflows:
         - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-public-api.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@v3.3.0'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
@@ -61,11 +56,6 @@ dependencies:
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/create-github-app-token@v3.3.0':
-        ref: 'v3.3.0'
-        commit: 'sha1-64ab729a6294000f5aa4a4bc0b73d1f32bc45510'
-        owner_id: 44036562
-        repo_id: 642580244
     'docker/build-push-action@v7.3.0':
         ref: 'v7.3.0'
         commit: 'sha1-53b7df96c91f9c12dcc8a07bcb9ccacbed38856a'

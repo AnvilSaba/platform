@@ -9,7 +9,6 @@ on:
         "LICENSE",
         "deploy/rust/**",
         ".github/actions/build-image/**",
-        ".github/actions/notify-infrastructure/**",
         "apps/public-api/**",
         "crates/**",
         "migrations/**",
@@ -49,17 +48,8 @@ jobs:
           image: ghcr.io/anvilsaba/public-api
           token: ${{ secrets.GITHUB_TOKEN }}
           release-ref: ${{ inputs.release_ref }}
+          channel: ${{ !inputs.release_ref && 'main' || '' }}
           build-args: |
             PACKAGE=public-api
             BINARY=public-api
             SOURCE_DIR=apps/public-api
-      - uses: $/.github/actions/notify-infrastructure
-        if: ${{ !inputs.release_ref && github.ref == 'refs/heads/main' }}
-        with:
-          app-id: ${{ vars.GITOPS_NOTIFY_APP_ID }}
-          private-key: ${{ secrets.GITOPS_NOTIFY_APP_PRIVATE_KEY }}
-          component: public-api
-          repository: ghcr.io/anvilsaba/public-api
-          digest: ${{ steps.image.outputs.digest }}
-          revision: ${{ steps.image.outputs.revision }}
-          tag: ${{ steps.image.outputs.sha-tag }}
