@@ -47,11 +47,7 @@ run = ["cargo fmt --all", "rustfmt --edition 2024 scripts/release.rs", "mise exe
 
 [tasks."fmt:check"]
 description = "Rust とその他の対応ファイルの整形を検査する"
-run = [
-  "cargo fmt --all -- --check",
-  "rustfmt --edition 2024 --check scripts/release.rs",
-  "mise exec -- oxfmt --check",
-]
+run = ["cargo fmt --all -- --check", "rustfmt --edition 2024 --check scripts/release.rs", "mise exec -- oxfmt --check"]
 
 # Build
 
