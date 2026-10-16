@@ -23,12 +23,6 @@ inputs:
     description: 配布アーキテクチャ
     default: linux/arm64
 outputs:
-  digest:
-    description: 公開した image digest
-    value: ${{ steps.build.outputs.digest }}
-  revision:
-    description: ビルドした source revision
-    value: ${{ steps.release.outputs.revision }}
   sha-tag:
     description: ビルドした Git revision の完全な SHA タグ
     value: ${{ steps.release.outputs.sha_tag }}

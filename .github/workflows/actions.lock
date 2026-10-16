@@ -25,28 +25,24 @@ workflows:
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
         - 'docker/setup-buildx-action@v4.3.0'
-        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-db-migrator.yml':
         - 'actions/checkout@v7.0.1'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
         - 'docker/setup-buildx-action@v4.3.0'
-        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-mc-link-server.yml':
         - 'actions/checkout@v7.0.1'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
         - 'docker/setup-buildx-action@v4.3.0'
-        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/image-public-api.yml':
         - 'actions/checkout@v7.0.1'
         - 'docker/build-push-action@v7.3.0'
         - 'docker/login-action@v4.6.0'
         - 'docker/metadata-action@v6.2.0'
         - 'docker/setup-buildx-action@v4.3.0'
-        - 'jdx/mise-action@v5.0.1'
     '.github/workflows/release.yml':
         - 'actions/checkout@v7.0.1'
         - 'jdx/mise-action@v5.0.1'

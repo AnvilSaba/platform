@@ -39,11 +39,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.release_ref || github.sha }}
-      - uses: $/.github/actions/setup-mise
-        with:
-          install-args: gh
       - uses: $/.github/actions/build-image
-        id: image
         with:
           image: ghcr.io/anvilsaba/mc-link-server
           token: ${{ secrets.GITHUB_TOKEN }}
