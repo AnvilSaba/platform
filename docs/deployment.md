@@ -10,7 +10,8 @@ platform はアプリ、DB Migrator、コンテナイメージ、Helm Chart を�
 mise //deploy/helm/platform:check
 ```
 
-`deploy/helm/platform/` にはテンプレート、共通の既定値、ローカル開発・統合確認用の values を置きます。
+`deploy/helm/platform/` にはテンプレートと共通の既定値を置きます。
+ローカル開発・統合確認用の values は `dev/helm/` に置き、CI でも使用します。
 本番・staging の設定や配置版は置きません。
 
 Bot、MC Link Server、Public API、DB Migrator の `image.digest` に

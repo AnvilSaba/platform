@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - "deploy/**"
+      - "dev/helm/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
       - ".github/actions/build-image/**"
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - "deploy/**"
+      - "dev/helm/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
       - ".github/actions/build-image/**"
@@ -32,9 +34,9 @@ jobs:
     strategy:
       matrix:
         values:
-          - values.dev.yaml
-          - values.yaml
-          - values.integration.yaml
+          - dev/helm/values.dev.yaml
+          - deploy/helm/platform/values.yaml
+          - dev/helm/values.integration.yaml
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: $/.github/actions/setup-mise
@@ -43,7 +45,7 @@ jobs:
       - name: Lint chart
         run: >-
           mise exec -- helm lint ./deploy/helm/platform
-          -f ./deploy/helm/platform/${{ matrix.values }}
+          -f ./${{ matrix.values }}
           --set-string bot.image.tag=ci
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
@@ -51,7 +53,7 @@ jobs:
         run: >-
           mise exec -- helm template platform ./deploy/helm/platform
           --namespace anvilsaba
-          -f ./deploy/helm/platform/${{ matrix.values }}
+          -f ./${{ matrix.values }}
           --set-string bot.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
