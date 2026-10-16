@@ -16,7 +16,7 @@ spec:
       {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: migrate
-          image: "{{ .Values.dbMigrator.image.repository }}:{{ required "dbMigrator.image.tag is required" .Values.dbMigrator.image.tag }}"
+          image: {{ include "platform.image" .Values.dbMigrator.image | quote }}
           imagePullPolicy: {{ .Values.dbMigrator.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           env:
