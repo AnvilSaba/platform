@@ -43,7 +43,7 @@ Bot は `apps/bot/config.sample.toml` を `apps/bot/config.toml` にコピーし
 Copy-Item apps/bot/.env.example apps/bot/.env
 ```
 
-本番用 Token と合言葉は SOPS で暗号化した Kubernetes Secret を使います。既存 `config.toml` の `bot.token` と `auth.keyword` は `.env` へ移して削除します。
+本番用 Token と合言葉は [infrastructure](https://github.com/AnvilSaba/infrastructure/blob/main/docs/secret-config.md) で管理します。既存 `config.toml` の `bot.token` と `auth.keyword` は `.env` へ移して削除します。
 `apps/bot` で `mise exec -- cargo run --locked -p bot -- --check-config` を実行すると、Token・合言葉・DB 接続なしで通常設定だけを検証できます。
 
 ### GitHub Actions の依存関係

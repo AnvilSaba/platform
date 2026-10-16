@@ -33,13 +33,13 @@ jobs:
       matrix:
         values:
           - values.dev.yaml
-          - values.prod.yaml
+          - values.yaml
           - values.integration.yaml
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: $/.github/actions/setup-mise
         with:
-          install-args: helm kubectl
+          install-args: helm
       - name: Lint chart
         run: >-
           mise exec -- helm lint ./deploy/helm/platform
@@ -56,31 +56,6 @@ jobs:
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
           > /dev/null
-      - name: Render database manifests
-        run: |
-          mise exec -- kubectl kustomize deploy/postgres/cloudnativepg > /dev/null
-          mise exec -- kubectl kustomize deploy/postgres/import > /dev/null
-          mise exec -- kubectl kustomize deploy/postgres/operator > /dev/null
-          mise exec -- kubectl kustomize deploy/postgres/roles > /dev/null
-          mise exec -- kubectl kustomize deploy/flux/production > /dev/null
-          mise exec -- kubectl kustomize deploy/flux/controllers > /dev/null
-          mise exec -- kubectl kustomize deploy/flux/apps > /dev/null
-      - name: Render GitOps release with migrations
-        run: >-
-          mise exec -- helm template platform ./deploy/helm/platform
-          -f deploy/helm/platform/values.prod.yaml
-          -f deploy/flux/apps/values.yaml
-          > /dev/null
-
-  k3s:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - name: Parse config
-        run: >-
-          ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml');
-          YAML.parse_stream(File.read('deploy/postgres/roles/roles.yaml'))"
-
   image-action:
     runs-on: ubuntu-latest
     steps:
