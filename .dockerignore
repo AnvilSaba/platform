@@ -3,6 +3,7 @@
 **/target/
 
 .git/
+dev/
 **/.idea/
 **/.vscode/
 

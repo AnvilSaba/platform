@@ -1,5 +1,5 @@
--- psql -v ON_ERROR_STOP=1 で管理者として新規の platform DB に適用する。
--- パスワードは別途 \password と Kubernetes Secret で設定する。
+-- ローカル開発・CI 用の platform DB に管理者として適用する。
+-- ローカルのパスワード設定は passwords.sql で行う。
 SELECT format('CREATE ROLE %I NOLOGIN', name)
 FROM unnest(ARRAY['platform_bot_runtime', 'platform_mc_link_server_runtime', 'platform_public_api_runtime']) AS name
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = name)
