@@ -25,10 +25,6 @@ on:
         description: 呼び出し元アプリのリリースタグ
         required: true
         type: string
-    outputs:
-      image_tag:
-        description: Migrator の完全な SHA タグ
-        value: ${{ jobs.build.outputs.image_tag }}
 permissions:
   contents: read
   packages: write
@@ -39,14 +35,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.image.outputs.sha-tag }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.release_ref || github.sha }}
       - uses: $/.github/actions/build-image
-        id: image
         with:
           image: ghcr.io/anvilsaba/db-migrator
           token: ${{ secrets.GITHUB_TOKEN }}

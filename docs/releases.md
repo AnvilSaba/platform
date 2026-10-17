@@ -22,11 +22,21 @@ GitHub の Actions 画面で **Release** を選び、**Run workflow** からリ�
 
 `dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。リリース・デプロイは行いません。
 
-`deploy` はデフォルトで無効です。有効にした実リリースだけが、イメージまたは Chart の公開成功後に `deploy/flux/apps` の固定バージョンを更新するコミットを `main` に作成します。Flux がその Git 変更を本番に反映します。Actions の成功は Git の更新完了を示し、デプロイ完了は HelmRelease の Ready で確認します。[Flux の運用手順](flux.md) を参照してください。
+公開済み成果物は infrastructure 側の Flux が監視します。アプリと Chart は安定版 SemVer、
+Migrator はアプリ release のビルドで更新する可変タグ `release` が更新候補になります。
+Flux が digest を固定した production 更新ブランチを push し、infrastructure の GitHub Actions が PR を作成します。
+人がレビューして merge するまで production の配置は変わりません。
+`deploy` 入力、platform の Production update PR workflow、通知用 App は使用しません。
 
-本番設定の更新には `scripts/promote-production.rs` を使い、既存のリリーススクリプトと同じ `mise exec -- cargo -Zscript` で実行します。
+main のビルドでは image と Chart の可変タグ `main` を更新し、staging 用の Flux が digest の変更を追います。
+Migrator の release ビルドは staging の `main` を動かしません。
+Chart の開発版は固定バージョン `0.0.0-main` と別名 `main` を使い、時刻や連番のタグは増やしません。
 
-アプリのデプロイは、同じ Git リビジョンの Migrator Job を実行して正常完了を待ち、成功した場合のみ対象アプリを更新します。初回の Flux 引き継ぎを終えた後は **Release でアプリを選び、dry_run=false・deploy=true** を指定し、マイグレーションを個別に操作する必要はありません。DB 変更のないリリースでも常に Job を実行し、SQLx が適用済みマイグレーションをスキップします。Chart の固定バージョンはアプリのリリースでは変更せず、Chart のリリース・昇格で更新します。
+アプリは起動時に必須 migration の適用・成功・checksum を確認します。
+更新スクリプトで Git 祖先や SQL の一致を再判定せず、staging の実行結果と PR レビューで互換性を確認します。
+アプリ切り戻しでは Migrator を維持し、自動更新の選択範囲も固定します。
+[source 移管と本番更新の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md)を参照してください。
+source 移管前に更新 PR を merge しないでください。既存の desired state は引き継ぎ確認まで残します。
 
 ## ローカルでリリース内容を確認する
 

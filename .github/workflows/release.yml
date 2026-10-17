@@ -31,11 +31,6 @@ on:
         required: true
         default: true
         type: boolean
-      deploy:
-        description: 公開成功後に本番の GitOps 設定を更新
-        required: true
-        default: false
-        type: boolean
 
 permissions: {}
 
@@ -151,39 +146,3 @@ jobs:
     uses: ./.github/workflows/chart-platform.yml
     with:
       release_ref: ${{ needs.release.outputs.tag }}
-
-  deploy:
-    if: >-
-      !cancelled() &&
-      !inputs.dry_run &&
-      inputs.deploy &&
-      needs.release.result == 'success' &&
-      (
-        (inputs.app == 'bot' && needs.build-bot-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
-        (inputs.app == 'mc-link-server' && needs.build-mc-link-server-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
-        (inputs.app == 'public-api' && needs.build-public-api-image.result == 'success' && needs.build-db-migrator-image.result == 'success') ||
-        (inputs.app == 'chart' && needs.publish-platform-chart.result == 'success')
-      )
-    needs:
-      - release
-      - build-bot-image
-      - build-mc-link-server-image
-      - build-public-api-image
-      - build-db-migrator-image
-      - publish-platform-chart
-    runs-on: ubuntu-latest
-    environment: production/${{ inputs.app }}
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          ref: main
-      - uses: $/.github/actions/deploy-production
-        with:
-          target: ${{ inputs.app }}
-          release-ref: ${{ needs.release.outputs.tag }}
-          migrator-image-tag: ${{ needs.build-db-migrator-image.outputs.image_tag }}

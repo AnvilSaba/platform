@@ -9,24 +9,18 @@ on:
       - "deploy/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
-      - "scripts/promote-production.rs"
-      - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
       - ".github/workflows/chart-platform.yml"
-      - ".github/workflows/deploy-production.yml"
       - ".github/workflows/release.yml"
   pull_request:
     paths:
       - "deploy/**"
       - "mise.toml"
       - ".github/actions/setup-mise/**"
-      - "scripts/promote-production.rs"
-      - ".github/actions/deploy-production/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
       - ".github/workflows/chart-platform.yml"
-      - ".github/workflows/deploy-production.yml"
       - ".github/workflows/release.yml"
 
 permissions:
@@ -87,11 +81,9 @@ jobs:
           ruby -e "require 'yaml'; YAML.safe_load_file('deploy/k3s/config.yaml');
           YAML.parse_stream(File.read('deploy/postgres/roles/roles.yaml'))"
 
-  deployment-script:
+  image-action:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Parse deployment action
-        run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/deploy-production/action.yml')"
       - name: Parse image action
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/build-image/action.yml')"

@@ -22,10 +22,6 @@ inputs:
   platforms:
     description: 配布アーキテクチャ
     default: linux/arm64
-outputs:
-  sha-tag:
-    description: ビルドした Git revision の完全な SHA タグ
-    value: ${{ steps.release.outputs.sha_tag }}
 runs:
   using: composite
   steps:
@@ -56,7 +52,6 @@ runs:
         labels: |
           org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
     - uses: docker/build-push-action@v7.3.0
-      id: build
       with:
         context: .
         file: ${{ inputs.dockerfile }}
