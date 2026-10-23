@@ -159,3 +159,11 @@ k3s の kube-router NetworkPolicy コントローラーが新規 Pod 用のフ�
 Discord Bot では Serenity の Gateway URL 取得がこの期間に失敗すると警告が出ますが、既定の `wss://gateway.discord.gg` へフォールバックし、その後正常に接続することを確認しています。
 
 現時点では実害がないため、ホスト側の `FORWARD` ルールは変更しません。
+
+## image の固定
+
+Bot、mc-link-server、public-api、db-migrator の `image.digest` に
+`sha256:<64桁の小文字hex>` を指定できる。指定時は `repository@digest` を描画し、
+`image.tag` は追跡情報として残せる。digest が空なら既存の tag 指定を使う。
+Migrator が有効な場合も同じ規則とし、参照が欠けた場合は描画を失敗させる。
+source 移管時には既存 Chart 1.0.0 を維持し、新版導入は別の更新 PR とする。

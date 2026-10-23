@@ -26,3 +26,16 @@ securityContext:
   valueFrom:
     secretKeyRef: { name: {{ printf "%s-database" .service.secretName }}, key: password }
 {{- end }}
+
+{{/* A digest is authoritative; tags remain available for older callers. */}}
+{{- define "platform.image" -}}
+{{- $repository := required "image.repository is required" .repository -}}
+{{- if .digest -}}
+  {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .digest) -}}
+    {{- fail "image.digest must be a sha256 digest" -}}
+  {{- end -}}
+  {{- printf "%s@%s" $repository .digest -}}
+{{- else -}}
+  {{- printf "%s:%s" $repository (required "image.tag or image.digest is required" .tag) -}}
+{{- end -}}
+{{- end -}}

@@ -13,7 +13,7 @@ spec:
       {{- include "platform.rustPodSettings" . | nindent 6 }}
       containers:
         - name: mc-link-server
-          image: {{ printf "%s:%s" .Values.mcLinkServer.image.repository (required "mcLinkServer.image.tag is required" .Values.mcLinkServer.image.tag) | quote }}
+          image: {{ include "platform.image" .Values.mcLinkServer.image | quote }}
           imagePullPolicy: {{ .Values.mcLinkServer.image.pullPolicy }}
           securityContext: {{ include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           ports:
