@@ -1,6 +1,7 @@
 # Platform
 
-あんびる鯖 の Discord Bot、MC Link Server、公開 API、DB Migrator、および k3s / Helm デプロイ設定を管理するモノレポです。
+あんびる鯖の Discord Bot、MC Link Server、公開 API、DB Migrator、および配布用 Helm Chart を管理するモノレポです。
+クラスタ構成、環境別設定、Secret、配置する成果物の参照は [infrastructure](https://github.com/AnvilSaba/infrastructure) で管理します。
 
 ## ドキュメント
 
@@ -11,8 +12,8 @@
 個別タスクは `mise //apps/bot:check` のように指定します。全体の一覧は `mise tasks ls --all` で確認できます。
 
 - [開発・個別テスト・統合テスト手順](docs/development-and-integration-testing.md)
-- [本番デプロイ手順](docs/deployment.md)
-- [Secret / Config の準備と運用](docs/secret-config.md)
+- [Helm Chart と配置先の管理](docs/deployment.md)
+- [Secret / Config の準備と運用](https://github.com/AnvilSaba/infrastructure/blob/main/docs/secret-config.md)
 - [変更履歴とリリース手順](docs/releases.md)
 
 ## ライセンス

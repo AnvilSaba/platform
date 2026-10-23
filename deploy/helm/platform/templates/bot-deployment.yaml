@@ -19,22 +19,29 @@ spec:
           stdin: true
           tty: true
           workingDir: /app
+          args: ["--config", "/app/config/config.toml", "--keyword-file", "/app/config/keyword"]
           env:
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ .Values.bot.secretName }}, key: token }
-            - name: AUTH_KEYWORD
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.bot.secretName }}, key: authKeyword }
             {{- include "platform.databaseEnv" (dict "service" .Values.bot "postgres" .Values.postgres) | nindent 12 }}
           securityContext:
             {{- include "platform.restrictedContainerSecurityContext" . | nindent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /app/config.toml
-              subPath: config.toml
+              mountPath: /app/config
               readOnly: true
       volumes:
         - name: config
-          configMap:
-            name: {{ .Values.bot.configMapName }}
+          projected:
+            sources:
+              - configMap:
+                  name: {{ .Values.bot.configMapName }}
+                  items:
+                    - key: config.toml
+                      path: config.toml
+              - secret:
+                  name: {{ .Values.bot.secretName }}
+                  items:
+                    - key: authKeyword
+                      path: keyword
