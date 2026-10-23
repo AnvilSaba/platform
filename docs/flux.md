@@ -73,9 +73,9 @@ kubectl logs -n anvilsaba job/db-migrator
 
 ## リリースと切り戻し
 
-**Release** の `deploy=true` または **Production deployment** により、対象の公開済みタグから `values.yaml` / `chart.yaml` を更新するコミットを `main` に作成します。アプリの変更では対象アプリと同じリビジョンの Migrator だけを更新し、他のアプリと Chart の固定値を維持します。Chart 更新では Chart の固定値だけを更新します。
+**Release** は成果物の公開までを担当します。production クラスタの Flux が公開済みの安定版と Migrator の `release` を監視し、infrastructure の更新ブランチへ digest を固定して push します。infrastructure の **Production update PR** が PR を作成し、人のレビュー・merge 後に反映します。既存の `deploy/` 定義は source 引き継ぎ確認まで維持し、移管前に更新 PR を merge しません。
 
-GitHub Actions の `GITHUB_TOKEN` に `contents: write` が必要です。ブランチ保護などで Actions から `main` に書き込めない場合は更新を拒否し、クラスタを直接変更しません。担当者が同じ設定変更を PR として反映してください。Actions の成功は Git への記録完了を示します。デプロイ完了は HelmRelease の Ready と各 Pod のログで確認します。
+Git 更新と PR 作成には infrastructure に限定した GitHub App の短期 token を使います。platform の通知用資格情報は不要です。production の更新は PR を経由し、自動 merge は行いません。認証と保護ブランチの設定は [infrastructure の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md) を参照してください。Git 更新や PR 作成の成功と配置完了を区別し、デプロイ完了は HelmRelease の Ready と各 Pod のログで確認します。
 
 Migrator は `pre-install,pre-upgrade` hook です。失敗した場合は新しいアプリを適用しません。upgrade の失敗時は Helm が旧 release へ切り戻しますが、DB の変更は取り消しません。Git のバージョンを戻す場合も [スキーマ互換性](releases.md#マイグレーションの互換性) を確認します。
 
