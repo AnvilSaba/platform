@@ -1,0 +1,59 @@
+name: Notify infrastructure
+description: 公開済み成果物を短期 GitHub App token で通知する。
+inputs:
+  app-id:
+    required: true
+    description: 通知専用 GitHub App ID
+  private-key:
+    required: true
+    description: 通知専用 GitHub App private key
+  component:
+    required: true
+    description: 公開した component
+  repository:
+    required: true
+    description: GHCR repository
+  digest:
+    required: true
+    description: 公開済み digest
+  revision:
+    required: true
+    description: 実際にビルドした revision
+  tag:
+    required: true
+    description: 公開済み tag
+  event-type:
+    default: platform-artifact
+    description: repository_dispatch の種類
+  release:
+    default: ""
+    description: production PR 用 release tag
+runs:
+  using: composite
+  steps:
+    - uses: actions/create-github-app-token@v3.3.0
+      id: token
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: AnvilSaba
+        repositories: infrastructure
+        permission-contents: write
+    - name: Dispatch published artifact
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        COMPONENT: ${{ inputs.component }}
+        REPOSITORY: ${{ inputs.repository }}
+        DIGEST: ${{ inputs.digest }}
+        REVISION: ${{ inputs.revision }}
+        TAG: ${{ inputs.tag }}
+        RELEASE: ${{ inputs.release }}
+        EVENT_TYPE: ${{ inputs.event-type }}
+      run: |
+        jq -n --arg event "$EVENT_TYPE" --arg component "$COMPONENT" \
+          --arg repository "$REPOSITORY" --arg digest "$DIGEST" \
+          --arg revision "$REVISION" --arg tag "$TAG" --arg release "$RELEASE" \
+          '{event_type:$event,client_payload:{component:$component,repository:$repository,digest:$digest,revision:$revision,tag:$tag,release:$release}}' \
+          > "$RUNNER_TEMP/dispatch.json"
+        mise exec -- gh api repos/AnvilSaba/infrastructure/dispatches --input "$RUNNER_TEMP/dispatch.json"
