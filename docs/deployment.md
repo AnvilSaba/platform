@@ -82,15 +82,18 @@ Cloudflare 側の Published application の Service URL を次に設定します
 http://public-api:8080
 ```
 
-### 1.5 GitHub Actions の本番環境
+### 1.5 Flux による成果物の更新
 
-`production/<対象>` の Environment を使用します。Actions はクラスタへの SSH 接続を行わず、公開済みリリースのバージョンを Git に記録します。従来の `DEPLOY_SSH_*` は不要です。
+platform は GHCR への成果物公開を担当し、配置の更新は infrastructure の Flux が担当します。
+Git 更新用 App と PR 作成用 App の設定は infrastructure 側に置き、platform の通知用資格情報は不要です。
 
-`GITHUB_TOKEN` の `contents: write` と、ブランチ保護設定が本番設定の更新コミットを許可することを確認します。書き込めない場合は担当者が同じ設定変更を PR で反映します。クラスタの読み取り用 Git 認証が必要な場合は、Actions の資格情報とは別に Flux 用の認証を用意します。
+## 2. production 更新 PR
 
-## 2. GitHub Actions からデプロイ
-
-GitHub の Actions 画面で **Production deployment** を選び、**Run workflow** からデプロイ対象と公開済み Git タグを指定します。Actions が本番設定の更新コミットを作成し、Flux が同期します。Actions の成功だけで配置完了とは判断せず、HelmRelease の Ready を確認します。
+production クラスタの Flux が公開済みアプリ・Chart の安定版と Migrator の `release` を監視し、
+digest を固定した更新ブランチを push します。infrastructure の GitHub Actions が PR を作成し、
+レビューと merge を経て各クラスタの Flux が反映します。
+source 移管完了前は PR を merge せず、移管と新版 Chart/image の導入を分けます。
+Git 更新の成功だけでは配置完了とせず、HelmRelease の Ready と疎通を確認します。
 
 ## 3. デプロイ後の確認
 
