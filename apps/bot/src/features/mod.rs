@@ -1,4 +1,3 @@
-mod admin;
 mod auth;
 mod honeypot;
 pub mod mcguildlink;
@@ -34,7 +33,7 @@ pub fn event_handlers(config: &AppConfig, database: &PgPool) -> Result<BotEventH
         .add(MessageLoggingEventHandler::new())
         .add(handle_thread_auto_invite_event)
         .add(handle_question_event)
-        .add(KeywordAuthEventHandler::new()?)
+        .add(KeywordAuthEventHandler::new())
         .add(AutoKickEventHandler::new())
         .add(MessageCacheHandler::new(config.message_cache.disabled)))
 }
@@ -49,7 +48,6 @@ pub fn commands() -> Vec<AppCommand> {
             auth::create_keyword_button,
             question::question,
             pin::pin,
-            admin::reload_config,
             thread_auto_invite::invite_thread,
             thread_auto_invite::add_invite_role,
             thread_auto_invite::remove_invite_role,

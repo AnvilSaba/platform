@@ -16,7 +16,7 @@ const REQUIRED_MIGRATIONS: &[i64] = &[
     20260930180000,
 ];
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context as _;
 use bpaf::Bpaf;
@@ -36,6 +36,10 @@ use crate::{
 struct Options {
     #[bpaf(short, long)]
     check_config: bool,
+    #[bpaf(long("config"), argument("PATH"), fallback(PathBuf::from("config.toml")))]
+    config_path: PathBuf,
+    #[bpaf(long("keyword-file"), argument("PATH"))]
+    keyword_path: Option<PathBuf>,
 }
 
 fn init_tracing(output: Arc<console::ConsoleOutput>) {
@@ -62,8 +66,8 @@ async fn main() -> Result<(), AppError> {
     let output = Arc::new(console::ConsoleOutput::default());
     init_tracing(output.clone());
 
-    let config = AppConfig::from_file("config.toml").await?;
     let options = options().run();
+    let config = AppConfig::from_file(&options.config_path).await?;
 
     if options.check_config {
         println!("Config is valid");
@@ -102,7 +106,7 @@ async fn main() -> Result<(), AppError> {
     let handlers = event_handlers(&config, &database)?
         .add(MainEventHandler::new())
         .on_error(handle_event_error);
-    let data = Arc::new(BotData::new(config, database));
+    let data = Arc::new(BotData::new(config, database, options.config_path, options.keyword_path).await?);
     let mut client = create_client(token, intents, handlers)
         .framework(Box::new(framework))
         .cache_settings(settings)
@@ -115,6 +119,7 @@ async fn main() -> Result<(), AppError> {
         shutdown();
     })
     .context("Could not register shutdown signal handler")?;
+    data.clone().watch_config().start();
     tokio::spawn(features::mcguildlink::audit::run_delivery(data, client.http.clone()));
     let shutdown = client.shard_manager.get_shutdown_trigger();
     tokio::spawn(console::run(client.http.clone(), shutdown, output));

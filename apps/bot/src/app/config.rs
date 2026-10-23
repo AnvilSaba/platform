@@ -33,16 +33,21 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub async fn from_file(path: &str) -> Result<Self, AppError> {
+    pub async fn from_file(path: impl AsRef<Path>) -> Result<Self, AppError> {
+        let path = path.as_ref();
         let text = read_to_string(path)
             .await
-            .with_context(|| format!("Failed to read config file: {path}"))?;
-        toml::from_str(&text)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        Self::parse(&text).with_context(|| format!("Failed to parse config file: {}", path.display()))
+    }
+
+    pub fn parse(text: &str) -> Result<Self, AppError> {
+        toml::from_str(text)
             .map_err(|mut error: toml::de::Error| {
                 error.set_input(None);
                 error
             })
-            .with_context(|| format!("Failed to parse config file: {path}"))
+            .context("Failed to parse bot configuration")
     }
 }
 
