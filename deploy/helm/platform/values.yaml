@@ -5,6 +5,7 @@ bot:
   image:
     repository: ghcr.io/anvilsaba/bot
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   configMapName: bot
   secretName: bot
@@ -15,6 +16,7 @@ mcLinkServer:
   image:
     repository: ghcr.io/anvilsaba/mc-link-server
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_mc_link_server
   secretName: mc-link-server
@@ -26,6 +28,7 @@ publicApi:
   image:
     repository: ghcr.io/anvilsaba/public-api
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_public_api
   secretName: public-api
@@ -37,6 +40,7 @@ dbMigrator:
   image:
     repository: ghcr.io/anvilsaba/db-migrator
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   databaseUsername: platform_db_migrator
   secretName: db-migrator

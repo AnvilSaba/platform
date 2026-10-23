@@ -58,7 +58,7 @@ jobs:
           mise exec -- helm template platform ./deploy/helm/platform
           --namespace anvilsaba
           -f ./deploy/helm/platform/${{ matrix.values }}
-          --set-string bot.image.tag=ci
+          --set-string bot.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           --set-string mcLinkServer.image.tag=ci
           --set-string publicApi.image.tag=ci
           > /dev/null
