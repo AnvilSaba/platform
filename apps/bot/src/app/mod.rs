@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 pub mod config;
+mod config_watcher;
 mod data;
 mod error;
 mod event_handler;

@@ -12,6 +12,7 @@ on:
         "apps/db-migrator/**",
         "apps/mc-link-server/**",
         "crates/**",
+        "dev/postgres/**",
         "scripts/**",
         "migrations/**",
         ".sqlx/**",
@@ -33,6 +34,7 @@ on:
         "apps/db-migrator/**",
         "apps/mc-link-server/**",
         "crates/**",
+        "dev/postgres/**",
         "scripts/**",
         "migrations/**",
         ".sqlx/**",
@@ -69,7 +71,7 @@ jobs:
       - name: Verify database role bootstrap
         run: |
           docker exec '${{ job.services.postgres.id }}' createdb -U postgres platform
-          docker exec -i '${{ job.services.postgres.id }}' psql -U postgres -d platform -v ON_ERROR_STOP=1 < deploy/postgres/bootstrap.sql
+          docker exec -i '${{ job.services.postgres.id }}' psql -U postgres -d platform -v ON_ERROR_STOP=1 < dev/postgres/bootstrap.sql
       - run: sqlx migrate run
       - run: cargo sqlx prepare --check --workspace -- --all-targets --locked
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings

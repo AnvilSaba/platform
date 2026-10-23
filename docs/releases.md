@@ -18,7 +18,7 @@ GitHub の Actions 画面で **Release** を選び、**Run workflow** からリ�
 2. 対象固有の履歴から、バージョンファイルと完全な `CHANGELOG.md` を再生成する
 3. `chore(release): <app>/vX.Y.Z` をコミットする
 4. 同名の Git タグを作成して `main` へプッシュする
-5. アプリではアプリイメージと `db-migrator` イメージに同じリリースタグを渡してビルドし、Chart では OCI Chart を公開する
+5. アプリではリリースコミットからアプリイメージと `db-migrator` をビルドし、Chart では OCI Chart を公開する
 
 `dry_run` を有効にした場合は、次のタグの算出と既存タグとの重複確認に加えて、生成予定の CHANGELOG をログへ表示します。リリース・デプロイは行いません。
 
@@ -35,8 +35,8 @@ Chart の開発版は固定バージョン `0.0.0-main` と別名 `main` を使�
 アプリは起動時に必須 migration の適用・成功・checksum を確認します。
 更新スクリプトで Git 祖先や SQL の一致を再判定せず、staging の実行結果と PR レビューで互換性を確認します。
 アプリ切り戻しでは Migrator を維持し、自動更新の選択範囲も固定します。
-[source 移管と本番更新の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md)を参照してください。
-source 移管前に更新 PR を merge しないでください。既存の desired state は引き継ぎ確認まで残します。
+[本番更新の手順](https://github.com/AnvilSaba/infrastructure/blob/main/docs/production-pr.md)を参照してください。
+環境別の desired state と認証設定は infrastructure だけで管理します。
 
 ## ローカルでリリース内容を確認する
 

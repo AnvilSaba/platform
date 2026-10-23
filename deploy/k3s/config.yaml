@@ -1,4 +1,0 @@
-secrets-encryption: true
-
-disable:
-  - traefik

@@ -24,6 +24,18 @@ mise install
 
 DB は WSL Container CLI/Podman/Docker の `run`・`start`・`exec` を直接使用して管理します。
 既定は `wslc` を使用します。引数で Podman/Docker に切り替えられます。
+ローカル DB の初期化 SQL は `dev/postgres/` にまとめています。
+`bootstrap.sql` でロールと権限を用意し、`passwords.sql` で開発用パスワードを設定します。
+開発用・テスト用 DB の起動待ちには同じディレクトリの `wait.sh` を使います。
+
+旧 `deploy/postgres/` をマウントした開発用コンテナがある場合は、アプリを停止して次を実行します。
+データ用 volume は保持し、SQL の参照元パスを更新するためにコンテナだけを再作成します。以下は既定の `wslc` の例です。
+
+```powershell
+mise :down
+mise exec -- wslc rm platform-local-postgres
+mise :db:up
+```
 
 ```powershell
 mise :test                  # WSL Container CLI(既定)
@@ -43,7 +55,7 @@ Bot は `apps/bot/config.sample.toml` を `apps/bot/config.toml` にコピーし
 Copy-Item apps/bot/.env.example apps/bot/.env
 ```
 
-本番用 Token と合言葉は SOPS で暗号化した Kubernetes Secret を使います。既存 `config.toml` の `bot.token` と `auth.keyword` は `.env` へ移して削除します。
+本番用 Token と合言葉は [infrastructure](https://github.com/AnvilSaba/infrastructure/blob/main/docs/secret-config.md) で管理します。既存 `config.toml` の `bot.token` と `auth.keyword` は `.env` へ移して削除します。
 `apps/bot` で `mise exec -- cargo run --locked -p bot -- --check-config` を実行すると、Token・合言葉・DB 接続なしで通常設定だけを検証できます。
 
 ### GitHub Actions の依存関係
@@ -110,6 +122,9 @@ mise //crates/...:test
 ```powershell
 mise //deploy/helm/platform:check
 ```
+
+開発・統合確認用の values は `dev/helm/values.dev.yaml` と `dev/helm/values.integration.yaml` に置いています。
+Chart に適用する場合は `mise exec -- helm template platform deploy/helm/platform -f dev/helm/values.dev.yaml` のように指定します。
 
 ## 3. 擬似的な統合テスト
 
