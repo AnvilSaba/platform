@@ -8,7 +8,7 @@ use futures::StreamExt;
 use serenity::{
     all::{Context, Member, prelude::CacheHttp},
     async_trait,
-    model::{Color, event::FullEvent},
+    model::{Color, Timestamp, event::FullEvent},
 };
 use tracing::error;
 
@@ -39,7 +39,7 @@ impl AutoKickEventHandler {
             return Ok(());
         };
 
-        if chrono::Utc::now().signed_duration_since(*joined_at) < config.auto_kick.grace_period {
+        if Timestamp::now().checked_sub(config.auto_kick.grace_period)? < *joined_at {
             return Ok(());
         }
 

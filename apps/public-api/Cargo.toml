@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 axum = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true }
 httpdate = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

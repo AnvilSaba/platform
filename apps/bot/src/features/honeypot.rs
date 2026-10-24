@@ -1,8 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context as _;
 use bot_macros::event_handler;
-use chrono::Duration;
 use serenity::{
     all::prelude::{CacheHttp, Context},
     builder::CreateEmbed,
@@ -91,7 +90,7 @@ fn collect_message_ids(
         })?;
 
     let mut ids = HashMap::new();
-    let cutoff = Timestamp::now().unix_timestamp() - message_lookback.num_seconds();
+    let cutoff = Timestamp::now().checked_sub(message_lookback)?;
     let target_message = target_message.into();
 
     for channel in &guild.channels {
@@ -99,7 +98,7 @@ fn collect_message_ids(
         if let Some(messages) = ctx.cache.channel_messages(id.into()) {
             let message_ids = messages
                 .iter()
-                .filter(|m| m.timestamp.unix_timestamp() >= cutoff && target_message.matches_message(m))
+                .filter(|m| *m.timestamp >= cutoff && target_message.matches_message(m))
                 .map(|m| m.id)
                 .collect::<Vec<_>>();
 

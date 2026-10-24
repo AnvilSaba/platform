@@ -66,6 +66,10 @@ async fn conditional_get_reuses_unchanged_json_and_refreshes_after_an_update(poo
     assert_eq!((status, body), (StatusCode::OK, json!([])));
     let last_modified = headers[header::LAST_MODIFIED].to_str().unwrap();
     let etag = headers[header::ETAG].to_str().unwrap();
+    assert_eq!(
+        etag,
+        "\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\""
+    );
     assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
 
     let (status, headers, body) = request(&app, Some(("if-modified-since", last_modified))).await;

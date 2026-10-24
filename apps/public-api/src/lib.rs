@@ -62,7 +62,7 @@ async fn current_whitelist(state: &AppState) -> Result<CachedWhitelist, Box<dyn 
 
     let snapshot = snapshot(&state.pool).await?;
     let json = serde_json::to_string(&snapshot.entries)?;
-    let etag = format!("\"{:x}\"", Sha256::digest(json.as_bytes()));
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(json.as_bytes())));
     let refreshed = CachedWhitelist {
         version: snapshot.version,
         json,

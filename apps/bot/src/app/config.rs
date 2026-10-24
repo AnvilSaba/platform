@@ -1,15 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    time::Duration as StdDuration,
+    time::Duration,
 };
 
 use anyhow::Context as _;
-use chrono::Duration;
-use duration_str::{deserialize_duration, deserialize_duration_chrono};
-use regex::Regex;
+use duration_str::deserialize_duration;
 use serde::{Deserialize, Deserializer};
-use serde_with::{DisplayFromStr, serde_as};
+use serde_with::serde_as;
 use serenity::{
     all::{ChannelId, ForumTagId, GuildId, RoleId, UserId},
     model::id::GenericChannelId,
@@ -77,7 +75,7 @@ pub struct AuthConfig {
 #[derive(Debug, Deserialize)]
 pub struct AutoKickConfig {
     pub guild_id: GuildId,
-    #[serde(deserialize_with = "deserialize_duration_chrono")]
+    #[serde(deserialize_with = "deserialize_duration")]
     pub grace_period: Duration,
     pub kick_message: String,
 }
@@ -85,7 +83,7 @@ pub struct AutoKickConfig {
 #[derive(Debug, Deserialize)]
 pub struct HoneypotConfig {
     pub channel_id: ChannelId,
-    #[serde(deserialize_with = "deserialize_duration_chrono")]
+    #[serde(deserialize_with = "deserialize_duration")]
     pub message_lookback: Duration,
     pub kick_message: String,
     pub log_channel_id: ChannelId,
@@ -102,7 +100,7 @@ pub struct MessageCacheConfig {
     pub disabled: bool,
     pub target_guild_ids: Vec<GuildId>,
     #[serde(deserialize_with = "deserialize_duration")]
-    pub request_window: StdDuration,
+    pub request_window: Duration,
     pub requests_per_window: u8,
     pub concurrent_channels: u8,
 }
