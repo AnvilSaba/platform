@@ -8,6 +8,7 @@ on:
       [
         "LICENSE",
         "deploy/rust/**",
+        "scripts/builder-image.rs",
         ".github/actions/build-image/**",
         "apps/bot/**",
         "crates/**",

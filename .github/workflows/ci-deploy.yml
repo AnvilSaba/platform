@@ -7,8 +7,10 @@ on:
     branches: [main]
     paths:
       - "deploy/**"
+      - "scripts/builder-image.rs"
       - "dev/helm/**"
       - "mise.toml"
+      - "rust-toolchain.toml"
       - ".github/actions/setup-mise/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
@@ -17,8 +19,10 @@ on:
   pull_request:
     paths:
       - "deploy/**"
+      - "scripts/builder-image.rs"
       - "dev/helm/**"
       - "mise.toml"
+      - "rust-toolchain.toml"
       - ".github/actions/setup-mise/**"
       - ".github/actions/build-image/**"
       - ".github/workflows/ci-deploy.yml"
@@ -64,3 +68,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Parse image action
         run: ruby -e "require 'yaml'; YAML.safe_load_file('.github/actions/build-image/action.yml')"
+      - uses: $/.github/actions/setup-mise
+        with:
+          install-args: rust
+      - name: Check Rust builder image selection
+        run: |
+          mise exec -- rustup component add clippy
+          mise exec -- cargo clippy -Zscript --manifest-path scripts/builder-image.rs --all-targets -- -D warnings
+          mise exec -- cargo test -Zscript --manifest-path scripts/builder-image.rs
+          mise :builder-image

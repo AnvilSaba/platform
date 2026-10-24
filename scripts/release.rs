@@ -1,4 +1,4 @@
-#!/usr/bin/env -S mise exec -- cargo -Zscript
+#!/usr/bin/env -S cargo -Zscript
 ---cargo
 [package]
 edition = "2024"

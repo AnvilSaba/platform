@@ -25,6 +25,15 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: $/.github/actions/setup-mise
+      with:
+        install-args: rust
+    - name: Resolve Rust builder image from toolchain
+      id: rust
+      shell: bash
+      run: |
+        image="$(mise :builder-image)"
+        echo "image=$image" >> "$GITHUB_OUTPUT"
     - name: Resolve image tags from checkout
       id: release
       shell: bash
@@ -55,7 +64,9 @@ runs:
       with:
         context: .
         file: ${{ inputs.dockerfile }}
-        build-args: ${{ inputs.build-args }}
+        build-args: |
+          ${{ inputs.build-args }}
+          RUST_IMAGE=${{ steps.rust.outputs.image }}
         platforms: ${{ inputs.platforms }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}

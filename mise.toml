@@ -29,7 +29,6 @@ postinstall = "mise deps"
 
 [task_config]
 cascade = true
-shell = "{% if os() == 'windows' %}cmd /d /c{% else %}sh -c{% endif %}"
 
 [vars]
 engine = "wslc"
@@ -39,13 +38,25 @@ null = "{% if os() == 'windows' %}NUL{% else %}/dev/null{% endif %}"
 
 [tasks.fmt]
 description = "Rust とその他の対応ファイルを整形する"
-run = ["cargo fmt --all", "rustfmt --edition 2024 scripts/release.rs", "mise exec -- oxfmt"]
+run = [
+  "cargo fmt --all",
+  "{% if os() == 'windows' %}for %f in (scripts\\*.rs) do (rustfmt --edition 2024 \"%f\" || exit /b){% else %}rustfmt --edition 2024 scripts/*.rs{% endif %}",
+  "mise exec -- oxfmt",
+]
 
 [tasks."fmt:check"]
 description = "Rust とその他の対応ファイルの整形を検査する"
-run = ["cargo fmt --all -- --check", "rustfmt --edition 2024 --check scripts/release.rs", "mise exec -- oxfmt --check"]
+run = [
+  "cargo fmt --all -- --check",
+  "{% if os() == 'windows' %}for %f in (scripts\\*.rs) do (rustfmt --edition 2024 --check \"%f\" || exit /b){% else %}rustfmt --edition 2024 --check scripts/*.rs{% endif %}",
+  "mise exec -- oxfmt --check",
+]
 
 # Build
+
+[tasks.builder-image]
+description = "Rust ツールチェーンに対応するビルダーイメージを出力する"
+file = "scripts/builder-image.rs"
 
 [tasks.build]
 description = "Rust ワークスペースをビルドする（-p で個別指定）"
@@ -62,7 +73,6 @@ run = "cargo check --locked --all-targets"
 [tasks.release]
 description = "リリース準備・変更履歴の生成（prepare / changelog）"
 file = "scripts/release.rs"
-shell = "cargo -Zscript"
 raw_args = true
 
 [tasks."release:check"]

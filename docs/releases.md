@@ -40,7 +40,7 @@ Chart の開発版は固定バージョン `0.0.0-main` と別名 `main` を使�
 
 ## ローカルでリリース内容を確認する
 
-`mise install` で管理対象の Rust と `git-cliff` を導入し、リポジトリルートから実行します。
+`mise install` で必要なツールを導入し、以下の手順に従ってください。
 スクリプトは [Cargo の単一ファイルパッケージ機能](https://doc.rust-lang.org/cargo/reference/unstable.html#script)を使います。リポジトリで固定した nightly を使用するため、別の `cargo-script` ツールの導入は不要です。
 
 ```powershell
@@ -53,12 +53,6 @@ mise :release prepare --app chart --bump auto --dry-run
 `major`、`minor`、`patch` を明示することもできます。実際にバージョンファイルと CHANGELOG を更新する場合は `--dry-run` を外します。ローカルのスクリプトはコミット・タグ作成・プッシュを行いません。
 
 `mise :release prepare --help` で引数を確認できます。task は引数をそのまま Rust スクリプトへ渡すため、対象名や引数の定義を mise 側に重複させません。
-
-## shebang と Windows での起動
-
-`scripts/release.rs` に `#!/usr/bin/env -S mise exec -- cargo -Zscript` を指定しています。Unix 系でファイルを直接実行する場合は `chmod +x scripts/release.rs` で実行権限を付けると、shebang 経由でも mise 管理のツールを使用できます。
-
-[Windows 自体は shebang を解釈しません](https://mise.jdx.dev/tasks/file-tasks.html#windows)。Windows でも同じ `mise :release ...` を使用します。task の `file` は Rust スクリプトを指し、`shell = "cargo -Zscript"` で共通の `task_config.shell` を上書きして Cargo を起動します。この方法なら `.rs` のファイル関連付けや Windows 用のラッパーは不要です。
 
 ## 変更履歴だけを生成する
 

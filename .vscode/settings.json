@@ -27,5 +27,9 @@
     "SQLX_OFFLINE": "true",
     "SQLX_OFFLINE_DIR": "${workspaceFolder}/.sqlx"
   },
-  "rust-analyzer.linkedProjects": ["${workspaceFolder}/Cargo.toml", "${workspaceFolder}/scripts/release.rs"]
+  "rust-analyzer.linkedProjects": [
+    "${workspaceFolder}/Cargo.toml",
+    "${workspaceFolder}/scripts/release.rs",
+    "${workspaceFolder}/scripts/builder-image.rs"
+  ]
 }
