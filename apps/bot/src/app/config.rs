@@ -7,7 +7,6 @@ use std::{
 use anyhow::Context as _;
 use duration_str::deserialize_duration;
 use serde::{Deserialize, Deserializer};
-use serde_with::serde_as;
 use serenity::{
     all::{ChannelId, ForumTagId, GuildId, RoleId, UserId},
     model::id::GenericChannelId,
@@ -63,7 +62,6 @@ pub struct BotConfig {
     pub owners: HashSet<UserId>,
 }
 
-#[serde_as]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {

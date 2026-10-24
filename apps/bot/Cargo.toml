@@ -20,7 +20,6 @@ rand = { workspace = true }
 regex = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true }
 serenity = { workspace = true }
 similar = { workspace = true }
 sqlx = { workspace = true, features = [
