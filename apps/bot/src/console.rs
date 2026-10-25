@@ -395,15 +395,14 @@ mod tests {
 
     #[tokio::test]
     async fn waits_for_gateway_application_id() {
-        let http = Arc::new(Http::without_token());
-        let ready_http = http.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            ready_http.set_application_id(ApplicationId::new(42));
-        });
+        let http = Http::without_token();
+        let mut waiting = std::pin::pin!(wait_for_application_id(&http));
+        assert!(futures::poll!(&mut waiting).is_pending());
 
-        wait_for_application_id(&http).await;
-        assert_eq!(http.application_id(), Some(ApplicationId::new(42)));
+        http.set_application_id(ApplicationId::new(42));
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("console should stop waiting once the application ID is available");
     }
 
     #[tokio::test]
