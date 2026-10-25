@@ -68,7 +68,7 @@ mise exec -- gh actions-lock
 mise exec -- gh actions-lock --verify-local
 ```
 
-ワークフローやアクションの `uses` を変更したら `gh actions-lock` を再実行し、生成されたロックファイルも変更に含めます。ロックファイルは手で編集しません。既存のブランチ・部分バージョン参照を最新コミットへ更新する場合は `gh actions-lock --relock`、上流との整合性を再検証する場合は `gh actions-lock --verify` を使用します。Formatting CI でも `--verify-local` で依存関係の網羅を検査します。
+ワークフローやアクションの `uses` を変更したら `mise exec -- gh actions-lock` を再実行し、生成されたロックファイルも変更に含めます。ロックファイルは手で編集しません。既存のブランチ・部分バージョン参照を最新コミットへ更新する場合は `mise exec -- gh actions-lock --relock`、上流との整合性を再検証する場合は `mise exec -- gh actions-lock --verify` を使用します。
 
 ### マイグレーションの追加と SQL の検証
 
